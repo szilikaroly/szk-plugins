@@ -173,6 +173,26 @@ def goal_id(db: sqlite3.Connection, text: str | None) -> int | None:
     return db.execute("SELECT id FROM goal WHERE norm=?", (n,)).fetchone()[0]
 
 
+def _cosine_all(qv: list[float], vecs: list, E) -> dict[int, float]:
+    """Cosine of the query against every candidate vector.
+
+    numpy is optional. When it is missing the loop below is identical in result,
+    just slower — the plugin's stdlib-only promise is kept, and a machine with
+    numpy simply gets a faster answer.
+    """
+    if not vecs:
+        return {}
+    try:
+        import numpy as np
+        import struct as _s
+        dim = len(qv)
+        mat = np.frombuffer(b"".join(b for _, b in vecs), dtype="<f4").reshape(len(vecs), dim)
+        sims = mat @ np.asarray(qv, dtype="<f4")
+        return {fid: float(s) for (fid, _), s in zip(vecs, sims)}
+    except ImportError:
+        return {fid: E.cosine(qv, E.unpack(blob)) for fid, blob in vecs}
+
+
 def _refuted(text: str) -> bool:
     """A fact the claim store has since judged must never be recalled."""
     try:
@@ -279,24 +299,25 @@ def recall(db: sqlite3.Connection, query: str, cwd: str, goal: str | None,
         except sqlite3.OperationalError:
             lex_rank = {}
 
-    # Vector re-rank over the FTS candidates only. Full-corpus vector search
-    # would need an index; re-ranking a few dozen rows needs nothing, and the
-    # FTS pass has already thrown away what is obviously irrelevant.
+    # Vector comparison over EVERY candidate, not a slice of them. This was
+    # capped at the 60 newest rows at first, which kept recall flat at ~60 ms
+    # for any corpus size — because it was not doing the work. A fact with 60
+    # newer facts in front of it became permanently unfindable: semantic search
+    # never saw it, and the lexical path cannot find what shares no words with
+    # the query. For a store whose purpose is recalling things from months ago,
+    # that is the one failure that matters. numpy is used when present purely
+    # for speed; the pure-Python path is the same computation.
     semantic: dict[int, float] = {}
     try:
         import embed as E
         qr = E.embed(query or goal or "", profile="recall")
         if qr:
             qv = E.normalize(qr[1])
-            ids = tuple(r[0] for r in rows[:60])
-            if ids:
-                marks = ",".join("?" * len(ids))
-                for fid, dim, blob in db.execute(
-                        f"SELECT fact_id,dim,data FROM fact_vec"
-                        f" WHERE model=? AND fact_id IN ({marks})",
-                        (qr[0], *ids)):
-                    if dim == len(qv):
-                        semantic[fid] = E.cosine(qv, E.unpack(blob))
+            cand = {r[0] for r in rows}
+            vecs = [(fid, blob) for fid, dim, blob in db.execute(
+                "SELECT fact_id,dim,data FROM fact_vec WHERE model=? AND dim=?",
+                (qr[0], len(qv))) if fid in cand]
+            semantic = _cosine_all(qv, vecs, E)
     except Exception:
         semantic = {}
 
