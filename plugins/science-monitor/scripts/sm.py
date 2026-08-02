@@ -555,7 +555,8 @@ def walk_project(root):
 
 
 def cmd_scan(conn, args):
-    root = os.path.abspath(os.path.expanduser(args.root))
+    target = args.root or (L.load_config()["scan_roots"] or ["~"])[0]
+    root = os.path.abspath(os.path.expanduser(target))
     if not os.path.isdir(root):
         L.die(f"nincs ilyen mappa: {root}")
 
@@ -1003,6 +1004,42 @@ def cmd_import_science(conn, args):
           artifacts_db=args.artifacts)
 
 
+def cmd_repo(conn, args):
+    import repo as R
+    try:
+        if args.action == "init":
+            R.cmd_init(conn, args.path)
+        elif args.action == "push":
+            R.cmd_push(conn, args.repo, args.message, do_push=not args.no_push)
+        elif args.action == "pull":
+            R.cmd_pull(conn, args.repo, do_fetch=not args.no_fetch)
+        else:
+            R.cmd_status(conn, args.repo)
+    except RuntimeError as exc:
+        L.die(str(exc))
+
+
+def cmd_config(conn, args):
+    cfg = L.load_config()
+    if args.key is None:
+        for k in sorted(cfg):
+            val = cfg[k]
+            print(f"  {k:<14} {val if val != '' else '—'}")
+        print(f"\n  ({L.CONFIG_PATH})")
+        return
+    if args.key not in L.CONFIG_DEFAULTS:
+        L.die(f"ismeretlen kulcs '{args.key}'; "
+              f"választható: {', '.join(sorted(L.CONFIG_DEFAULTS))}")
+    if args.value is None:
+        print(cfg[args.key])
+        return
+    if isinstance(L.CONFIG_DEFAULTS[args.key], list):
+        cfg[args.key] = [v.strip() for v in args.value.split(",") if v.strip()]
+    else:
+        cfg[args.key] = args.value
+    print(f"{args.key} = {cfg[args.key]}\n{L.save_config(cfg)}")
+
+
 def cmd_serve(conn, args):
     import serve as S
     conn.close()  # the server opens its own connection per request
@@ -1114,7 +1151,7 @@ def build_parser():
     p.set_defaults(fn=cmd_context)
 
     p = sub.add_parser("scan", help="kézirat-projektek keresése a lemezen")
-    p.add_argument("root", nargs="?", default=os.path.expanduser("~/Documents/claude"))
+    p.add_argument("root", nargs="?", help="alap: a config scan_roots első eleme")
     p.add_argument("--apply", action="store_true")
     p.add_argument("--single", action="store_true",
                    help="ROOT maga egy kézirat, nem projektek gyűjtője")
@@ -1214,6 +1251,25 @@ def build_parser():
                    help="a Claude Science operon-cli.db — ebből jönnek a tényleges "
                         "artifact-fájlok (docx, ábrák, táblák)")
     p.set_defaults(fn=cmd_import_science)
+
+    p = sub.add_parser("repo", help="közös git adat-repo: init / push / pull / status")
+    rp = p.add_subparsers(dest="action", required=True)
+    c = rp.add_parser("init")
+    c.add_argument("path")
+    for name in ("push", "pull", "status"):
+        c = rp.add_parser(name)
+        c.add_argument("--repo", help="útvonal (alap: a konfigban beállított)")
+        if name == "push":
+            c.add_argument("-m", "--message")
+            c.add_argument("--no-push", action="store_true", help="csak helyi commit")
+        if name == "pull":
+            c.add_argument("--no-fetch", action="store_true", help="git pull nélkül")
+    p.set_defaults(fn=cmd_repo)
+
+    p = sub.add_parser("config", help="beállítások (gépfüggő és személyes adatok)")
+    p.add_argument("key", nargs="?")
+    p.add_argument("value", nargs="?")
+    p.set_defaults(fn=cmd_config)
 
     p = sub.add_parser("serve", help="élő dashboard, kattintható gombokkal")
     p.add_argument("--port", type=int, default=8787)

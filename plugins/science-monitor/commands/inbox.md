@@ -8,21 +8,27 @@ labels, archives or deletes anything, and never touches a journal portal.**
 
 ## Which mailbox
 
-**Outlook / Microsoft 365 is the primary source** — the user's institutional
-address `szili.karoly@sze.hu` is the corresponding-author address on the cover
-letters, so decision letters land there. Gmail is secondary; check it only if
-Outlook turns up nothing or the user asks.
-
-Load the tools with one ToolSearch call:
+Read the configured mailbox first:
 
 ```
-select:mcp__b0bbf13d-539c-4944-9f8d-0f9c2b147f54__outlook_email_search,mcp__b0bbf13d-539c-4944-9f8d-0f9c2b147f54__read_resource
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/sm.py" config
 ```
 
-If that server id is not present in this session, search for
-`outlook email search microsoft` and use whatever Microsoft connector is
-connected; for Gmail, `gmail search threads message`. Load search and read tools
-only — never the send/draft/label ones.
+`mail_provider` (`outlook` / `gmail`) and `mail_address` say where decision
+letters land — normally the corresponding author's institutional address, which
+is often *not* the address this session is signed in with. If they are empty,
+ask the user once and store the answer:
+
+```
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/sm.py" config mail_provider outlook
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/sm.py" config mail_address name@example.edu
+```
+
+Then load the search and read tools for that provider with **one** ToolSearch
+call — `outlook email search microsoft read_resource` for Microsoft 365,
+`gmail search threads message` for Gmail. Load search and read tools only, never
+the send/draft/label ones. Connector tool ids differ per install, so search by
+keyword rather than assuming an id.
 
 ## Step 1 — know what to look for
 

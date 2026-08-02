@@ -10,7 +10,9 @@ Scan the disk for manuscript projects and register them.
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/sm.py" scan $ARGUMENTS
 ```
 
-With no argument this scans `~/Documents/claude`. Show the user the proposed
+With no argument this scans the first entry of `scan_roots` from
+`sm.py config` (set it with `sm.py config scan_roots ~/Documents,~/work`).
+Show the user the proposed
 list verbatim and ask whether to apply it. Registering is reversible
 (`sm.py set SLUG --archive`), so a plain "igen" is enough — but do not apply
 without asking.

@@ -26,6 +26,7 @@ Az adat lokális SQLite: `~/.science-monitor/monitor.db`. Semmi nem megy sehova.
 | `/sm:respond REVIEW_ID` | Response-to-reviewers összeállítása |
 | `/sm:inbox` | Outlook/O365 (és Gmail) átnézése szerkesztői döntésekért (csak olvas) |
 | `/sm:dashboard` | Dashboard — hiánylisták, checklistek, kattintható gombok |
+| `/sm:repo pull\|push` | Szinkron a szerzőtársakkal egy közös git repón át |
 
 ### A dashboard két módja
 
@@ -46,7 +47,7 @@ Claude Code dolga, azokra a gomb a `/sm:` parancsot másolja.
 Mind egy-egy `scripts/sm.py` alparancs, tehát terminálból is megy:
 
 ```bash
-python3 ~/Documents/claude/szk-plugins/plugins/science-monitor/scripts/sm.py status
+python3 <plugin>/scripts/sm.py status
 ```
 
 ## Adatmodell
@@ -97,7 +98,7 @@ elutasítva de nincs új folyóirat. Minden hiány mellé jár a parancs, ami ja
 ## Tipikus menet
 
 ```bash
-sm.py scan ~/Documents/claude --apply          # felvétel
+sm.py scan ~/Documents --apply                 # felvétel
 sm.py set endo-ai-framework --title "..."      # rendes cím
 sm.py submit endo-ai-framework --journal "Frontiers in Reproductive Health" \
      --cover ~/.../cover_letter.docx --status ready
@@ -114,12 +115,55 @@ sm.py respond 1                                # válaszlevél váza
   javaslatot nézd át (egy kódmappa is bekerülhet, ha van benne `.docx`).
   Egyetlen kész beadási csomagra: `sm.py scan MAPPA --single --apply`.
 - A `/sm:inbox` **csak olvassa** a postafiókot — elsődlegesen az Outlook/O365
-  fiókot (`szili.karoly@sze.hu`, ez a levelező szerzői cím), másodsorban a
-  Gmailt. Nem küld, nem válaszol, nem címkéz, nem törli. Portálra semmit nem
+  fiókot (a `config mail_address` / `mail_provider` szerint — általában a
+  levelező szerzői cím, ami gyakran nem az, amivel be vagy jelentkezve). Nem küld, nem válaszol, nem címkéz, nem törli. Portálra semmit nem
   tölt fel, és a kiadói „transfer recommendation" ajánlatokra nem lép.
 - A beküldés tényét soha nem következteti ki fájlokból — azt te erősíted meg.
 - A dashboard lokális HTML. Kiadatlan címeket és bírálati adatot tartalmaz,
   szóval ne publikáld Artifactként.
+
+## Közös munka git-en
+
+A lokális SQLite egy ember munkapéldánya. A megosztható igazság egy **privát**
+git repóban van:
+
+```
+sm-repo.json                séma-verzió, szinkronizált szerepek
+projects/<slug>.json        kéziratonként egy fájl: beadások, checklist,
+                            bírálatok, bírálói pontok, fájlindex
+documents/<hash>/<fájl>     a dokumentumok, tartalom szerint címezve
+```
+
+```bash
+sm.py repo init ~/science-monitor-data    # létrehozás (a remote-ot te adod hozzá)
+sm.py repo pull                           # munka elején
+sm.py repo push -m "üzenet"               # munka végén
+```
+
+**Kéziratonként egy fájl** — ez a teljes merge-stratégia: két szerző különböző
+kéziratokon dolgozva soha nem ér ugyanahhoz a fájlhoz, tehát a git nem kérdez.
+A JSON rendezett és tördelt, így egy valódi ütközés emberi szemmel olvasható.
+
+A repóba a `sync_roles` szerepek mennek — alapból kézirat, cover letter, válasz,
+supplementary, hivatkozások. Az ábrák, adatok, kódok és a session-átiratok
+helyben maradnak, de a bejegyzésük megőrzi, **melyik gépen** vannak, így a
+szerzőtárs nem törött útvonalat lát, hanem azt, hogy a fájl máshol van.
+
+⚠ A repo kiadatlan kéziratokat, cover lettereket és bírálói leveleket tartalmaz.
+Csak privát remote-ra kerülhet.
+
+## Beállítások
+
+Minden gép- és személyfüggő adat a `~/.science-monitor/config.json`-ban van, nem
+a kódban — ezért a plugin maga továbbadható:
+
+```bash
+sm.py config                                   # minden beállítás
+sm.py config scan_roots ~/Documents,~/work     # hol keressen kéziratot
+sm.py config mail_provider outlook             # outlook | gmail
+sm.py config mail_address nev@intezmeny.hu     # a levelező szerzői cím
+sm.py config sync_roles manuscript,cover_letter,response,supplement,refs
+```
 
 ## Telepítés
 
