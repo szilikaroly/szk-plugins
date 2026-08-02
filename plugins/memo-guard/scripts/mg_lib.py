@@ -24,8 +24,15 @@ from pathlib import Path
 # --------------------------------------------------------------------------- paths
 
 def data_dir() -> Path:
-    d = (os.environ.get("CLAUDE_PLUGIN_DATA")
-         or os.environ.get("MEMO_GUARD_HOME")
+    # MEMO_GUARD_HOME wins over CLAUDE_PLUGIN_DATA, not the other way round.
+    # The harness derives CLAUDE_PLUGIN_DATA from the plugin's *id*, and that id
+    # changed once on this machine (memo-guard-inline -> memo-guard-szk-plugins),
+    # which silently forked the store into three: archives and sessions under one
+    # id, claim verdicts under the shell fallback, nothing shared. A refuted claim
+    # recorded from a terminal then did not block anything inside a session.
+    # An explicitly pinned location has to be authoritative or it pins nothing.
+    d = (os.environ.get("MEMO_GUARD_HOME")
+         or os.environ.get("CLAUDE_PLUGIN_DATA")
          or str(Path.home() / ".claude" / "memo-guard"))
     p = Path(d)
     p.mkdir(parents=True, exist_ok=True)
