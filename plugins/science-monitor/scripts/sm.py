@@ -140,7 +140,7 @@ def cmd_show(conn, args):
             print(f"      határidő: {s['due_at']}")
         if s["notes"]:
             print(f"      jegyzet : {s['notes']}")
-        for rv in L.open_reviews(conn, s["id"]):
+        for rv in L.all_reviews(conn, s["id"]):
             done, total = L.point_progress(conn, rv["id"])
             print(f"      review #{rv['id']} [{rv['state']}] {bar(done, total)}")
 
@@ -260,8 +260,9 @@ def cmd_submit(conn, args):
         )
         sub = conn.execute("SELECT * FROM submissions WHERE project_id = ? AND seq = ?",
                            (p["id"], seq)).fetchone()
+        n = L.seed_checklist(conn, sub["id"], p["kind"])
         L.log_event(conn, p["id"], "submission_opened", f"#{seq} → {args.journal}", sub["id"])
-        print(f"új beadás nyitva: #{seq} → {args.journal}")
+        print(f"új beadás nyitva: #{seq} → {args.journal} ({n} tételes checklisttel)")
 
     sets, vals = [], []
 
@@ -553,11 +554,17 @@ def cmd_scan(conn, args):
     if not os.path.isdir(root):
         L.die(f"nincs ilyen mappa: {root}")
 
+    # `--single` treats ROOT itself as one project rather than as a folder of
+    # projects — the right mode for a prepared submission package.
+    entries = ["."] if args.single else sorted(os.listdir(root))
     candidates = []
-    for entry in sorted(os.listdir(root)):
-        d = os.path.join(root, entry)
-        if not os.path.isdir(d) or entry in SKIP_DIRS or entry.startswith("."):
+    for entry in entries:
+        d = os.path.realpath(os.path.join(root, entry))
+        if not os.path.isdir(d) or entry in SKIP_DIRS or (
+                entry.startswith(".") and entry != "."):
             continue
+        if entry == ".":
+            entry = os.path.basename(d)
         files = walk_project(d)
         # A stray .md is not enough — require a real manuscript file, or a
         # markdown whose name says so.
@@ -843,6 +850,83 @@ def cmd_respond(conn, args):
     print(f"{len(pts)} pont, ebből {todo} még válasz nélkül")
 
 
+# ----------------------------------------------------------------- checklist
+
+def cmd_checklist(conn, args):
+    p = L.get_project(conn, args.ref)
+    sub = _resolve_submission(conn, p["id"], args.seq)
+
+    if args.action == "init":
+        n = L.seed_checklist(conn, sub["id"], p["kind"])
+        conn.commit()
+        print(f"checklist kész: {n} tétel ({p['kind']} típusra szabva)")
+        return
+
+    if args.action == "set":
+        rows = L.checklist_of(conn, sub["id"])
+        targets = [r for r in rows if str(r["id"]) == str(args.item)
+                   or args.item.lower() in r["label"].lower()]
+        if not targets:
+            L.die(f"nincs ilyen checklist-tétel: {args.item}")
+        if len(targets) > 1:
+            print("több tétel illeszkedik:")
+            for r in targets:
+                print(f"  #{r['id']} {r['label']}")
+            L.die("pontosíts az id-vel")
+        row = targets[0]
+        done = 1 if args.done else (0 if args.undone else row["done"])
+        na = 1 if args.na else (0 if args.applicable else row["na"])
+        conn.execute("UPDATE checklist SET done = ?, na = ?, note = ? WHERE id = ?",
+                     (done, na, args.note if args.note is not None else row["note"],
+                      row["id"]))
+        conn.commit()
+        mark = "n/a" if na else ("kész" if done else "nyitva")
+        print(f"#{row['id']} {row['label']} → {mark}")
+        return
+
+    rows = L.checklist_of(conn, sub["id"])
+    if not rows:
+        print("Nincs checklist ehhez a beadáshoz — `sm.py checklist init "
+              f"{p['slug']}`")
+        return
+    done, total = L.checklist_progress(conn, sub["id"])
+    print(f"BEADÁSI CHECKLIST — {p['title'][:60]}")
+    print(f"  {sub['journal']} (beadás #{sub['seq']})  {bar(done, total)}\n")
+    for r in rows:
+        icon = "⊘" if r["na"] else ("●" if r["done"] else "○")
+        print(f"  {icon} #{r['id']:<4} {r['label']}")
+        if r["note"]:
+            print(f"          {r['note']}")
+    if done < total:
+        print(f"\n{total - done} tétel nyitva. Pipálás: "
+              f"`sm.py checklist set {p['slug']} ID --done`")
+
+
+def cmd_gaps(conn, args):
+    projects = ([L.get_project(conn, args.ref)] if args.ref else
+                conn.execute("SELECT * FROM projects WHERE archived = 0 ORDER BY id"
+                             ).fetchall())
+    order = {"blocker": 0, "warn": 1, "info": 2}
+    any_found = False
+    for p in projects:
+        sub = L.current_submission(conn, p["id"])
+        items = sorted(L.gaps(conn, p, sub), key=lambda g: order[g["severity"]])
+        if not items:
+            continue
+        any_found = True
+        print(f"[{p['slug']}] {p['title'][:60]}")
+        for g in items:
+            icon = {"blocker": "✗", "warn": "!", "info": "·"}[g["severity"]]
+            print(f"  {icon} {g['text']}")
+            if g["ask"]:
+                print(f"      → {g['ask']}")
+            elif g["fix"]:
+                print(f"      → {g['fix']}")
+        print()
+    if not any_found:
+        print("Nincs hiány. Minden beadás rendben.")
+
+
 # ----------------------------------------------------------------- dashboard
 
 def cmd_dashboard(conn, args):
@@ -851,6 +935,12 @@ def cmd_dashboard(conn, args):
     print(f"dashboard: {path}")
     if args.open:
         subprocess.run(["open", path], check=False)
+
+
+def cmd_serve(conn, args):
+    import serve as S
+    conn.close()  # the server opens its own connection per request
+    S.run(port=args.port, open_browser=not args.no_open)
 
 
 def cmd_deadlines(conn, args):
@@ -960,6 +1050,8 @@ def build_parser():
     p = sub.add_parser("scan", help="kézirat-projektek keresése a lemezen")
     p.add_argument("root", nargs="?", default=os.path.expanduser("~/Documents/claude"))
     p.add_argument("--apply", action="store_true")
+    p.add_argument("--single", action="store_true",
+                   help="ROOT maga egy kézirat, nem projektek gyűjtője")
     p.set_defaults(fn=cmd_scan)
 
     p = sub.add_parser("review", help="bírálatok kezelése")
@@ -1015,6 +1107,32 @@ def build_parser():
 
     p = sub.add_parser("deadlines", help="közelgő határidők")
     p.set_defaults(fn=cmd_deadlines)
+
+    p = sub.add_parser("checklist", help="beadási checklist")
+    cs = p.add_subparsers(dest="action", required=True)
+    for name in ("show", "init"):
+        c = cs.add_parser(name)
+        c.add_argument("ref")
+        c.add_argument("--seq", type=int)
+    c = cs.add_parser("set")
+    c.add_argument("ref")
+    c.add_argument("item", help="tétel id-je vagy szövegrészlete")
+    c.add_argument("--done", action="store_true")
+    c.add_argument("--undone", action="store_true")
+    c.add_argument("--na", action="store_true", help="nem alkalmazható")
+    c.add_argument("--applicable", action="store_true")
+    c.add_argument("--note")
+    c.add_argument("--seq", type=int)
+    p.set_defaults(fn=cmd_checklist)
+
+    p = sub.add_parser("gaps", help="hiánylista: mi hiányzik és mi javítja")
+    p.add_argument("ref", nargs="?")
+    p.set_defaults(fn=cmd_gaps)
+
+    p = sub.add_parser("serve", help="élő dashboard, kattintható gombokkal")
+    p.add_argument("--port", type=int, default=8787)
+    p.add_argument("--no-open", dest="no_open", action="store_true")
+    p.set_defaults(fn=cmd_serve)
 
     return ap
 

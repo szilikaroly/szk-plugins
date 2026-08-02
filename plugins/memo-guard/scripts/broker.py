@@ -66,7 +66,20 @@ HEARTBEAT_S = 30
 
 
 def lock_dir() -> Path:
-    p = mg.data_dir() / "locks"
+    """Machine-wide, deliberately NOT under the plugin data dir.
+
+    The first version put locks under mg.data_dir(), which is keyed to
+    CLAUDE_PLUGIN_DATA / MEMO_GUARD_HOME. Two installs — or a test run with
+    MEMO_GUARD_HOME set — therefore had different lock directories and could not
+    see each other. Observed: two memo_gen processes driving one Ollama at the
+    same time, which is the exact starvation the lock exists to prevent.
+
+    The resource being guarded is a single model server on this machine, so the
+    lock must be keyed to that, not to whichever data dir the caller happens to
+    have. MEMO_GUARD_LOCK_DIR overrides it for genuinely separate servers.
+    """
+    d = os.environ.get("MEMO_GUARD_LOCK_DIR")
+    p = Path(d) if d else Path.home() / ".claude" / "memo-guard-locks"
     p.mkdir(parents=True, exist_ok=True)
     return p
 
@@ -177,6 +190,132 @@ def healthy(timeout: float = 3.0) -> bool:
             return False
 
 
+# --------------------------------------------------------------------------- fit / recovery
+
+def catalog() -> dict[str, int]:
+    """Every pulled model and its size in MB."""
+    try:
+        with urllib.request.urlopen(f"{OLLAMA}/api/tags", timeout=4) as r:
+            return {m["name"]: m.get("size", 0) // (1024 * 1024)
+                    for m in json.loads(r.read()).get("models", [])}
+    except Exception:
+        return {}
+
+
+def free_vram_mb(hw: dict | None = None) -> int:
+    hw = hw or probe_hardware()
+    used = sum(m["size_mb"] for m in loaded_models())
+    return max(0, hw.get("vram_mb", 0) - used)
+
+
+def unload(model: str, timeout: float = 10.0) -> bool:
+    """Evict a model now. `keep_alive: 0` frees its VRAM immediately.
+
+    This is the safe half of recovery: nothing is lost, the next request simply
+    reloads. It is what makes room for a model that would otherwise spill.
+    """
+    try:
+        req = urllib.request.Request(
+            f"{OLLAMA}/api/generate",
+            data=json.dumps({"model": model, "keep_alive": 0,
+                             "prompt": "", "stream": False}).encode(),
+            headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=timeout).read()
+        return True
+    except Exception:
+        return False
+
+
+def ensure_room(model: str, hw: dict | None = None) -> dict:
+    """Make room BEFORE loading, instead of discovering the spill afterwards.
+
+    A model that does not fit still loads — Ollama silently puts the overflow on
+    CPU and everything keeps working at roughly 1/20th speed. Nothing reports
+    it. Evicting an idle model first is cheaper than running the next twenty
+    minutes of work on the CPU.
+    """
+    hw = hw or probe_hardware()
+    want = catalog().get(model) or catalog().get(f"{model}:latest") or 0
+    if not want or not hw.get("vram_mb"):
+        return {"action": "unknown", "evicted": []}
+    evicted = []
+    for m in sorted(loaded_models(), key=lambda x: -x["size_mb"]):
+        if free_vram_mb(hw) >= want * 1.1:      # 10% headroom for KV cache
+            break
+        if m["name"].split(":")[0] == model.split(":")[0]:
+            continue                            # already the one we want
+        if unload(m["name"]):
+            evicted.append(m["name"])
+    fits = free_vram_mb(hw) >= want
+    return {"action": "ok" if fits else "will_spill", "wanted_mb": want,
+            "free_mb": free_vram_mb(hw), "evicted": evicted}
+
+
+def diagnose(hw: dict | None = None) -> dict:
+    """One structured verdict, with the evidence that produced it.
+
+    WEDGED and SLOW look identical from the outside — both mean "nothing is
+    coming back" — but they need opposite responses, so they are separated by
+    measurement rather than guessed at.
+    """
+    hw = hw or probe_hardware()
+    t0 = time.time()
+    alive = healthy(4.0)
+    probe_ms = (time.time() - t0) * 1000
+    loaded = loaded_models()
+    spilled = [m for m in loaded if m["on_gpu"] < 0.95]
+
+    if not alive:
+        return {"verdict": "WEDGED", "probe_ms": round(probe_ms),
+                "why": "the model server did not answer a trivial request",
+                "loaded": loaded, "fix": "recover --level 2, then --level 3"}
+    if spilled:
+        return {"verdict": "SPILLED", "probe_ms": round(probe_ms),
+                "why": f"{len(spilled)} model(s) partly on CPU: " +
+                       ", ".join(f"{m['name']} {m['on_gpu']:.0%}" for m in spilled),
+                "loaded": loaded, "fix": "recover --level 1 (evict idle models)"}
+    if probe_ms > 2500:
+        return {"verdict": "SLOW", "probe_ms": round(probe_ms),
+                "why": "server answers but far slower than a warm embed should",
+                "loaded": loaded, "fix": "recover --level 1"}
+    return {"verdict": "OK", "probe_ms": round(probe_ms), "why": "",
+            "loaded": loaded, "fix": ""}
+
+
+def recover(level: int = 1, hw: dict | None = None) -> dict:
+    """Escalating repair. Level 3 restarts the server and is never automatic.
+
+    Levels 1 and 2 only evict models — nothing is lost, so a hook may run them
+    unattended. Level 3 kills a process the user may be using for something
+    else, so it requires an explicit act.
+    """
+    hw = hw or probe_hardware()
+    done = []
+    if level >= 1:
+        for m in loaded_models():
+            if m["on_gpu"] < 0.95 and unload(m["name"]):
+                done.append(f"evicted spilled {m['name']}")
+    if level >= 2:
+        for m in loaded_models():
+            if unload(m["name"]):
+                done.append(f"evicted {m['name']}")
+        for _ in range(10):
+            if healthy(3.0):
+                break
+            time.sleep(1.0)
+    if level >= 3:
+        if sys.platform == "darwin":
+            _run(["pkill", "-f", "ollama serve"], timeout=5)
+        else:
+            _run(["systemctl", "--user", "restart", "ollama"], timeout=10)
+        done.append("requested model server restart")
+        for _ in range(20):
+            if healthy(3.0):
+                break
+            time.sleep(1.0)
+    return {"level": level, "actions": done, "after": diagnose(hw)}
+
+
 # --------------------------------------------------------------------------- lock
 
 def _read(p: Path) -> dict:
@@ -219,7 +358,8 @@ def lock_status(name: str = "model") -> dict | None:
 
 
 @contextmanager
-def slot(name: str = "model", deadline_s: float = 90.0, owner: str = ""):
+def slot(name: str = "model", deadline_s: float = 90.0, owner: str = "",
+         model: str = "", auto_recover: bool = True):
     """Acquire one model slot, or yield False so the caller can degrade.
 
     Yields True when the slot is held. Yields False when the deadline passed —
@@ -238,6 +378,17 @@ def slot(name: str = "model", deadline_s: float = 90.0, owner: str = ""):
                         p.unlink()
                     except OSError:
                         pass
+                    # A stale lock means the previous holder died mid-job, and a
+                    # job killed while driving the model is the most common way
+                    # to be handed a degraded server. Repairing here is what
+                    # makes the next run recover on its own instead of
+                    # inheriting the problem.
+                    if auto_recover:
+                        try:
+                            if diagnose()["verdict"] != "OK":
+                                recover(2)
+                        except Exception:
+                            pass
                 # Write the content FIRST, then link it into place. os.link is
                 # atomic and fails if the target exists, so the lock file never
                 # exists in a half-written state for another process to
@@ -262,6 +413,25 @@ def slot(name: str = "model", deadline_s: float = 90.0, owner: str = ""):
             if time.time() - start > deadline_s:
                 break
             time.sleep(0.5)
+
+        # Preflight, only once the slot is held so nothing races us. Two checks,
+        # in the order that matters: repair a degraded server before deciding
+        # anything, then make room so the model we are about to load does not
+        # spill. Both are cheap; discovering either afterwards costs the whole
+        # job's runtime at CPU speed.
+        if held and auto_recover:
+            try:
+                d = diagnose()
+                if d["verdict"] in ("SPILLED", "SLOW"):
+                    recover(1)          # eviction only — safe unattended
+            except Exception:
+                pass
+        if held and model:
+            try:
+                ensure_room(model)
+            except Exception:
+                pass
+
         yield held
     finally:
         if held:
@@ -292,9 +462,53 @@ def main() -> int:
     ap.add_argument("--status", action="store_true")
     ap.add_argument("--health", action="store_true")
     ap.add_argument("--break-lock", action="store_true")
+    ap.add_argument("--diagnose", action="store_true")
+    ap.add_argument("--recover", action="store_true")
+    ap.add_argument("--level", type=int, default=1, choices=(1, 2, 3))
+    ap.add_argument("--fit", metavar="MODEL",
+                    help="would this model fit right now, and what would be evicted")
     ap.add_argument("--name", default="model")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
+
+    if args.diagnose:
+        d = diagnose()
+        if args.json:
+            print(json.dumps(d, indent=2))
+            return 0
+        print(f"verdict : {d['verdict']}   (probe {d['probe_ms']} ms)")
+        if d["why"]:
+            print(f"why     : {d['why']}")
+            print(f"fix     : broker.py --recover --level "
+                  f"{1 if d['verdict'] != 'WEDGED' else 2}")
+        for m in d["loaded"]:
+            print(f"  loaded: {m['name']:<24} gpu={m['on_gpu']:.0%}")
+        return 0 if d["verdict"] == "OK" else 1
+
+    if args.recover:
+        if args.level >= 3:
+            print("level 3 restarts the model server, which may interrupt other "
+                  "work using it.", file=sys.stderr)
+        r = recover(args.level)
+        if args.json:
+            print(json.dumps(r, indent=2))
+            return 0
+        for a in r["actions"] or ["(nothing to do)"]:
+            print(f"  {a}")
+        print(f"now     : {r['after']['verdict']}")
+        return 0 if r["after"]["verdict"] == "OK" else 1
+
+    if args.fit:
+        hw = probe_hardware()
+        before = free_vram_mb(hw)
+        r = ensure_room(args.fit, hw)
+        print(json.dumps({**r, "free_before_mb": before}, indent=2)
+              if args.json else
+              f"{args.fit}: needs {r.get('wanted_mb', '?')} MB, "
+              f"{before} MB free before -> {r['free_mb']} MB after"
+              f"{'  (evicted: ' + ', '.join(r['evicted']) + ')' if r['evicted'] else ''}"
+              f"\nverdict: {r['action']}")
+        return 0 if r["action"] == "ok" else 1
 
     if args.health:
         ok = healthy()

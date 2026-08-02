@@ -161,6 +161,18 @@ CREATE TABLE IF NOT EXISTS review_points (
   state      TEXT NOT NULL DEFAULT 'open'
 );
 
+CREATE TABLE IF NOT EXISTS checklist (
+  id            INTEGER PRIMARY KEY,
+  submission_id INTEGER NOT NULL REFERENCES submissions(id) ON DELETE CASCADE,
+  idx           INTEGER NOT NULL DEFAULT 0,
+  label         TEXT NOT NULL,
+  done          INTEGER NOT NULL DEFAULT 0,
+  na            INTEGER NOT NULL DEFAULT 0,
+  note          TEXT NOT NULL DEFAULT '',
+  UNIQUE(submission_id, label)
+);
+
+CREATE INDEX IF NOT EXISTS idx_checklist_sub ON checklist(submission_id);
 CREATE INDEX IF NOT EXISTS idx_sub_project ON submissions(project_id);
 CREATE INDEX IF NOT EXISTS idx_files_project ON files(project_id);
 CREATE INDEX IF NOT EXISTS idx_points_review ON review_points(review_id);
@@ -239,15 +251,26 @@ def files_of(conn, project_id, role=None):
     ).fetchall()
 
 
+_REVIEW_Q = ("SELECT r.*, s.project_id, s.journal, p.slug, p.title "
+             "FROM reviews r "
+             "JOIN submissions s ON s.id = r.submission_id "
+             "JOIN projects p ON p.id = s.project_id ")
+
+
 def open_reviews(conn, submission_id=None):
-    q = ("SELECT r.*, s.project_id, s.journal, p.slug, p.title "
-         "FROM reviews r "
-         "JOIN submissions s ON s.id = r.submission_id "
-         "JOIN projects p ON p.id = s.project_id ")
+    """Reviews still needing work. Answered ones are history, not a to-do."""
     if submission_id:
-        return conn.execute(q + "WHERE r.submission_id = ? ORDER BY r.id DESC",
-                            (submission_id,)).fetchall()
-    return conn.execute(q + "WHERE r.state != 'answered' ORDER BY r.due_at, r.id").fetchall()
+        return conn.execute(
+            _REVIEW_Q + "WHERE r.submission_id = ? AND r.state != 'answered' "
+            "ORDER BY r.id DESC", (submission_id,)).fetchall()
+    return conn.execute(
+        _REVIEW_Q + "WHERE r.state != 'answered' ORDER BY r.due_at, r.id").fetchall()
+
+
+def all_reviews(conn, submission_id):
+    """Every review for a submission, answered ones included."""
+    return conn.execute(_REVIEW_Q + "WHERE r.submission_id = ? ORDER BY r.id",
+                        (submission_id,)).fetchall()
 
 
 def point_progress(conn, review_id):
@@ -296,6 +319,164 @@ def submitted_label(sub):
         when = sub["submitted_at"] or "?"
         return f"cover: {cover} · BEKÜLDVE {when}"
     return f"cover: {cover} · NINCS beküldve"
+
+
+# --- submission-readiness checklist -----------------------------------------
+
+# Journal-agnostic items every submission needs, in the order a submission
+# portal usually asks for them.
+CHECKLIST_BASE = [
+    "Címoldal: szerzők, affiliációk, levelező szerző",
+    "Absztrakt a folyóirat formátumában és szóhatárán belül",
+    "Szószám ellenőrizve a folyóirat limitje ellen",
+    "Cover letter kész",
+    "Hivatkozások a folyóirat stílusában, minden DOI feloldva",
+    "Ábrák külön fájlban, előírt felbontásban",
+    "Táblázatok szerkeszthető formában (nem kép)",
+    "Supplementary fájlok listázva és hivatkozva a szövegben",
+    "Etikai nyilatkozat / IRB engedély",
+    "Funding statement",
+    "Conflict of interest / Disclosure",
+    "Data availability statement",
+    "Author contributions (CRediT)",
+    "ORCID minden szerzőnél",
+    "AI-használat nyilatkozata",
+    "Javasolt bírálók megadva",
+]
+
+# Extra items that only apply to certain article types.
+CHECKLIST_BY_KIND = {
+    "systematic-review": [
+        "PRISMA 2020 flow diagram a tényleges számokkal",
+        "PRISMA 2020 checklist csatolva",
+        "Protokoll-regisztráció (PROSPERO) vagy annak hiánya indokolva",
+        "Risk-of-bias értékelés (RoB 2 / ROBINS-I)",
+        "Teljes keresési stratégia adatbázisonként",
+    ],
+    "review": [
+        "Keresési stratégia dokumentálva",
+        "Evidenciaszint minden oksági állításnál jelölve",
+    ],
+    "hypothesis": [
+        "Hipotézisek falszifikálhatóan megfogalmazva",
+        "Modell / kód elérhetővé téve",
+    ],
+    "position": [
+        "Az állásfoglalás és az evidencia egyértelműen elválasztva",
+    ],
+    "article": [
+        "Reporting guideline (STROBE / CONSORT) csatolva",
+        "Etikai engedély száma a szövegben",
+    ],
+    "protocol": [
+        "SPIRIT checklist csatolva",
+        "Regisztrációs szám megadva",
+    ],
+}
+
+
+def seed_checklist(conn, submission_id, kind):
+    """Create the checklist rows for a submission. Existing rows are kept."""
+    items = CHECKLIST_BASE + CHECKLIST_BY_KIND.get(kind, [])
+    for i, label in enumerate(items):
+        conn.execute(
+            "INSERT OR IGNORE INTO checklist (submission_id, idx, label) VALUES (?,?,?)",
+            (submission_id, i, label))
+    return len(items)
+
+
+def checklist_of(conn, submission_id):
+    return conn.execute(
+        "SELECT * FROM checklist WHERE submission_id = ? ORDER BY idx, id",
+        (submission_id,)).fetchall()
+
+
+def checklist_progress(conn, submission_id):
+    rows = checklist_of(conn, submission_id)
+    live = [r for r in rows if not r["na"]]
+    return sum(1 for r in live if r["done"]), len(live)
+
+
+# --- gap analysis -----------------------------------------------------------
+
+def gaps(conn, project, sub):
+    """What is missing or inconsistent. Each gap carries the command that fixes it.
+
+    severity: 'blocker' stops a submission, 'warn' needs attention, 'info' is
+    bookkeeping. `fix` is a shell command; `ask` is a slash command for the
+    things only a session can do.
+    """
+    slug = project["slug"]
+    out = []
+
+    def add(sev, text, fix=None, ask=None):
+        out.append({"severity": sev, "text": text, "fix": fix, "ask": ask})
+
+    ms = files_of(conn, project["id"], "manuscript")
+    if not ms:
+        add("blocker", "Nincs nyilvántartva kézirat-fájl",
+            ask=f"/sm:scan {project['root_path']}" if project["root_path"] else None)
+
+    missing = [f["path"] for f in files_of(conn, project["id"])
+               if not os.path.exists(f["path"])]
+    if missing:
+        add("warn", f"{len(missing)} nyilvántartott fájl nincs meg a lemezen",
+            fix=f"sm.py show {slug}")
+
+    if sub is None:
+        add("warn", "Nincs megnyitott beadás",
+            fix=f'sm.py submit {slug} --journal "..."')
+        return out
+
+    if sub["cover_letter_state"] == "missing":
+        add("blocker", "Nincs cover letter",
+            fix=f"sm.py submit {slug} --cover PATH --cover-state ready")
+    elif sub["cover_letter_state"] == "draft":
+        add("warn", "A cover letter csak piszkozat",
+            fix=f"sm.py submit {slug} --cover-state ready")
+
+    done, total = checklist_progress(conn, sub["id"])
+    if total == 0:
+        add("info", "A beadási checklist nincs létrehozva",
+            fix=f"sm.py checklist init {slug}")
+    elif done < total:
+        add("warn" if sub["status"] in ("ready", "drafting") else "info",
+            f"Beadási checklist: {total - done} tétel nyitva",
+            fix=f"sm.py checklist show {slug}")
+
+    if sub["submitted"] and not sub["journal_ms_id"]:
+        add("info", "Nincs rögzítve a folyóirat kéziratazonosítója",
+            fix=f'sm.py submit {slug} --ms-id "..."', ask="/sm:inbox")
+    if sub["submitted"] and not sub["submitted_at"]:
+        add("info", "Beküldve, de dátum nélkül",
+            fix=f"sm.py submit {slug} --sent --date YYYY-MM-DD")
+    if not sub["submitted"] and sub["status"] == "ready":
+        add("blocker", f"Kész, de nincs beküldve ide: {sub['journal']}",
+            fix=f"sm.py submit {slug} --sent")
+
+    revs = open_reviews(conn, sub["id"])
+    if sub["status"] in NEEDS_ACTION and not revs:
+        add("blocker", "Revíziót kértek, de nincs betöltve bírálói levél",
+            ask=f"/sm:review {slug}")
+    if sub["status"] in TERMINAL and sub["status"] == "rejected":
+        add("warn", "Elutasítva — nincs kijelölve új folyóirat",
+            fix=f'sm.py submit {slug} --journal "..." --new')
+    for rv in revs:
+        rdone, rtotal = point_progress(conn, rv["id"])
+        if rtotal == 0:
+            add("blocker", f"A #{rv['id']} bírálat nincs pontokra bontva",
+                ask=f"/sm:review {slug}")
+        elif rdone < rtotal:
+            d = days_until(rv["due_at"])
+            sev = "blocker" if (d is not None and d <= 14) else "warn"
+            add(sev, f"{rtotal - rdone} megválaszolatlan bírálói pont"
+                     + (f", {d} nap a határidőig" if d is not None else ""),
+                ask=f"/sm:respond {rv['id']}")
+    if sub["status"] in NEEDS_ACTION and not sub["due_at"]:
+        add("warn", "Revízió határidő nélkül",
+            fix=f"sm.py submit {slug} --due YYYY-MM-DD")
+
+    return out
 
 
 def die(msg, code=2):

@@ -282,9 +282,52 @@ broker.py --health       # is the model server actually answering
 broker.py --break-lock   # refuses unless the lock is genuinely stale
 ```
 
-`--probe` reports `size_vram/size` per loaded model. Below 95% the model has
-silently spilled to CPU — it still works, about 20× slower, and nothing else
-tells you.
+### Preventing and repairing a stall
+
+Prevention runs inside `slot()`, once the slot is held so nothing races it:
+
+1. `diagnose()` — one verdict with its evidence. `WEDGED` and `SLOW` look
+   identical from outside (nothing comes back) but need opposite responses, so
+   they are separated by measurement.
+2. `recover(1)` if degraded — eviction only, so a hook may run it unattended.
+3. `ensure_room(model)` — evict what is in the way **before** the load, instead
+   of discovering afterwards that the model went half onto the CPU.
+
+Repair also triggers on a **stale lock**: a lock whose owner is gone means a job
+died mid-model, which is the most common way to inherit a degraded server. The
+next run breaks the lock, diagnoses, and repairs rather than inheriting it.
+
+```bash
+broker.py --diagnose            # OK | SPILLED | SLOW | WEDGED, with evidence
+broker.py --fit gemma4:12b      # would it fit, and what would be evicted
+broker.py --recover --level 1   # evict spilled models      (safe, automatic)
+broker.py --recover --level 2   # evict everything, re-probe (safe, automatic)
+broker.py --recover --level 3   # restart the server        (never automatic)
+```
+
+Level 3 is deliberately excluded from automatic recovery: it kills a process the
+user may be using for something else.
+
+Verified: an unreachable server is called `WEDGED` in 16 ms; `--fit gemma4:12b`
+with 3,305 MB free evicted `llama3.1:8b` and reported 11,936 MB after; a lock
+left by a dead PID is taken over by the next run in 0.3 s.
+
+**The lock is machine-wide, not per data directory.** It first lived under
+`mg.data_dir()`, which is keyed to `CLAUDE_PLUGIN_DATA`/`MEMO_GUARD_HOME` — so
+two installs, or a test run with that variable set, had separate lock
+directories and could not see each other. Two `memo_gen` processes were observed
+driving one Ollama simultaneously: the exact starvation the lock exists to
+prevent, reintroduced one level up. It now lives at
+`~/.claude/memo-guard-locks`, because the resource being guarded is one model
+server on one machine. `MEMO_GUARD_LOCK_DIR` overrides it for genuinely
+separate servers.
+
+**Not verified: an actual GPU spill.** `--probe` reports `size_vram/size` per
+model and below 95% means part of it is on CPU — about 20× slower with nothing
+else reporting it. But loading two models that together exceed VRAM did *not*
+produce a spill here: Ollama's own scheduler evicted one first. The detection
+is real and costs nothing; whether the condition ever occurs may depend on
+`OLLAMA_MAX_LOADED_MODELS` and the platform. Treat that path as untested.
 
 ## Uninstall
 

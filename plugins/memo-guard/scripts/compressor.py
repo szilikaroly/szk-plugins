@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import gzip
 import json
+import os
 import re
 import subprocess
 import sys
@@ -203,8 +204,14 @@ def run_memo_pipeline(workdir: Path, cfg: dict, log) -> bool:
         # correct; the old per-session lock let a second Claude Code window run
         # a competing pipeline, and the two starved each other on one Ollama.
         step_budget = float(cfg.get("model_step_timeout_s", 240))
+        # Naming the model lets the broker evict what is in the way before the
+        # load, rather than letting it land half on the CPU and run the next
+        # several minutes at a twentieth of the speed with nothing reporting it.
+        prose_model = os.environ.get("MEMO_MODEL") or \
+            os.environ.get("MEMO_MODEL_PROSE") or "llama3.1:8b"
         with broker.slot("model", deadline_s=float(cfg.get("model_wait_s", 300)),
-                         owner=f"compressor/{workdir.name[:8]}") as got:
+                         owner=f"compressor/{workdir.name[:8]}",
+                         model=prose_model) as got:
             if not got:
                 log("no model slot within deadline -> deterministic mode")
                 return False
