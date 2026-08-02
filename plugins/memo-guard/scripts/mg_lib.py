@@ -65,6 +65,13 @@ DEFAULTS = {
     "startup_max_age_h": 48,
     # per-source cap when harvesting tool outputs from the transcript (chars)
     "source_cap_chars": 200000,
+    # Model-slot budgets (broker.py). The old values were 600 s per step and
+    # 1800 s overall; a 14 MB transcript sat in them for half an hour and then
+    # fell back anyway. A weaker memo on time beats a better one that never
+    # arrives, so these are deliberately impatient.
+    "model_step_timeout_s": 240,
+    "model_wait_s": 300,
+    "session_wait_s": 900,
     # enforce cross-session claim verdicts (claims.py) during compression
     "enforce_verdicts": True,
     # A-MEM style: let the model decide when to archive instead of firing at

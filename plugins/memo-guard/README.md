@@ -247,11 +247,44 @@ metrics.jsonl                                every run, auditable
   cannot tell meaning from coincidence, and no threshold separates them. With
   Ollama unavailable, semantic matching degrades to lexical and some
   resurrections get through.
-- **The local-model compression path is slow and can stall.** On a 14 MB
-  transcript it did not finish inside its 30-minute budget and fell back to
-  deterministic mode. Concurrent compressions starve each other on a single
-  Ollama instance. The deterministic path is the reliable one; the model path is
-  an upgrade, not a dependency.
+- **The local-model path does not finish on large transcripts.** On a 14 MB
+  transcript it exceeds its budget and falls back to deterministic mode. Since
+  `broker.py` this fails in ~4 minutes instead of 30 and still produces a
+  ~1,030-token RESUME. The deterministic path is the reliable one; the model
+  path is an upgrade, not a dependency.
+
+## The broker
+
+Everything that wants the local model goes through `broker.py`, which owns one
+machine-wide slot. Four separate problems turned out to be one:
+
+| symptom | cause |
+|---|---|
+| two compressions hung 19 min at 0% CPU | the lock was per-session, so two Claude Code windows defeated it |
+| the 80% memo silently never built | when the lock held, the second run **skipped** instead of waiting |
+| `route.py`'s "one model at a time" | documented as a fact, enforced nowhere |
+| no background reorganisation | nothing owned scheduling |
+
+Rules it follows: **wait, never skip** — dropped work is worse than slow work
+because you cannot see it happen. **Deadlines, not hope** — past the deadline the
+caller degrades to deterministic instead of blocking. **Stale locks die** — a
+crashed compressor must not wedge the machine. **Capacity is probed**, not
+assumed, from actual VRAM.
+
+Measured after: five concurrent processes serialise with zero overlap; two
+compressors on one session both complete (241 s and 522 s) and both produce a
+memo, where before neither did.
+
+```bash
+broker.py --probe        # hardware, backend, VRAM, capacity, loaded models
+broker.py --status       # who holds the slot
+broker.py --health       # is the model server actually answering
+broker.py --break-lock   # refuses unless the lock is genuinely stale
+```
+
+`--probe` reports `size_vram/size` per loaded model. Below 95% the model has
+silently spilled to CPU — it still works, about 20× slower, and nothing else
+tells you.
 
 ## Uninstall
 

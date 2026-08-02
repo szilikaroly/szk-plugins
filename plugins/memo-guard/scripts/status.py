@@ -75,6 +75,23 @@ def main() -> int:
         print(f"window    : {wsrc}")
     else:
         print("context   : (no transcript with usage found from this cwd)")
+    try:
+        import broker
+        hw = broker.probe_hardware()
+        st = broker.lock_status()
+        print(f"hardware  : {hw['vendor']} {hw.get('device','')} — {hw['backend']}, "
+              f"{hw['vram_mb']:,} MB usable, {broker.capacity(hw)} model slot(s)")
+        slot = "free" if not st else (
+            f"held {st['age_s']:.0f}s by {st.get('owner', '?')}"
+            + ("  [STALE]" if st["stale"] else ""))
+        srv = "responding" if broker.healthy() else "NOT RESPONDING"
+        print(f"model svr : {srv}   slot: {slot}")
+        for m in broker.loaded_models():
+            if m["on_gpu"] < 0.95:
+                print(f"  warning : {m['name']} is only {m['on_gpu']:.0%} on GPU "
+                      f"— roughly 20x slower than it looks")
+    except Exception:
+        pass
     print(f"checkpoints: archive+compress at {cfg['checkpoints']}% ; "
           f"advise /compact at {cfg['advise_at']}%")
     print(f"data dir  : {mg.data_dir()}")

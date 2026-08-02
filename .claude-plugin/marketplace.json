@@ -15,6 +15,15 @@
       "license": "MIT",
       "category": "productivity",
       "keywords": ["context-window", "tokens", "memo", "compaction", "archive"]
+    },
+    {
+      "name": "science-monitor",
+      "source": "./plugins/science-monitor",
+      "description": "Tracks finished manuscripts by submission — journal, cover letter state, whether the package was actually sent, the decision that came back, and every reviewer point still unanswered. /sm:context pulls a manuscript's working context into the session in one step; /sm:review turns an incoming reviewer letter into tracked, answerable points.",
+      "author": { "name": "Dr. Szili Károly" },
+      "license": "MIT",
+      "category": "productivity",
+      "keywords": ["manuscript", "submission", "peer-review", "journal", "research"]
     }
   ]
 }

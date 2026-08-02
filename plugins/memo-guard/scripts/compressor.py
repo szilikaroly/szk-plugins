@@ -175,6 +175,13 @@ def run_memo_pipeline(workdir: Path, cfg: dict, log) -> bool:
             f"{cfg['memo_index_path']} -> deterministic mode")
         return False
     try:
+        import broker
+        # Ask the server before queuing for it. A wedged Ollama answers /api/tags
+        # but not real work, and every caller then sat in a 600 s timeout at 0%
+        # CPU waiting for an answer that was never coming.
+        if not broker.healthy(3.0):
+            log("model server not responding -> deterministic mode")
+            return False
         chk = subprocess.run([sys.executable, str(skill / "route.py"),
                               "--check"], capture_output=True, timeout=30)
         if chk.returncode != 0:
@@ -192,13 +199,23 @@ def run_memo_pipeline(workdir: Path, cfg: dict, log) -> bool:
             [str(skill / "index_build.py"),
              "--memo-dir", str(workdir / ".memo")],
         ]
-        for cmd in steps:
-            log("run: " + " ".join(cmd))
-            r = subprocess.run([sys.executable, *cmd], capture_output=True,
-                               text=True, timeout=1800)
-            if r.returncode != 0:
-                log(f"step failed rc={r.returncode}: {r.stderr[-800:]}")
+        # One model slot for the whole pipeline, machine-wide. Waiting for it is
+        # correct; the old per-session lock let a second Claude Code window run
+        # a competing pipeline, and the two starved each other on one Ollama.
+        step_budget = float(cfg.get("model_step_timeout_s", 240))
+        with broker.slot("model", deadline_s=float(cfg.get("model_wait_s", 300)),
+                         owner=f"compressor/{workdir.name[:8]}") as got:
+            if not got:
+                log("no model slot within deadline -> deterministic mode")
                 return False
+            for cmd in steps:
+                log("run: " + " ".join(cmd))
+                broker.beat("model")
+                r = subprocess.run([sys.executable, *cmd], capture_output=True,
+                                   text=True, timeout=step_budget)
+                if r.returncode != 0:
+                    log(f"step failed rc={r.returncode}: {r.stderr[-800:]}")
+                    return False
         return True
     except Exception as e:  # noqa: BLE001 — background job must not die loudly
         log(f"memo pipeline error: {e} -> deterministic mode")
@@ -330,12 +347,20 @@ def main() -> int:
         with logf.open("a") as f:
             f.write(f"[{time.strftime('%H:%M:%S')} {sid[:8]}] {msg}\n")
 
-    # single-flight per session
-    lock = workdir / ".lock"
-    if lock.exists() and time.time() - lock.stat().st_mtime < 1800:
-        log("another compressor run is active; skipping")
+    # Single-flight per session — but WAIT, do not skip. The old code returned
+    # immediately when a run was active, so the 80% checkpoint's compression was
+    # silently dropped whenever the 70% one was still going: the newer archive,
+    # the one with more of the session in it, was the one thrown away. Waiting
+    # costs time; skipping costs the memo.
+    import broker
+    sess_lock = broker.slot(f"session-{workdir.name[:12]}",
+                            deadline_s=float(cfg.get("session_wait_s", 900)),
+                            owner=f"compressor/{archive.name[:24]}")
+    sess_held = sess_lock.__enter__()
+    if not sess_held:
+        log("another compressor run for this session did not finish in time; "
+            "skipping to avoid piling up")
         return 0
-    lock.write_text(str(time.time()))
     (workdir / "STATE.json").write_text(json.dumps(
         {"phase": "running", "archive": str(archive)}))
 
@@ -403,8 +428,8 @@ def main() -> int:
         return 1
     finally:
         try:
-            lock.unlink()
-        except OSError:
+            sess_lock.__exit__(None, None, None)
+        except Exception:
             pass
 
 
