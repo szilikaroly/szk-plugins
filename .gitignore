@@ -1,0 +1,19 @@
+__pycache__/
+*.pyc
+.DS_Store
+# never commit session data: archives contain the full transcript, secrets included
+*.jsonl
+*.jsonl.gz
+.memo/
+.memo-session/
+sessions/
+archive/
+metrics.jsonl
+
+# local stores: memory.db / claims.db hold facts from every project
+*.db
+*.db-wal
+*.db-shm
+
+# internal working doc: names unpublished clinical work
+PLAN-sql-gpu.md

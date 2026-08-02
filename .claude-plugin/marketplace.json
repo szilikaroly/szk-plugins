@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "szk-plugins",
+  "description": "Claude Code plugins by Dr. Szili Károly — context-window and token-economy tooling",
+  "owner": {
+    "name": "Dr. Szili Károly",
+    "url": "https://orcid.org/0000-0001-9803-9103"
+  },
+  "plugins": [
+    {
+      "name": "memo-guard",
+      "source": "./plugins/memo-guard",
+      "description": "Monitors the context window, archives the original losslessly at 70%/80%, compresses it into a queryable memo, and re-injects a ~500-token resume after /compact or /clear.",
+      "author": { "name": "Dr. Szili Károly" },
+      "license": "MIT",
+      "category": "productivity",
+      "keywords": ["context-window", "tokens", "memo", "compaction", "archive"]
+    }
+  ]
+}
