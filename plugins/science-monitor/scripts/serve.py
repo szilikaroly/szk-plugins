@@ -161,6 +161,22 @@ class Handler(BaseHTTPRequestHandler):
             conn.commit()
             return {"ok": True, "reload": True}
 
+        if path == "/api/project":
+            pid = int(data["id"])
+            field = data.get("field")
+            if field != "state":
+                raise ValueError(f"nem módosítható mező: {field}")
+            value = data.get("value")
+            if value not in L.PROJECT_STATES:
+                raise ValueError(f"ismeretlen állapot: {value}")
+            row = conn.execute("SELECT * FROM projects WHERE id = ?", (pid,)).fetchone()
+            if not row:
+                raise ValueError("nincs ilyen kézirat")
+            conn.execute("UPDATE projects SET state = ? WHERE id = ?", (value, pid))
+            L.log_event(conn, pid, "state", f"{row['state']} → {value} (dashboard)")
+            conn.commit()
+            return {"ok": True, "reload": True}
+
         if path == "/api/checklist/init":
             sid = int(data["id"])
             sub = conn.execute("SELECT * FROM submissions WHERE id = ?", (sid,)).fetchone()

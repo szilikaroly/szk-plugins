@@ -19,6 +19,7 @@ Az adat lokális SQLite: `~/.science-monitor/monitor.db`. Semmi nem megy sehova.
 |---|---|
 | `/sm:status` | Áttekintés: hol tart mi, mi sürgős |
 | `/sm:scan [MAPPA]` | Kézirat-projektek keresése a lemezen, felvétele |
+| `/sm:import MANIFEST` | Claude Science munkaegység-export beolvasása |
 | `/sm:context SLUG` | Kontextus behívása a sessionbe |
 | `/sm:submit SLUG` | Beadás rögzítése: folyóirat, cover letter, beküldve-e |
 | `/sm:review SLUG [levél]` | Bírálat felvétele és pontokra bontása |
@@ -50,7 +51,19 @@ python3 ~/Documents/claude/szk-plugins/plugins/science-monitor/scripts/sm.py sta
 
 ## Adatmodell
 
-**projects** — a kézirat. Egy slug, egy cím, egy gyökérmappa.
+**projects** — a munkaegység. Egy slug, egy cím, egy gyökérmappa, plusz két
+dimenzió:
+
+- `state` — **folyamatban · hiánypótlás · korrekció · kész ✓ · elfogadva ·
+  elutasítva**. Ez a munka állapota, függetlenül attól, van-e folyóirat.
+  `sm.py state SLUG korrekcio`, vagy a dashboardon egy kattintás.
+  `sm.py state --auto` kitölti a nyilvántartásból, de a kézzel beállított
+  állapotot nem írja felül — kivéve, ha a beadás ténye cáfolja (elfogadva /
+  elutasítva / revízió).
+- `category` — `kutatas` (kézirat), `tamogato` (kutatás, de nem lesz belőle
+  kézirat), `eszkoz` (agent/skill konfiguráció), `pelda`. Csak a `kutatas`
+  kategóriától vár a hiánylista kéziratot, cover lettert és beadást; a többi
+  ettől nem szemetel bele.
 
 **submissions** — beadási kör. Egy kéziratnak több is lehet (elutasítás után új
 folyóirat = új `seq`, a régi megmarad a történetben). Itt van külön mezőben:

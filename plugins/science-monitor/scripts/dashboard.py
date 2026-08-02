@@ -21,14 +21,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import sm_lib as L  # noqa: E402
 
-LANES = [
-    ("drafting", "Írás alatt", ["drafting"]),
-    ("ready", "Kész, nincs beküldve", ["ready"]),
-    ("submitted", "Beküldve / bírálat alatt", ["submitted", "under_review"]),
-    ("revision", "Javítás kért", ["major_revision", "minor_revision", "revision_sent"]),
-    ("done", "Lezárva", ["accepted", "rejected", "withdrawn"]),
-]
-LANE_OF = {s: key for key, _, states in LANES for s in states}
+# The pipeline is organised by work state, not by submission status: a unit
+# can be korrekció with no journal at all.
+LANES = [(s, L.PROJECT_STATE_LABEL[s]) for s in L.PROJECT_STATES]
+STATE_CLS = {"folyamatban": "", "hianypotlas": "warn", "korrekcio": "acc",
+             "kesz": "ok", "elfogadva": "ok", "elutasitva": "bad"}
 
 SEV_ICON = {"blocker": "✗", "warn": "!", "info": "·"}
 SEV_LABEL = {"blocker": "blokkoló", "warn": "figyelmet kér", "info": "hiányzó adat"}
@@ -236,6 +233,17 @@ def due_chip(date_str):
     return chip(f"{d} nap")
 
 
+def state_controls(p):
+    """The work state as six one-click buttons; the current one is marked."""
+    return "".join(
+        button(L.PROJECT_STATE_LABEL[st],
+               cmd=f"sm.py state {p['slug']} {st}",
+               api={"path": "/api/project",
+                    "body": {"id": p["id"], "field": "state", "value": st}},
+               cls="done" if p["state"] == st else "")
+        for st in L.PROJECT_STATES)
+
+
 COVER_NEXT = {"missing": "draft", "draft": "ready", "ready": "missing"}
 
 
@@ -377,7 +385,7 @@ def build(conn, api_token=None):
     projects = conn.execute(
         "SELECT * FROM projects WHERE archived = 0 ORDER BY id").fetchall()
 
-    lane_cards = {key: [] for key, _, _ in LANES}
+    lane_cards = {key: [] for key, _ in LANES}
     cards, rows = [], []
     n_blockers = n_sub = n_unsent = 0
 
@@ -392,7 +400,7 @@ def build(conn, api_token=None):
             n_unsent += 1
 
         anchor = f"p-{esc(p['slug'])}"
-        lane_cards[LANE_OF.get(status, "drafting")].append(
+        lane_cards[p["state"]].append(
             f'<a href="#{anchor}">{esc(p["title"][:70])}'
             f'<small>{esc(sub["journal"]) if sub else "—"}</small></a>')
 
@@ -401,7 +409,7 @@ def build(conn, api_token=None):
             f'<tr><td><a href="#{anchor}" style="color:inherit">'
             f'{esc(p["title"][:60])}</a><br><code>{esc(p["slug"])}</code></td>'
             f'<td>{esc(sub["journal"]) if sub else "—"}</td>'
-            f'<td class="n">{esc(L.STATUS_LABEL.get(status, status))}</td>'
+            f'<td class="n">{chip(L.PROJECT_STATE_LABEL[p["state"]], STATE_CLS[p["state"]])}</td>'
             f'<td class="n">{esc(L.COVER_LABEL[sub["cover_letter_state"]]) if sub else "—"}</td>'
             f'<td class="n">{"IGEN" if sub and sub["submitted"] else "nem"}</td>'
             f'<td class="n">{bar_html(cdone, ctotal) if ctotal else "—"}</td>'
@@ -410,10 +418,11 @@ def build(conn, api_token=None):
         cards.append(
             f'<div class="card" id="{anchor}">'
             f'<h3>{esc(p["title"])}</h3>'
-            f'<div class="meta"><code>{esc(p["slug"])}</code> · {esc(p["kind"])} · '
+            f'<div class="meta"><code>{esc(p["slug"])}</code> · {esc(p["kind"])} · {esc(L.CATEGORIES.get(p["category"], p["category"]))} · '
             + (f'{esc(sub["journal"])} (beadás #{sub["seq"]})' if sub else "nincs beadás")
             + (f' · ms {esc(sub["journal_ms_id"])}' if sub and sub["journal_ms_id"] else "")
             + "</div>"
+            f'<div class="chips">{state_controls(p)}</div>'
             f'<div class="chips">{submission_controls(p, sub, live)}'
             + button("Kontextus behívása", cmd=f"/sm:context {p['slug']}")
             + button("Bírálat felvétele", cmd=f"/sm:review {p['slug']}")
@@ -426,7 +435,7 @@ def build(conn, api_token=None):
     lanes_html = "".join(
         f'<div class="lane"><h3>{esc(label)} ({len(lane_cards[key])})</h3>'
         + ("".join(lane_cards[key]) or '<small style="color:var(--muted)">—</small>')
-        + "</div>" for key, label, _ in LANES)
+        + "</div>" for key, label in LANES)
 
     mode = ('<span class="mode live">élő — a gombok írnak az adatbázisba</span>'
             if live else
@@ -458,7 +467,7 @@ def build(conn, api_token=None):
   {"".join(cards) or '<div class="card">Nincs felvett kézirat.</div>'}
   <h2 class="sec">Összesítő</h2>
   <div class="tablewrap"><table>
-    <thead><tr><th>Kézirat</th><th>Folyóirat</th><th>Státusz</th><th>Cover</th>
+    <thead><tr><th>Kézirat</th><th>Folyóirat</th><th>Állapot</th><th>Cover</th>
     <th>Beküldve</th><th>Checklist</th><th>Blokkoló</th></tr></thead>
     <tbody>{"".join(rows) or '<tr><td colspan="7">—</td></tr>'}</tbody>
   </table></div>

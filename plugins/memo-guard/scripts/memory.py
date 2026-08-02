@@ -402,6 +402,15 @@ def recall(db: sqlite3.Connection, query: str, cwd: str, goal: str | None,
         db.execute("UPDATE fact SET hits=hits+1, last_hit=? WHERE id=?", (now, fid))
         if len(out) >= limit:
             break
+    # Record which facts came back together. memify turns this into edge weight:
+    # two facts repeatedly answering the same question belong to the same
+    # question, which is evidence a keyword match cannot produce.
+    if len(out) > 1:
+        try:
+            import memify
+            memify.record_coaccess(db, [f["id"] for f in out])
+        except Exception:
+            pass
     db.commit()
     return {"scope": scope, "goal": goal, "returned": len(out),
             "tokens_est": spent, "budget": budget_tokens, "facts": out}

@@ -70,8 +70,10 @@ def cmd_status(conn, args):
     print(f"SCIENCE MONITOR — {len(projects)} kézirat\n")
     for p in projects:
         sub = L.current_submission(conn, p["id"])
-        head = f"[{p['slug']}]  {p['title'][:64]}"
-        print(head)
+        icon = STATE_ICON.get(p["state"], "·")
+        print(f"{icon} [{p['slug']}]  {p['title'][:62]}")
+        print(f"    {L.PROJECT_STATE_LABEL.get(p['state'], p['state']).upper()}"
+              + (f" · {p['category']}" if p["category"] != "kutatas" else ""))
         if sub is None:
             print(f"    {L.STATUS_LABEL['drafting']:<24} · nincs beadás")
         else:
@@ -117,6 +119,9 @@ def cmd_show(conn, args):
     p = L.get_project(conn, args.ref)
     print(f"{p['title']}\n{'=' * min(len(p['title']), 78)}")
     print(f"slug      : {p['slug']}")
+    print(f"állapot   : {STATE_ICON.get(p['state'], '·')} "
+          f"{L.PROJECT_STATE_LABEL.get(p['state'], p['state'])}"
+          f"   kategória: {p['category']}")
     print(f"típus     : {p['kind']}   nyelv: {p['lang']}")
     print(f"mappa     : {p['root_path'] or '—'}")
     if p["notes"]:
@@ -902,6 +907,57 @@ def cmd_checklist(conn, args):
               f"`sm.py checklist set {p['slug']} ID --done`")
 
 
+STATE_ICON = {"folyamatban": "◐", "hianypotlas": "!", "korrekcio": "✎",
+              "kesz": "✓", "elfogadva": "★", "elutasitva": "✗"}
+
+
+def cmd_state(conn, args):
+    if args.auto:
+        changed = 0
+        for p in conn.execute("SELECT * FROM projects ORDER BY id").fetchall():
+            sub = L.current_submission(conn, p["id"])
+            want, definite = L.suggest_state(conn, p, sub)
+            # Only the default and the heuristic states get overwritten by a
+            # guess; a state the user chose stands unless the record disproves it.
+            settled = p["state"] not in ("folyamatban", "hianypotlas")
+            if settled and not definite and not args.force:
+                continue
+            if want != p["state"]:
+                conn.execute("UPDATE projects SET state = ? WHERE id = ?", (want, p["id"]))
+                L.log_event(conn, p["id"], "state", f"{p['state']} → {want} (automatikus)")
+                print(f"  {p['slug']}: {L.PROJECT_STATE_LABEL[p['state']]} → "
+                      f"{L.PROJECT_STATE_LABEL[want]}")
+                changed += 1
+        conn.commit()
+        print(f"{changed} állapot frissítve.")
+        return
+
+    if not args.ref:
+        counts = conn.execute(
+            "SELECT state, COUNT(*) n FROM projects WHERE archived = 0 GROUP BY state"
+        ).fetchall()
+        by = {r["state"]: r["n"] for r in counts}
+        for s in L.PROJECT_STATES:
+            print(f"  {STATE_ICON[s]} {L.PROJECT_STATE_LABEL[s]:<14} {by.get(s, 0)}")
+        return
+
+    p = L.get_project(conn, args.ref)
+    if not args.value:
+        sub = L.current_submission(conn, p["id"])
+        want, definite = L.suggest_state(conn, p, sub)
+        print(f"[{p['slug']}] {L.PROJECT_STATE_LABEL[p['state']]}"
+              f"  (a nyilvántartás alapján: {L.PROJECT_STATE_LABEL[want]}"
+              f"{', bizonyított' if definite else ', becslés'})")
+        return
+    if args.value not in L.PROJECT_STATES:
+        L.die(f"ismeretlen állapot '{args.value}'; válassz: {', '.join(L.PROJECT_STATES)}")
+    conn.execute("UPDATE projects SET state = ? WHERE id = ?", (args.value, p["id"]))
+    L.log_event(conn, p["id"], "state", f"{p['state']} → {args.value}")
+    conn.commit()
+    print(f"[{p['slug']}] {L.PROJECT_STATE_LABEL[p['state']]} → "
+          f"{L.PROJECT_STATE_LABEL[args.value]}")
+
+
 def cmd_gaps(conn, args):
     projects = ([L.get_project(conn, args.ref)] if args.ref else
                 conn.execute("SELECT * FROM projects WHERE archived = 0 ORDER BY id"
@@ -935,6 +991,16 @@ def cmd_dashboard(conn, args):
     print(f"dashboard: {path}")
     if args.open:
         subprocess.run(["open", path], check=False)
+
+
+def cmd_import_science(conn, args):
+    import import_science as I
+    mapping = {}
+    if args.map:
+        with open(os.path.expanduser(args.map), encoding="utf-8") as fh:
+            mapping = {str(k): v for k, v in json.load(fh).items()}
+    I.run(conn, args.manifest, args.apply, mapping, root=args.root,
+          artifacts_db=args.artifacts)
 
 
 def cmd_serve(conn, args):
@@ -1128,6 +1194,26 @@ def build_parser():
     p = sub.add_parser("gaps", help="hiánylista: mi hiányzik és mi javítja")
     p.add_argument("ref", nargs="?")
     p.set_defaults(fn=cmd_gaps)
+
+    p = sub.add_parser("state", help="munkaállapot: folyamatban / hiánypótlás / "
+                                     "korrekció / kész / elfogadva / elutasítva")
+    p.add_argument("ref", nargs="?")
+    p.add_argument("value", nargs="?", choices=L.PROJECT_STATES)
+    p.add_argument("--auto", action="store_true",
+                   help="a nyilvántartásból következő állapot beállítása mindenhol")
+    p.add_argument("--force", action="store_true",
+                   help="--auto felülírja a kézzel lezárt állapotokat is")
+    p.set_defaults(fn=cmd_state)
+
+    p = sub.add_parser("import-science", help="Claude Science munkaegység-export beolvasása")
+    p.add_argument("manifest", help="a 00_MANIFEST.json útvonala")
+    p.add_argument("--apply", action="store_true")
+    p.add_argument("--map", help="JSON: {\"15\": \"meglévő-slug\"} — csatolás új projekt helyett")
+    p.add_argument("--root", help="az átiratok mappája (alap: a manifest mappája)")
+    p.add_argument("--artifacts", metavar="OPERON_DB",
+                   help="a Claude Science operon-cli.db — ebből jönnek a tényleges "
+                        "artifact-fájlok (docx, ábrák, táblák)")
+    p.set_defaults(fn=cmd_import_science)
 
     p = sub.add_parser("serve", help="élő dashboard, kattintható gombokkal")
     p.add_argument("--port", type=int, default=8787)

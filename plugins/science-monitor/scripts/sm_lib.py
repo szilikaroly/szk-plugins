@@ -20,6 +20,40 @@ ROOT = os.environ.get("SCIENCE_MONITOR_HOME", os.path.join(HOME, ".science-monit
 DB_PATH = os.path.join(ROOT, "monitor.db")
 LETTERS_DIR = os.path.join(ROOT, "letters")
 DASHBOARD_PATH = os.path.join(ROOT, "dashboard.html")
+CONFIG_PATH = os.path.join(ROOT, "config.json")
+
+# Everything machine- or person-specific lives here, not in the code or the
+# command docs, so the plugin itself is shareable.
+CONFIG_DEFAULTS = {
+    "scan_roots": ["~/Documents"],
+    "mail_address": "",
+    "mail_provider": "",        # "outlook" | "gmail" | ""
+    "data_repo": "",            # git working copy holding the shared registry
+    "sync_roles": ["manuscript", "cover_letter", "response", "supplement", "refs"],
+    "machine": "",              # label for files that stay on one machine
+}
+
+
+def load_config():
+    cfg = dict(CONFIG_DEFAULTS)
+    if os.path.exists(CONFIG_PATH):
+        try:
+            with open(CONFIG_PATH, encoding="utf-8") as fh:
+                cfg.update(json.load(fh))
+        except (json.JSONDecodeError, OSError):
+            pass
+    if not cfg.get("machine"):
+        import socket
+        cfg["machine"] = socket.gethostname().split(".")[0]
+    return cfg
+
+
+def save_config(cfg):
+    os.makedirs(ROOT, exist_ok=True)
+    with open(CONFIG_PATH, "w", encoding="utf-8") as fh:
+        json.dump(cfg, fh, ensure_ascii=False, indent=2, sort_keys=True)
+        fh.write("\n")
+    return CONFIG_PATH
 
 # --- vocabulary -------------------------------------------------------------
 
@@ -44,9 +78,51 @@ NEEDS_ACTION = {"major_revision", "minor_revision"}
 # separately from whether the package actually went out.
 COVER_STATES = ["missing", "draft", "ready"]
 
+# Where a *work unit* stands, independently of any journal. A manuscript can be
+# finished (kesz) without being submitted; a research thread can be folyamatban
+# with no submission at all. Submission status answers a different question.
+PROJECT_STATES = [
+    "folyamatban",   # aktív munka
+    "hianypotlas",   # hiányzik valami, mielőtt tovább mehet
+    "korrekcio",     # javítás alatt (bírálat vagy saját átnézés után)
+    "kesz",          # ✓ kész, lezárt munka
+    "elfogadva",     # elfogadva közlésre
+    "elutasitva",    # elutasítva
+]
+
+PROJECT_STATE_LABEL = {
+    "folyamatban": "folyamatban",
+    "hianypotlas": "hiánypótlás",
+    "korrekcio": "korrekció",
+    "kesz": "kész ✓",
+    "elfogadva": "elfogadva",
+    "elutasitva": "elutasítva",
+}
+
+# What kind of work a unit is. Only `kutatas` is held to a submission
+# checklist; the rest are real work with no manuscript to submit.
+CATEGORIES = {
+    "kutatas": "kutatás / kézirat",
+    "tamogato": "támogató kutatás (nem kézirat)",
+    "eszkoz": "eszköz- és specialista-konfiguráció",
+    "pelda": "platform példaprojekt",
+}
+MANUSCRIPT_CATEGORIES = {"kutatas"}
+
+# Which submission status implies which project state, when we can tell.
+STATE_FROM_STATUS = {
+    "accepted": "elfogadva",
+    "rejected": "elutasitva",
+    "withdrawn": "elutasitva",
+    "major_revision": "korrekcio",
+    "minor_revision": "korrekcio",
+    "revision_sent": "folyamatban",
+    "ready": "kesz",
+}
+
 FILE_ROLES = [
     "manuscript", "cover_letter", "response", "supplement",
-    "figure", "table", "refs", "data", "code", "other",
+    "figure", "table", "refs", "data", "code", "session", "other",
 ]
 
 REVIEW_STATES = ["open", "in_progress", "answered"]
@@ -92,6 +168,8 @@ CREATE TABLE IF NOT EXISTS projects (
   lang        TEXT NOT NULL DEFAULT 'en',
   notes       TEXT NOT NULL DEFAULT '',
   archived    INTEGER NOT NULL DEFAULT 0,
+  state       TEXT NOT NULL DEFAULT 'folyamatban',
+  category    TEXT NOT NULL DEFAULT 'kutatas',
   created_at  TEXT NOT NULL
 );
 
@@ -180,6 +258,14 @@ CREATE INDEX IF NOT EXISTS idx_events_project ON events(project_id, at);
 """
 
 
+# Columns added after the first release. Applied on every connect; adding a
+# column that is already there is not an error worth surfacing.
+MIGRATIONS = [
+    ("projects", "state", "TEXT NOT NULL DEFAULT 'folyamatban'"),
+    ("projects", "category", "TEXT NOT NULL DEFAULT 'kutatas'"),
+]
+
+
 def connect():
     os.makedirs(ROOT, exist_ok=True)
     os.makedirs(LETTERS_DIR, exist_ok=True)
@@ -187,6 +273,11 @@ def connect():
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(SCHEMA)
+    for table, column, decl in MIGRATIONS:
+        have = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if column not in have:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+    conn.commit()
     return conn
 
 
@@ -408,20 +499,27 @@ def gaps(conn, project, sub):
     """
     slug = project["slug"]
     out = []
+    # Tooling and demo units are real work, but they have no manuscript, no
+    # cover letter and no journal — holding them to a submission checklist
+    # would fill the list with noise that can never be cleared.
+    manuscript_work = (project["category"] if "category" in project.keys()
+                       else "kutatas") in MANUSCRIPT_CATEGORIES
 
     def add(sev, text, fix=None, ask=None):
         out.append({"severity": sev, "text": text, "fix": fix, "ask": ask})
-
-    ms = files_of(conn, project["id"], "manuscript")
-    if not ms:
-        add("blocker", "Nincs nyilvántartva kézirat-fájl",
-            ask=f"/sm:scan {project['root_path']}" if project["root_path"] else None)
 
     missing = [f["path"] for f in files_of(conn, project["id"])
                if not os.path.exists(f["path"])]
     if missing:
         add("warn", f"{len(missing)} nyilvántartott fájl nincs meg a lemezen",
             fix=f"sm.py show {slug}")
+
+    if not manuscript_work:
+        return out
+
+    if not files_of(conn, project["id"], "manuscript"):
+        add("blocker", "Nincs nyilvántartva kézirat-fájl",
+            ask=f"/sm:scan {project['root_path']}" if project["root_path"] else None)
 
     if sub is None:
         add("warn", "Nincs megnyitott beadás",
@@ -477,6 +575,30 @@ def gaps(conn, project, sub):
             fix=f"sm.py submit {slug} --due YYYY-MM-DD")
 
     return out
+
+
+def suggest_state(conn, project, sub):
+    """-> (state, definite).
+
+    `definite` means the record itself settles it — an editor accepted or
+    rejected it, or a revision was requested. Those override whatever was set
+    by hand, because they are facts. Everything else is a guess and must not
+    clobber a state the user chose.
+    """
+    if sub is not None:
+        mapped = STATE_FROM_STATUS.get(sub["status"])
+        if mapped in ("elfogadva", "elutasitva", "korrekcio"):
+            return mapped, True
+        if mapped == "kesz":
+            # 'ready' only means kész if nothing is actually missing.
+            if any(g["severity"] == "blocker" for g in gaps(conn, project, sub)):
+                return "hianypotlas", False
+            return "kesz", False
+        if mapped or sub["status"] in ("submitted", "under_review"):
+            return "folyamatban", False
+    if any(g["severity"] == "blocker" for g in gaps(conn, project, sub)):
+        return "hianypotlas", False
+    return "folyamatban", False
 
 
 def die(msg, code=2):

@@ -253,6 +253,45 @@ metrics.jsonl                                every run, auditable
   ~1,030-token RESUME. The deterministic path is the reliable one; the model
   path is an upgrade, not a dependency.
 
+## cognify / memify
+
+Cognee splits memory into **add** (ingest), **cognify** (extract structure) and
+**memify** (refine it afterwards). memo-guard already had add and had vectors,
+but its graph was empty in practice because every edge was hand-made. These two
+fill that gap. Cognee itself is not a dependency — it is a pip package with
+database and LLM-provider backends, and this plugin's hooks run on every tool
+call, so stdlib-only is load-bearing. The semantics are reimplemented on the
+tables that already exist.
+
+**`cognify.py`** — classify → extract entities → link facts sharing them.
+Measured on the same six facts: the model path found 12 entity links and 4
+edges; the deterministic fallback found 7 and 2. Worse, and still far better
+than an empty graph. Two bugs the first version had, both fixed and both worth
+knowing if you extend the regex:
+
+- `"PROSPERO"` and `"The PROSPERO ID"` normalised to different entities, so the
+  two facts about the same thing never linked. Leading articles and trailing
+  `ID`/`number`/`form` are now stripped before normalising.
+- Alternation is first-match-wins, so `[A-Z]{2,}` matched `CRD` out of
+  `CRD42024518822` and threw the registration number away. Longest forms first.
+
+**`memify.py`** — prune, reweight, derive. Verified: it identified a fact the
+claim store had refuted, strengthened 6 edges from co-retrieval, and derived a
+transitive `supersedes` (8→1 through 7) plus a contradiction edge.
+
+**Reweighting is on edges, never on facts.** An earlier version scored facts by
+`hits`, so a fact returned once scored higher and was returned again, until one
+fact won every unrelated query. Co-retrieval of a *pair* is different evidence —
+it says two facts answer the same question — and it only affects graph
+expansion, never the ranking that decides what surfaces first. Do not merge the
+two.
+
+```bash
+cognify.py --run [--all] [--no-model]
+memify.py  --run [--hard]        # --hard actually deletes; default reports
+broker.py  --route               # which model each task gets, from measured VRAM
+```
+
 ## The broker
 
 Everything that wants the local model goes through `broker.py`, which owns one

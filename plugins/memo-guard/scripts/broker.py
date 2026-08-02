@@ -172,6 +172,46 @@ def capacity(hw: dict | None = None) -> int:
     return 1            # includes unknown/CPU: assume the tightest case
 
 
+# Task profile -> (preferred, fallback-when-tight). The tight column is not a
+# lesser answer, it is the only answer on a machine that cannot hold the first
+# one: a model that does not fit runs on the CPU at roughly a twentieth of the
+# speed, so "smaller and resident" beats "larger and spilled" every time.
+ROUTES = {
+    "extract":  ("llama3.1:8b",      "llama3.2:3b"),      # cognify entity pull
+    "prose":    ("llama3.1:8b",      "llama3.2:3b"),      # memo generation
+    "code":     ("qwen2.5-coder:7b", "qwen2.5-coder:3b"),
+    "reason":   ("gemma4:12b",       "llama3.1:8b"),      # escalation
+    "embed":    ("nomic-embed-text", "nomic-embed-text"),
+    "embed_hq": ("mxbai-embed-large", "nomic-embed-text"),
+}
+
+
+def route(profile: str, hw: dict | None = None) -> str:
+    """Pick a model for a task, given what this machine can actually hold.
+
+    Adaptive means two things at once: the task decides which family, and the
+    measured hardware decides which size. `route.py` in memo-index asserts a
+    16 GB assumption as a constant; this reads the number instead.
+    """
+    env = os.environ.get(f"MEMO_MODEL_{profile.upper()}") or os.environ.get("MEMO_MODEL")
+    if env:
+        return env
+    pref, tight = ROUTES.get(profile, ROUTES["prose"])
+    hw = hw or probe_hardware()
+    have = {m.split(":")[0] for m in catalog()}
+    vram = hw.get("vram_mb", 0)
+    sizes = catalog()
+    want_mb = sizes.get(pref) or sizes.get(f"{pref}:latest") or 0
+    # Leave headroom for the KV cache; a model that exactly fills VRAM spills
+    # the moment the context grows.
+    if want_mb and vram and want_mb * 1.25 > vram:
+        if tight.split(":")[0] in have:
+            return tight
+    if pref.split(":")[0] in have:
+        return pref
+    return tight if tight.split(":")[0] in have else pref
+
+
 def healthy(timeout: float = 3.0) -> bool:
     """Cheap liveness check. A wedged server answers /api/tags but not /api/embed,
     so probe the path that actually does work."""
@@ -465,6 +505,8 @@ def main() -> int:
     ap.add_argument("--diagnose", action="store_true")
     ap.add_argument("--recover", action="store_true")
     ap.add_argument("--level", type=int, default=1, choices=(1, 2, 3))
+    ap.add_argument("--route", action="store_true",
+                    help="which model each task profile gets on this machine")
     ap.add_argument("--fit", metavar="MODEL",
                     help="would this model fit right now, and what would be evicted")
     ap.add_argument("--name", default="model")
@@ -497,6 +539,29 @@ def main() -> int:
             print(f"  {a}")
         print(f"now     : {r['after']['verdict']}")
         return 0 if r["after"]["verdict"] == "OK" else 1
+
+    if args.route:
+        hw = probe_hardware()
+        sizes = catalog()
+        rows = []
+        for prof in ROUTES:
+            m = route(prof, hw)
+            mb = sizes.get(m) or sizes.get(f"{m}:latest") or 0
+            fits = (not mb) or (not hw["vram_mb"]) or mb * 1.25 <= hw["vram_mb"]
+            rows.append({"profile": prof, "model": m, "size_mb": mb,
+                         "pulled": bool(mb), "fits": fits})
+        if args.json:
+            print(json.dumps({"vram_mb": hw["vram_mb"], "routes": rows}, indent=2))
+            return 0
+        print(f"vram {hw['vram_mb']:,} MB — 25% headroom reserved for KV cache\n")
+        for r in rows:
+            note = ("" if r["fits"] else "   <-- WILL NOT FIT; pull a smaller "
+                                         "model for this profile")
+            if not r["pulled"]:
+                note = "   <-- NOT PULLED"
+            print(f"  {r['profile']:<10} {r['model']:<22} "
+                  f"{r['size_mb'] or '?':>6} MB{note}")
+        return 0
 
     if args.fit:
         hw = probe_hardware()
