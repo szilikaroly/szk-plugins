@@ -62,6 +62,7 @@ STATUSES = [
     "drafting",         # manuscript still being written
     "ready",            # complete, not sent
     "submitted",        # sent, no editor action yet
+    "desk_review",      # with the editor, not yet sent out
     "under_review",     # with reviewers
     "desk_rejection",   # refused by the editor without going to review
     "major_revision",
@@ -126,6 +127,25 @@ STATE_FROM_STATUS = {
     "revision_sent": "folyamatban",
     "ready": "kesz",
 }
+
+# The submission process, once "beadva" starts it. Each stage owns the statuses
+# that belong to it, so the track can show where a manuscript actually is.
+STAGES = [
+    ("beadva",   "Beadva",      ["submitted"]),
+    ("desk",     "Desk review", ["desk_review"]),
+    ("peer",     "Peer review", ["under_review"]),
+    ("revizio",  "Revízió",     ["major_revision", "minor_revision", "revision_sent"]),
+    ("dontes",   "Döntés",      ["accepted", "rejected", "desk_rejection", "withdrawn"]),
+]
+STAGE_OF = {st: key for key, _, sts in STAGES for st in sts}
+STAGE_ORDER = [key for key, _, _ in STAGES]
+
+
+def stage_index(status):
+    """How far along the submission process a status sits. -1 = not started."""
+    key = STAGE_OF.get(status)
+    return STAGE_ORDER.index(key) if key else -1
+
 
 FILE_ROLES = [
     "manuscript", "cover_letter", "response", "supplement",
@@ -396,6 +416,7 @@ STATUS_LABEL = {
     "drafting": "írás alatt",
     "ready": "kész, nincs beküldve",
     "submitted": "beküldve",
+    "desk_review": "desk review (szerkesztőnél)",
     "under_review": "peer-review alatt",
     "desk_rejection": "desk rejection",
     "major_revision": "major revision",
@@ -604,7 +625,7 @@ def suggest_state(conn, project, sub):
             if any(g["severity"] == "blocker" for g in gaps(conn, project, sub)):
                 return "hianypotlas", False
             return "kesz", False
-        if mapped or sub["status"] in ("submitted", "under_review"):
+        if mapped or sub["status"] in ("submitted", "desk_review", "under_review"):
             return "folyamatban", False
     if any(g["severity"] == "blocker" for g in gaps(conn, project, sub)):
         return "hianypotlas", False
