@@ -77,6 +77,15 @@ def export(db, out: Path) -> dict:
     (out / "facts").mkdir(exist_ok=True)
     written = {"projects": 0, "facts": 0, "edges": 0, "claims": 0, "blocks": 0}
 
+    # The real cwd travels with the project. It used to be reconstructed on
+    # import by turning the slug's hyphens back into slashes, which is not
+    # reversible: /Users/szili/Documents/my-project came back as
+    # .../my/project. The slug still matched, so facts landed in the right
+    # project — but every synced machine then recorded a path that does not
+    # exist, and anything resolving an anchor against it would follow fiction.
+    cwd_of: dict[str, str] = {
+        slug: cwd for slug, cwd in db.execute("SELECT slug,cwd FROM project")}
+
     by_project: dict[str, list] = {}
     fp_of: dict[int, str] = {}
     for (fid, slug, text, kind, anchor, source, created, util) in db.execute(
@@ -92,7 +101,8 @@ def export(db, out: Path) -> dict:
     for slug, items in by_project.items():
         items.sort(key=lambda d: d["fp"])          # deterministic: diffs stay minimal
         (out / "facts" / f"{slug}.json").write_text(
-            json.dumps({"project": slug, "facts": items}, indent=1,
+            json.dumps({"project": slug, "cwd": cwd_of.get(slug, ""),
+                        "facts": items}, indent=1,
                        sort_keys=True, ensure_ascii=False) + "\n")
         written["projects"] += 1
         written["facts"] += len(items)
@@ -169,6 +179,13 @@ def import_(db, src: Path) -> dict:
     # Local tombstones count too. push() runs pull -> import -> export, so on the
     # very first sync after a deletion the remote has no tombstone file yet and
     # the import cheerfully restored exactly what was just deleted.
+    # Settle self-contradicting tombstones before acting on any of them. A store
+    # written by v0.9.0 tombstoned every fact at creation, and importing that
+    # unrepaired would delete the receiving machine's copy of everything.
+    try:
+        mem.repair_tombstones(db)
+    except Exception:
+        pass
     dead: set[str] = {r[0] for r in db.execute("SELECT fp FROM tombstone")}
     tf = src / "tombstones.json"
     if tf.exists():
@@ -197,10 +214,12 @@ def import_(db, src: Path) -> dict:
         except Exception:
             continue
         slug = data.get("project") or f.stem
+        # Use the exported cwd. The fallback only runs for files written by an
+        # older version, and is marked so a wrong path is visibly a guess.
+        cwd = data.get("cwd") or f"/{slug.replace('-', '/')}"
         for item in data.get("facts", []):
             if item["fp"] in local_fp or item["fp"] in dead:
                 continue
-            cwd = f"/{slug.replace('-', '/')}"        # slug is path-derived
             try:
                 r = mem.promote(db, item["text"], cwd, item.get("kind", "finding"),
                                 source=item.get("source", ""),

@@ -188,24 +188,65 @@ def goal_id(db: sqlite3.Connection, text: str | None) -> int | None:
 
 
 def fts_delete(db: sqlite3.Connection, fid: int) -> None:
-    """Remove a row from the FTS index, and record that it was removed.
+    """Remove a row from the search index. Mechanical, and says nothing.
 
-    The tombstone is what makes the deletion survive a sync. Without it the
-    next pull from any machine still holding the fact simply puts it back.
+    This must NOT record a tombstone. It briefly did, and the consequence was
+    severe: promote() calls it as part of delete-then-reindex, so every fact was
+    tombstoned by its own creation. Syncing then deleted the entire store on the
+    receiving machine and skipped every incoming fact as already-deleted.
+    Re-indexing is not a deletion; only forget() is.
     """
-    row = db.execute("SELECT text FROM fact WHERE id=?", (fid,)).fetchone()
-    if row:
-        try:
-            import sync
-            db.execute("INSERT INTO tombstone (fp,deleted_at,machine)"
-                       " VALUES (?,?,?) ON CONFLICT(fp) DO NOTHING",
-                       (sync.fp(row[0]), time.time(), os.uname().nodename))
-        except Exception:
-            pass
     try:
         db.execute("DELETE FROM fact_fts WHERE rowid=?", (fid,))
     except sqlite3.OperationalError:
         pass
+
+
+def repair_tombstones(db: sqlite3.Connection) -> int:
+    """Drop tombstones contradicted by a newer live fact.
+
+    A tombstone and a live fact with the same fingerprint cannot both be true.
+    v0.9.0 produced that state on every promotion — fts_delete recorded a
+    tombstone and promote calls it while re-indexing — so a sync would have
+    wiped the receiving machine. It also arises legitimately when a fact is
+    deleted and later re-promoted. Both are settled the same way: whichever
+    happened last wins, which is the only reading that does not lose work.
+    """
+    import sync
+    killed = 0
+    ts = {r[0]: (r[1] or 0) for r in db.execute("SELECT fp,deleted_at FROM tombstone")}
+    for fid, text, created in db.execute("SELECT id,text,created_at FROM fact"):
+        f = sync.fp(text)
+        if f in ts and (created or 0) >= ts[f]:
+            db.execute("DELETE FROM tombstone WHERE fp=?", (f,))
+            killed += 1
+    db.commit()
+    return killed
+
+
+def forget(db: sqlite3.Connection, fid: int) -> bool:
+    """Delete a fact and record that the deletion happened.
+
+    The tombstone is what makes a deletion survive a sync: without it, the next
+    pull from any machine that still holds the fact simply puts it back. Only
+    deliberate removal calls this — `--forget` and `memify --hard`.
+    """
+    row = db.execute("SELECT text FROM fact WHERE id=?", (fid,)).fetchone()
+    if not row:
+        return False
+    try:
+        import sync
+        db.execute("INSERT INTO tombstone (fp,deleted_at,machine)"
+                   " VALUES (?,?,?) ON CONFLICT(fp) DO NOTHING",
+                   (sync.fp(row[0]), time.time(), os.uname().nodename))
+    except Exception:
+        pass
+    fts_delete(db, fid)
+    db.execute("DELETE FROM fact_vec WHERE fact_id=?", (fid,))
+    db.execute("DELETE FROM edge WHERE src=? OR dst=?", (fid, fid))
+    db.execute("DELETE FROM fact WHERE id=?", (fid,))
+    db.commit()
+    return True
 
 
 def reindex_fts(db: sqlite3.Connection) -> int:
@@ -509,6 +550,8 @@ def main() -> int:
     ap.add_argument("--disable", metavar="SLUG")
     ap.add_argument("--enable", metavar="SLUG")
     ap.add_argument("--forget", metavar="ID")
+    ap.add_argument("--repair", action="store_true",
+                    help="drop tombstones contradicted by a newer live fact")
     ap.add_argument("--reindex", action="store_true",
                     help="rebuild the search index from the facts")
     ap.add_argument("--link", nargs=2, metavar=("SRC", "DST"))
@@ -529,6 +572,10 @@ def main() -> int:
             return 2
         print(json.dumps(r) if args.json else
               f"promoted [{r['id']}] {r['kind']} in {r['project']}")
+        return 0
+
+    if args.repair:
+        print(f"removed {repair_tombstones(db)} contradicted tombstone(s)")
         return 0
 
     if args.reindex:
@@ -572,11 +619,9 @@ def main() -> int:
         return 0 if cur.rowcount else 1
 
     if args.forget:
-        fts_delete(db, int(args.forget))
-        cur = db.execute("DELETE FROM fact WHERE id=?", (args.forget,))
-        db.commit()
-        print(f"forgotten: {cur.rowcount}")
-        return 0 if cur.rowcount else 1
+        ok = forget(db, int(args.forget))
+        print(f"forgotten: {1 if ok else 0}")
+        return 0 if ok else 1
 
     if args.projects:
         rows = list(db.execute(
