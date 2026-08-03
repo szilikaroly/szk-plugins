@@ -133,6 +133,22 @@ footer { margin-top:40px; color:var(--muted); font-size:.75rem; line-height:1.7;
   border-radius:999px; font-size:.8rem; transition:transform .18s ease;
   pointer-events:none; z-index:9; }
 #toast.show { transform:translateX(-50%) translateY(0); }
+button.act.ghost { border-style:dashed; color:var(--muted); }
+button.act.ghost:hover { color:var(--bad); border-color:var(--bad); }
+.nextsteps { border:1px solid var(--bad); border-radius:10px; padding:11px 13px;
+  margin:4px 0 12px; }
+.nextsteps b { font-size:.75rem; text-transform:uppercase; letter-spacing:.07em;
+  color:var(--bad); }
+.nextsteps .meta { margin:4px 0 9px; }
+.addbox { background:var(--panel); border:1px dashed var(--btnline);
+  border-radius:12px; padding:14px 16px; margin-bottom:22px; }
+.addbox form { display:flex; flex-wrap:wrap; gap:8px; align-items:center;
+  margin-top:10px; }
+.addbox input, .addbox select { font:inherit; font-size:.82rem; padding:5px 9px;
+  border-radius:8px; border:1px solid var(--btnline); background:var(--bg);
+  color:var(--ink); }
+.addbox input[name=title] { flex:1; min-width:260px; }
+.archived a { color:var(--muted); }
 """
 
 JS = """
@@ -178,6 +194,16 @@ document.addEventListener('click', async (e) => {
   }
   if (b.dataset.cmd) copy(b.dataset.cmd);
 });
+
+window.smAdd = async function (ev) {
+  ev.preventDefault();
+  const f = ev.target, body = {};
+  for (const el of f.elements) if (el.name) body[el.name] = el.value.trim();
+  if (!body.title) return false;
+  const res = await api('/api/project/new', body);
+  if (res && res.ok) location.reload();
+  return false;
+};
 
 document.addEventListener('change', async (e) => {
   const cb = e.target;
@@ -233,6 +259,48 @@ def due_chip(date_str):
     return chip(f"{d} nap")
 
 
+def add_box(live):
+    """Adding a manuscript is a first-class action, not a trip to the terminal."""
+    kinds = ["article", "review", "systematic-review", "hypothesis", "position",
+             "protocol", "thesis"]
+    if not live:
+        return ('<div class="addbox"><b>Új kézirat</b>'
+                '<p class="meta">Statikus módban a gomb a parancsot másolja.</p>'
+                + button('sm.py add --title "..." --path DIR',
+                         cmd='sm.py add --title "..." --kind article --path DIR',
+                         cls="primary") + "</div>")
+    options = "".join(f'<option value="{k}">{k}</option>' for k in kinds)
+    cats = "".join(f'<option value="{k}">{esc(v)}</option>'
+                   for k, v in L.CATEGORIES.items())
+    return (
+        '<div class="addbox"><b>Új kézirat</b>'
+        '<form id="addform" onsubmit="return smAdd(event)">'
+        '<input name="title" placeholder="A kézirat címe" required>'
+        f'<select name="kind">{options}</select>'
+        f'<select name="category">{cats}</select>'
+        '<input name="path" placeholder="mappa (nem kötelező)" size="22">'
+        '<button class="act primary" type="submit">Hozzáadás</button>'
+        "</form></div>")
+
+
+def archived_section(conn, live):
+    rows = conn.execute(
+        "SELECT * FROM projects WHERE archived = 1 ORDER BY slug").fetchall()
+    if not rows:
+        return ""
+    items = []
+    for p in rows:
+        items.append(
+            f'<li><span class="txt">{esc(p["title"][:80])}'
+            f'<code>{esc(p["slug"])}</code></span>'
+            + button("Visszaállítás", cmd=f"sm.py set {p['slug']} --unarchive",
+                     api={"path": "/api/project",
+                          "body": {"id": p["id"], "field": "archived", "value": 0}})
+            + "</li>")
+    return (f'<details class="archived"><summary>Archivált ({len(rows)})</summary>'
+            f'<ul class="gaps">{"".join(items)}</ul></details>')
+
+
 def state_controls(p):
     """The work state as six one-click buttons; the current one is marked."""
     return "".join(
@@ -242,6 +310,61 @@ def state_controls(p):
                     "body": {"id": p["id"], "field": "state", "value": st}},
                cls="done" if p["state"] == st else "")
         for st in L.PROJECT_STATES)
+
+
+# The editor's verdict, as one click each. These are the transitions that
+# actually happen to a submitted manuscript, in the order they happen.
+VERDICT_BUTTONS = [
+    ("submitted", "Beadva"),
+    ("under_review", "Peer-review"),
+    ("desk_rejection", "Desk rejection"),
+    ("major_revision", "Major revision"),
+    ("minor_revision", "Minor revision"),
+    ("accepted", "Elfogadva"),
+    ("rejected", "Elutasítva"),
+]
+
+
+def verdict_controls(p, sub):
+    """What the journal said — one button per verdict, current one marked."""
+    return "".join(
+        button(label,
+               cmd=f"sm.py submit {p['slug']} --status {status}",
+               api={"path": "/api/submission",
+                    "body": {"id": sub["id"], "field": "status", "value": status}},
+               cls="done" if sub["status"] == status else "")
+        for status, label in VERDICT_BUTTONS)
+
+
+def next_steps(p, sub):
+    """After a rejection the question is only ever: rewrite, correct, or move.
+
+    A desk rejection carries no reviewer reasoning, so the honest default is a
+    different journal; a post-review rejection has something to work with.
+    """
+    if sub is None or sub["status"] not in L.REJECTED:
+        return ""
+    desk = sub["status"] == "desk_rejection"
+    why = ("Desk rejection — a szerkesztő nem küldte bírálatra, tehát a tudományról "
+           "nem mond semmit; rendszerint scope vagy formátum. Alapértelmezésben "
+           "célújság-váltás."
+           if desk else
+           "Bírálat utáni elutasítás — van bírálói indoklás, amiből az újraírás "
+           "dolgozhat.")
+    return (
+        '<div class="nextsteps"><b>Tovább innen</b>'
+        f'<p class="meta">{esc(why)}</p><div class="chips">'
+        + button("Célújság választás", cmd=f"/sm:journal {p['slug']}",
+                 cls="primary" if desk else "")
+        + button("Újraírás", cmd=f"/sm:context {p['slug']}",
+                 cls="" if desk else "primary")
+        + button("Korrekció",
+                 cmd=f"sm.py state {p['slug']} korrekcio",
+                 api={"path": "/api/project",
+                      "body": {"id": p["id"], "field": "state", "value": "korrekcio"}})
+        + button("Új beadási kör",
+                 cmd=f'sm.py submit {p["slug"]} --journal "..." --new')
+        + "</div></div>")
 
 
 COVER_NEXT = {"missing": "draft", "draft": "ready", "ready": "missing"}
@@ -337,7 +460,7 @@ def checklist_html(conn, p, sub, live):
                             cls="na")
         items.append(f'<li class="{cls}">{box}<span>{esc(r["label"])}</span>{na_btn}</li>')
 
-    return (f'<details{" open" if done < total else ""}>'
+    return (f'<details>'
             f'<summary>Beadási checklist — {bar_html(done, total, meter)}</summary>'
             f'<ul class="check">{"".join(items)}</ul></details>')
 
@@ -422,11 +545,19 @@ def build(conn, api_token=None):
             + (f'{esc(sub["journal"])} (beadás #{sub["seq"]})' if sub else "nincs beadás")
             + (f' · ms {esc(sub["journal_ms_id"])}' if sub and sub["journal_ms_id"] else "")
             + "</div>"
-            f'<div class="chips">{state_controls(p)}</div>'
-            f'<div class="chips">{submission_controls(p, sub, live)}'
+            f'<div class="chips">{state_controls(p)}'
+            + button("Archiválás", cmd=f"sm.py set {p['slug']} --archive",
+                     api={"path": "/api/project",
+                          "body": {"id": p["id"], "field": "archived", "value": 1}},
+                     cls="ghost")
+            + "</div>"
+            + (f'<div class="chips">{verdict_controls(p, sub)}</div>' if sub else "")
+            + f'<div class="chips">{submission_controls(p, sub, live)}'
             + button("Kontextus behívása", cmd=f"/sm:context {p['slug']}")
             + button("Bírálat felvétele", cmd=f"/sm:review {p['slug']}")
+            + button("Célújság", cmd=f"/sm:journal {p['slug']}")
             + "</div>"
+            + next_steps(p, sub)
             + gaps_html(items)
             + checklist_html(conn, p, sub, live)
             + reviews_html(conn, p, sub, live)
@@ -461,6 +592,7 @@ def build(conn, api_token=None):
     <div class="count"><b>{len(L.open_reviews(conn))}</b><span>nyitott bírálat</span></div>
     <div class="count"><b>{n_blockers}</b><span>blokkoló hiány</span></div>
   </div>
+  {add_box(live)}
   <h2 class="sec">Folyamat</h2>
   <div class="lanes">{lanes_html}</div>
   <h2 class="sec">Kéziratok — hiánylista, checklist, bírálati pontok</h2>
@@ -471,6 +603,7 @@ def build(conn, api_token=None):
     <th>Beküldve</th><th>Checklist</th><th>Blokkoló</th></tr></thead>
     <tbody>{"".join(rows) or '<tr><td colspan="7">—</td></tr>'}</tbody>
   </table></div>
+  {archived_section(conn, live)}
   <footer>
     Élő mód (a gombok és a pipák közvetlenül írnak): <code>sm.py serve</code><br>
     A fájl lokális, kiadatlan kéziratadatot tartalmaz — ne publikáld.

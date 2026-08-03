@@ -26,6 +26,7 @@ Az adat lokális SQLite: `~/.science-monitor/monitor.db`. Semmi nem megy sehova.
 | `/sm:respond REVIEW_ID` | Response-to-reviewers összeállítása |
 | `/sm:inbox` | Outlook/O365 (és Gmail) átnézése szerkesztői döntésekért (csak olvas) |
 | `/sm:dashboard` | Dashboard — hiánylisták, checklistek, kattintható gombok |
+| `/sm:journal SLUG` | Célújság választás — folyóirat-illesztés bizonyítékból |
 | `/sm:repo pull\|push` | Szinkron a szerzőtársakkal egy közös git repón át |
 
 ### A dashboard két módja
@@ -38,9 +39,18 @@ sm.py dashboard    # statikus fájl: a gombok a parancsot másolják vágólapra
 Az élő mód `127.0.0.1:8787`-en figyel, és minden POST-ot egy futásonként
 generált tokenhez köt, amit csak a kiszolgált lap ismer. Kívülről nem elérhető.
 
-Amit egy kattintás elintéz élő módban: checklist-tétel pipálása vagy `n/a`-ra
-tétele, bírálói pont lezárása, cover letter állapotának léptetése
-(nincs → piszkozat → kész), beküldve-jelölés (dátummal és státusszal együtt).
+Amit egy kattintás elintéz élő módban: **új kézirat felvétele** (űrlap a lap
+tetején), **archiválás** és visszaállítás, a szerkesztői **verdikt** rögzítése
+(beadva · peer-review · desk rejection · major/minor revision · elfogadva ·
+elutasítva — dátummal együtt), checklist-tétel pipálása vagy `n/a`-ra tétele,
+bírálói pont lezárása, cover letter állapotának léptetése, beküldve-jelölés.
+
+**Elutasítás után** a kártyán megjelenik egy „Tovább innen" doboz a három valódi
+lehetőséggel: **célújság választás** (`/sm:journal`), **újraírás**, **korrekció**
+— plusz új beadási kör nyitása. Desk rejectionnél a célújság-váltás az
+alapértelmezés, bírálat utáni elutasításnál az újraírás.
+
+A checklistek alapból **összecsukva** vannak, nyíló szakaszként.
 Amit nem — kontextus behívása, bírálat pontokra bontása, válaszlevél — az a
 Claude Code dolga, azokra a gomb a `/sm:` parancsot másolja.
 
@@ -72,9 +82,13 @@ folyóirat = új `seq`, a régi megmarad a történetben). Itt van külön mező
 - `cover_letter_state` — `missing` / `draft` / `ready`
 - `submitted` + `submitted_at` — **külön a cover lettertől**: attól, hogy a
   cover letter kész, még nincs beküldve semmi. Ez a kettő soha nem egy mező.
-- `status` — `drafting`, `ready`, `submitted`, `under_review`,
-  `major_revision`, `minor_revision`, `revision_sent`, `accepted`, `rejected`,
-  `withdrawn`
+- `status` — `drafting`, `ready`, `submitted` (beadva), `under_review`
+  (peer-review), `desk_rejection`, `major_revision`, `minor_revision`,
+  `revision_sent`, `accepted`, `rejected`, `withdrawn`
+
+  A **desk rejection külön státusz** a bírálat utáni elutasítástól: a szerkesztő
+  ki sem küldte, tehát a tudományról nem mond semmit — rendszerint scope vagy
+  formátum. A dashboard ennek megfelelően más továbblépést ajánl.
 
 **files** — a projekt fájljai szerep szerint (`manuscript`, `cover_letter`,
 `response`, `supplement`, `figure`, `table`, `refs`, `data`, `code`, `other`).

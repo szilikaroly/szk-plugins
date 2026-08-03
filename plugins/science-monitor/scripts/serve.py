@@ -148,6 +148,16 @@ class Handler(BaseHTTPRequestHandler):
             if not sub:
                 raise ValueError("nincs ilyen beadás")
             conn.execute(f"UPDATE submissions SET {field} = ? WHERE id = ?", (value, sid))
+            # An editorial verdict is a dated fact, not just a status word.
+            if field == "status" and value in (
+                    L.REJECTED | L.NEEDS_ACTION | {"accepted"}):
+                conn.execute(
+                    "UPDATE submissions SET decision = ?, decision_at = ? WHERE id = ?",
+                    (value, sub["decision_at"] or L.today(), sid))
+                if not sub["submitted"]:
+                    conn.execute("UPDATE submissions SET submitted = 1, "
+                                 "submitted_at = COALESCE(NULLIF(submitted_at, ''), ?) "
+                                 "WHERE id = ?", (L.today(), sid))
             # Marking it sent without a date would leave the record half-built.
             if field == "submitted" and value == 1:
                 if not sub["submitted_at"]:
@@ -161,19 +171,48 @@ class Handler(BaseHTTPRequestHandler):
             conn.commit()
             return {"ok": True, "reload": True}
 
+        if path == "/api/project/new":
+            title = str(data.get("title", "")).strip()
+            if not title:
+                raise ValueError("cím nélkül nem lehet kéziratot felvenni")
+            kind = data.get("kind") or "article"
+            category = data.get("category") or "kutatas"
+            if category not in L.CATEGORIES:
+                raise ValueError(f"ismeretlen kategória: {category}")
+            root = os.path.abspath(os.path.expanduser(data["path"])) if data.get("path") else ""
+            slug = base = L.slugify(title)
+            n = 2
+            while conn.execute("SELECT 1 FROM projects WHERE slug = ?", (slug,)).fetchone():
+                slug = f"{base}-{n}"
+                n += 1
+            conn.execute(
+                "INSERT INTO projects (slug, title, kind, root_path, category, created_at) "
+                "VALUES (?,?,?,?,?,?)", (slug, title, kind, root, category, L.now()))
+            pid = conn.execute("SELECT id FROM projects WHERE slug = ?",
+                               (slug,)).fetchone()["id"]
+            L.log_event(conn, pid, "project_added", f"{title} (dashboard)")
+            conn.commit()
+            return {"ok": True, "reload": True, "slug": slug}
+
         if path == "/api/project":
             pid = int(data["id"])
             field = data.get("field")
-            if field != "state":
-                raise ValueError(f"nem módosítható mező: {field}")
             value = data.get("value")
-            if value not in L.PROJECT_STATES:
-                raise ValueError(f"ismeretlen állapot: {value}")
+            if field == "state":
+                if value not in L.PROJECT_STATES:
+                    raise ValueError(f"ismeretlen állapot: {value}")
+            elif field == "archived":
+                value = 1 if value in (1, True, "1", "true") else 0
+            elif field == "category":
+                if value not in L.CATEGORIES:
+                    raise ValueError(f"ismeretlen kategória: {value}")
+            else:
+                raise ValueError(f"nem módosítható mező: {field}")
             row = conn.execute("SELECT * FROM projects WHERE id = ?", (pid,)).fetchone()
             if not row:
                 raise ValueError("nincs ilyen kézirat")
-            conn.execute("UPDATE projects SET state = ? WHERE id = ?", (value, pid))
-            L.log_event(conn, pid, "state", f"{row['state']} → {value} (dashboard)")
+            conn.execute(f"UPDATE projects SET {field} = ? WHERE id = ?", (value, pid))
+            L.log_event(conn, pid, field, f"{row[field]} → {value} (dashboard)")
             conn.commit()
             return {"ok": True, "reload": True}
 

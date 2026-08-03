@@ -63,15 +63,21 @@ STATUSES = [
     "ready",            # complete, not sent
     "submitted",        # sent, no editor action yet
     "under_review",     # with reviewers
+    "desk_rejection",   # refused by the editor without going to review
     "major_revision",
     "minor_revision",
     "revision_sent",    # revised version returned to the journal
     "accepted",
-    "rejected",
+    "rejected",         # refused after peer review
     "withdrawn",
 ]
 
-TERMINAL = {"accepted", "rejected", "withdrawn"}
+TERMINAL = {"accepted", "rejected", "desk_rejection", "withdrawn"}
+
+# A rejection is not one thing. A desk rejection says nothing about the science
+# — usually scope or format — so the next step is a different journal. A
+# post-review rejection carries reviewer reasoning that a rewrite should use.
+REJECTED = {"rejected", "desk_rejection"}
 NEEDS_ACTION = {"major_revision", "minor_revision"}
 
 # The extra state the user asked for: the cover letter is tracked on its own,
@@ -113,6 +119,7 @@ MANUSCRIPT_CATEGORIES = {"kutatas"}
 STATE_FROM_STATUS = {
     "accepted": "elfogadva",
     "rejected": "elutasitva",
+    "desk_rejection": "elutasitva",
     "withdrawn": "elutasitva",
     "major_revision": "korrekcio",
     "minor_revision": "korrekcio",
@@ -389,7 +396,8 @@ STATUS_LABEL = {
     "drafting": "írás alatt",
     "ready": "kész, nincs beküldve",
     "submitted": "beküldve",
-    "under_review": "bírálat alatt",
+    "under_review": "peer-review alatt",
+    "desk_rejection": "desk rejection",
     "major_revision": "major revision",
     "minor_revision": "minor revision",
     "revision_sent": "javítás visszaküldve",
@@ -556,9 +564,11 @@ def gaps(conn, project, sub):
     if sub["status"] in NEEDS_ACTION and not revs:
         add("blocker", "Revíziót kértek, de nincs betöltve bírálói levél",
             ask=f"/sm:review {slug}")
-    if sub["status"] in TERMINAL and sub["status"] == "rejected":
-        add("warn", "Elutasítva — nincs kijelölve új folyóirat",
-            fix=f'sm.py submit {slug} --journal "..." --new')
+    if sub["status"] in REJECTED:
+        which = ("Desk rejection" if sub["status"] == "desk_rejection"
+                 else "Bírálat utáni elutasítás")
+        add("warn", f"{which} — nincs kijelölve új folyóirat",
+            ask=f"/sm:journal {slug}")
     for rv in revs:
         rdone, rtotal = point_progress(conn, rv["id"])
         if rtotal == 0:
