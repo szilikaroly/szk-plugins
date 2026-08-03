@@ -45,6 +45,17 @@ tetején), **archiválás** és visszaállítás, a szerkesztői **verdikt** rö
 elutasítva — dátummal együtt), checklist-tétel pipálása vagy `n/a`-ra tétele,
 bírálói pont lezárása, cover letter állapotának léptetése, beküldve-jelölés.
 
+**A „Beadva" elindítja a folyamatot.** Amíg nincs beküldve, csak egy indítógomb
+látszik. Utána a kártyán a beadási sáv:
+
+> Beadva → Desk review → Peer review → Revízió → Döntés
+
+Minden állomás kattintható, az aktuális kiemelve, a mögöttesek zölddel. A
+folyamaton belüli bármely státusz beállítása magától jelzi, hogy a csomag
+kiment — a sáv és a `submitted` mező nem mondhat ellent egymásnak. A Döntés
+állomás nem kattintható egyetlen értékre, mert három valódi kimenete van; azok
+a verdikt-soron maradnak.
+
 **Elutasítás után** a kártyán megjelenik egy „Tovább innen" doboz a három valódi
 lehetőséggel: **célújság választás** (`/sm:journal`), **újraírás**, **korrekció**
 — plusz új beadási kör nyitása. Desk rejectionnél a célújság-váltás az
