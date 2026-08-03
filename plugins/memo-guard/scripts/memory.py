@@ -81,7 +81,12 @@ CREATE TABLE IF NOT EXISTS fact (
 );
 CREATE INDEX IF NOT EXISTS fact_project ON fact(project_id);
 CREATE INDEX IF NOT EXISTS fact_kind ON fact(kind);
-CREATE VIRTUAL TABLE IF NOT EXISTS fact_fts USING fts5(text, kind, content='');
+-- NOT contentless. A contentless fts5 table cannot be DELETEd from by rowid;
+-- the supported 'delete' command requires handing back exactly the values that
+-- were indexed. cognify rewrites fact.kind after promotion, so those values had
+-- already drifted by the time anything tried to delete — which corrupted the
+-- index. Storing the text costs a few bytes per fact and makes DELETE correct.
+CREATE VIRTUAL TABLE IF NOT EXISTS fact_fts USING fts5(text, kind);
 CREATE TABLE IF NOT EXISTS edge (
   src        INTEGER NOT NULL,
   dst        INTEGER NOT NULL,
@@ -98,6 +103,15 @@ CREATE TABLE IF NOT EXISTS fact_vec (
   dim     INTEGER NOT NULL,
   data    BLOB NOT NULL,
   PRIMARY KEY (fact_id, model)
+);
+-- A deletion has to travel, or it is not a deletion. Union merge alone means
+-- every machine that still holds a fact resurrects it on the next sync, so
+-- --forget and `memify --hard` were both silently undone. The fingerprint is
+-- kept, never the text: a tombstone should not re-leak what was removed.
+CREATE TABLE IF NOT EXISTS tombstone (
+  fp         TEXT PRIMARY KEY,
+  deleted_at REAL,
+  machine    TEXT DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);
 """
@@ -173,6 +187,65 @@ def goal_id(db: sqlite3.Connection, text: str | None) -> int | None:
     return db.execute("SELECT id FROM goal WHERE norm=?", (n,)).fetchone()[0]
 
 
+def fts_delete(db: sqlite3.Connection, fid: int) -> None:
+    """Remove a row from the FTS index, and record that it was removed.
+
+    The tombstone is what makes the deletion survive a sync. Without it the
+    next pull from any machine still holding the fact simply puts it back.
+    """
+    row = db.execute("SELECT text FROM fact WHERE id=?", (fid,)).fetchone()
+    if row:
+        try:
+            import sync
+            db.execute("INSERT INTO tombstone (fp,deleted_at,machine)"
+                       " VALUES (?,?,?) ON CONFLICT(fp) DO NOTHING",
+                       (sync.fp(row[0]), time.time(), os.uname().nodename))
+        except Exception:
+            pass
+    try:
+        db.execute("DELETE FROM fact_fts WHERE rowid=?", (fid,))
+    except sqlite3.OperationalError:
+        pass
+
+
+def reindex_fts(db: sqlite3.Connection) -> int:
+    """Rebuild the search index from `fact`, which is the source of truth.
+
+    Also migrates a database created with the old contentless table: that one
+    cannot be repaired in place, so it is dropped and rebuilt. No fact is lost —
+    the index was only ever derived.
+    """
+    # Read the table's definition, not its behaviour. 'integrity-check' succeeds
+    # on a contentless table too, so probing with it reported "not contentless"
+    # every time and the migration never ran.
+    row = db.execute("SELECT sql FROM sqlite_master WHERE name='fact_fts'").fetchone()
+    contentless = bool(row) and "content=''" in (row[0] or "").replace(" ", "")
+    cols = [r[1] for r in db.execute("PRAGMA table_info(fact_fts)")]
+    if contentless or not cols:
+        db.execute("DROP TABLE IF EXISTS fact_fts")
+        db.execute("CREATE VIRTUAL TABLE fact_fts USING fts5(text, kind)")
+    else:
+        db.execute("DELETE FROM fact_fts")
+    n = 0
+    for fid, text, kind in db.execute("SELECT id,text,kind FROM fact"):
+        db.execute("INSERT INTO fact_fts (rowid,text,kind) VALUES (?,?,?)",
+                   (fid, text, kind))
+        n += 1
+    db.commit()
+    return n
+
+
+def _request_sync() -> None:
+    """Ask for a coalesced background push. Never blocks, never raises."""
+    try:
+        if not mg.load_config().get("sync"):
+            return
+        import sync
+        sync.request()
+    except Exception:
+        pass
+
+
 def _cosine_all(qv: list[float], vecs: list, E) -> dict[int, float]:
     """Cosine of the query against every candidate vector.
 
@@ -227,9 +300,10 @@ def promote(db: sqlite3.Connection, text: str, cwd: str, kind: str = "finding",
     fid = cur.lastrowid or db.execute(
         "SELECT id FROM fact WHERE project_id=? AND norm=?", (pid, n)).fetchone()[0]
     # FTS5 has no UPSERT; delete-then-insert is the supported way to re-index.
-    db.execute("DELETE FROM fact_fts WHERE rowid=?", (fid,))
+    fts_delete(db, fid)
     db.execute("INSERT INTO fact_fts (rowid,text,kind) VALUES (?,?,?)",
                (fid, text.strip(), kind))
+    _request_sync()
     # Both spaces, because which one a future query uses is not knowable now and
     # vectors from different models cannot be compared. Two embeds at write time
     # (rare) buys free model choice at read time (frequent).
@@ -435,6 +509,8 @@ def main() -> int:
     ap.add_argument("--disable", metavar="SLUG")
     ap.add_argument("--enable", metavar="SLUG")
     ap.add_argument("--forget", metavar="ID")
+    ap.add_argument("--reindex", action="store_true",
+                    help="rebuild the search index from the facts")
     ap.add_argument("--link", nargs=2, metavar=("SRC", "DST"))
     ap.add_argument("--rel", default="relates_to", choices=RELS)
     ap.add_argument("--weight", type=float, default=1.0)
@@ -453,6 +529,11 @@ def main() -> int:
             return 2
         print(json.dumps(r) if args.json else
               f"promoted [{r['id']}] {r['kind']} in {r['project']}")
+        return 0
+
+    if args.reindex:
+        n = reindex_fts(db)
+        print(f"reindexed {n} fact(s)")
         return 0
 
     if args.link:
@@ -491,7 +572,7 @@ def main() -> int:
         return 0 if cur.rowcount else 1
 
     if args.forget:
-        db.execute("DELETE FROM fact_fts WHERE rowid=?", (args.forget,))
+        fts_delete(db, int(args.forget))
         cur = db.execute("DELETE FROM fact WHERE id=?", (args.forget,))
         db.commit()
         print(f"forgotten: {cur.rowcount}")

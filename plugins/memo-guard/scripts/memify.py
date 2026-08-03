@@ -114,7 +114,7 @@ def prune(db: sqlite3.Connection, hard: bool = False) -> dict:
             db.execute("DELETE FROM fact_entity WHERE fact_id=?", (c["id"],))
             db.execute("DELETE FROM edge WHERE src=? OR dst=?", (c["id"], c["id"]))
             db.execute("DELETE FROM coaccess WHERE a=? OR b=?", (c["id"], c["id"]))
-            db.execute("DELETE FROM fact_fts WHERE rowid=?", (c["id"],))
+            mem.fts_delete(db, c["id"])
             db.execute("DELETE FROM fact WHERE id=?", (c["id"],))
             removed += 1
     # Dangling structure goes regardless: an edge to a fact that no longer

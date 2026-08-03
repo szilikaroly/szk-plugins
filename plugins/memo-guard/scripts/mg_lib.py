@@ -86,14 +86,18 @@ DEFAULTS = {
     # fires unconditionally so a session can never end up with nothing.
     "adaptive": False,
     "hard_floor": 90,
-    # Long-term memory (memory.py). Promotion is explicit by default: a memory
-    # that fills itself is a memory you cannot trust. Turning this on takes only
-    # claims at or above auto_promote_utility, and only from the local-model
-    # pipeline where a utility score actually exists.
     # Core memory blocks (blocks.py) injected on every SessionStart. These cost
     # tokens every turn, which is the price of not having to know to ask.
     "core_memory": True,
     "core_memory_max_chars": 2000,
+    # Push the knowledge base to the private data repo after every write.
+    # Off until sync.py --setup has run; the worker coalesces a burst of
+    # writes into one commit so "after every write" never blocks a write.
+    "sync": False,
+    # Long-term memory (memory.py). Promotion is explicit by default: a memory
+    # that fills itself is a memory you cannot trust. Turning this on takes only
+    # claims at or above auto_promote_utility, and only from the local-model
+    # pipeline where a utility score actually exists.
     "auto_promote": False,
     "auto_promote_utility": 0.75,
     "auto_promote_max": 5,
