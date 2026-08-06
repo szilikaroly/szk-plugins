@@ -88,7 +88,11 @@ def lock_dir() -> Path:
 
 def _run(cmd: list[str], timeout: float = 4.0) -> str:
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        # utf-8 rather than the locale encoding, and errors="replace" because a
+        # probe tool that emits one odd byte must not raise where it used to
+        # return a string: this runs behind a "never fatal" promise.
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                           encoding="utf-8", errors="replace")
         return r.stdout if r.returncode == 0 else ""
     except (OSError, subprocess.SubprocessError):
         return ""
@@ -121,7 +125,7 @@ def probe_hardware() -> dict:
     for p in Path("/sys/class/drm").glob("card*/device/mem_info_vram_total"):
         try:
             return {"vendor": "amd", "device": "radeon", "backend": "rocm",
-                    "vram_mb": int(p.read_text().strip()) // (1024 * 1024)}
+                    "vram_mb": int(p.read_text(encoding="utf-8").strip()) // (1024 * 1024)}
         except (OSError, ValueError):
             continue
 
@@ -360,7 +364,7 @@ def recover(level: int = 1, hw: dict | None = None) -> dict:
 
 def _read(p: Path) -> dict:
     try:
-        return json.loads(p.read_text())
+        return json.loads(p.read_text(encoding="utf-8"))
     except Exception:
         return {}
 
@@ -437,7 +441,7 @@ def slot(name: str = "model", deadline_s: float = 90.0, owner: str = "",
                 try:
                     tmp.write_text(json.dumps(
                         {"pid": os.getpid(), "owner": owner,
-                         "since": time.time(), "heartbeat": time.time()}))
+                         "since": time.time(), "heartbeat": time.time()}), encoding="utf-8")
                     os.link(tmp, p)
                     held = True
                     break
@@ -488,7 +492,7 @@ def beat(name: str = "model") -> None:
     if d.get("pid") == os.getpid():
         d["heartbeat"] = time.time()
         try:
-            p.write_text(json.dumps(d))
+            p.write_text(json.dumps(d), encoding="utf-8")
         except OSError:
             pass
 

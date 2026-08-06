@@ -15,7 +15,7 @@ def metrics_summary() -> dict:
     mf = mg.data_dir() / "metrics.jsonl"
     rows = []
     if mf.exists():
-        for ln in mf.read_text().splitlines():
+        for ln in mf.read_text(encoding="utf-8").splitlines():
             try:
                 rows.append(json.loads(ln))
             except json.JSONDecodeError:
@@ -103,7 +103,7 @@ def main() -> int:
     print(f"\nresumes ready: {len(resumes)}")
     for r in resumes[:5]:
         try:
-            st = json.loads((r.parent / "STATE.json").read_text())
+            st = json.loads((r.parent / "STATE.json").read_text(encoding="utf-8"))
             print(f"  {r.parent.name[:8]}  mode={st.get('mode', '?'):13} "
                   f"~{st.get('resume_tokens_est', '?')} tok "
                   f"(raw ~{st.get('raw_tokens_est', '?')})")

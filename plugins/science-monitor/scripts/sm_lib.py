@@ -15,6 +15,16 @@ import sys
 import unicodedata
 from datetime import datetime, timezone
 
+# print() encodes with the locale encoding — cp1250 on a Hungarian Windows,
+# which cannot represent the arrows and check marks the commands print, and a
+# slash command that dies on its own output is indistinguishable from a broken
+# store. Every script here imports this module, so one call covers all of them.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
+
 HOME = os.path.expanduser("~")
 ROOT = os.environ.get("SCIENCE_MONITOR_HOME", os.path.join(HOME, ".science-monitor"))
 DB_PATH = os.path.join(ROOT, "monitor.db")

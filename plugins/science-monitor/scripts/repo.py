@@ -86,7 +86,7 @@ GITATTRIBUTES = """*.json  text eol=lf
 
 def git(repo, *args, check=True, quiet=False):
     proc = subprocess.run(["git", "-C", repo, *args],
-                          capture_output=True, text=True)
+                          capture_output=True, text=True, encoding="utf-8")
     if check and proc.returncode != 0:
         msg = (proc.stderr or proc.stdout).strip()
         raise RuntimeError(f"git {' '.join(args)}: {msg}")

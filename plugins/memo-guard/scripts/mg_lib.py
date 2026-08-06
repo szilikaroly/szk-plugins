@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""memo-guard shared helpers. Stdlib only; macOS/Linux.
+"""memo-guard shared helpers. Stdlib only; macOS, Linux and Windows.
 
 Design notes
 ------------
@@ -20,6 +20,28 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
+# --------------------------------------------------------------------------- stdio
+
+
+def utf8_stdio() -> None:
+    """Encode stdout/stderr as utf-8 regardless of the machine's locale.
+
+    Python encodes print() with the locale encoding, which on a Hungarian
+    Windows is cp1250. The first "▸" this plugin prints — the status line
+    every hook emits — then raises UnicodeEncodeError and takes the hook down
+    with it. macOS and Linux are utf-8 already, so naming it changes nothing
+    there. Called on import because every script in this directory is an entry
+    point: a hook, a CLI, or a background worker, and all of them print.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8")
+        except (AttributeError, ValueError):
+            pass  # already replaced by a non-text stream; nothing to fix
+
+
+utf8_stdio()
 
 # --------------------------------------------------------------------------- paths
 
@@ -105,12 +127,12 @@ def load_config() -> dict:
     cfg_path = data_dir() / "config.json"
     if cfg_path.exists():
         try:
-            cfg.update(json.loads(cfg_path.read_text()))
+            cfg.update(json.loads(cfg_path.read_text(encoding="utf-8")))
         except Exception:
             pass
     else:
         try:
-            cfg_path.write_text(json.dumps(DEFAULTS, indent=2) + "\n")
+            cfg_path.write_text(json.dumps(DEFAULTS, indent=2) + "\n", encoding="utf-8")
         except OSError:
             pass
     # env overrides
@@ -268,14 +290,14 @@ def _state_path(sid: str) -> Path:
 
 def load_state(sid: str) -> dict:
     try:
-        return json.loads(_state_path(sid).read_text())
+        return json.loads(_state_path(sid).read_text(encoding="utf-8"))
     except Exception:
         return {}
 
 
 def save_state(sid: str, st: dict) -> None:
     try:
-        _state_path(sid).write_text(json.dumps(st, indent=2))
+        _state_path(sid).write_text(json.dumps(st, indent=2), encoding="utf-8")
     except OSError:
         pass
 
@@ -301,7 +323,7 @@ def archive_transcript(tp: Path, sid: str, cwd: str, tag: str,
         "transcript": str(tp),
     }
     dst.with_name(dst.name.replace(".jsonl.gz", ".meta.json")).write_text(
-        json.dumps(meta, indent=2))
+        json.dumps(meta, indent=2), encoding="utf-8")
     _prune_archives(out, cfg.get("keep_archives", 40))
     return dst
 
@@ -336,5 +358,5 @@ def est_tokens(text_or_bytes) -> int:
 
 def append_metrics(row: dict) -> None:
     row = dict(row, ts=time.strftime("%Y-%m-%dT%H:%M:%S"))
-    with (data_dir() / "metrics.jsonl").open("a") as f:
+    with (data_dir() / "metrics.jsonl").open("a", encoding="utf-8") as f:
         f.write(json.dumps(row) + "\n")

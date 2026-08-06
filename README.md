@@ -72,6 +72,36 @@ Local, before publishing — from the directory *containing* this repo:
 /plugin install memo-guard@szk-plugins
 ```
 
+### Windows
+
+The scripts and the selftest run on Windows, and CI now covers it. Two things
+about the machine, not the plugin, still have to be true:
+
+`python3` must exist. Windows ships a `python3.exe` in `WindowsApps` that is a
+Microsoft Store stub, not an interpreter, and it sits on PATH ahead of a real
+install — so `python3` "exists" and fails. The hooks call `python3` because
+that is the one name that works unqualified on macOS and Linux. Give it
+something real, earlier on PATH:
+
+```bat
+mkdir "%USERPROFILE%\bin"
+> "%USERPROFILE%\bin\python3.cmd" echo @"%LOCALAPPDATA%\Programs\Python\Python313\python.exe" %%*
+setx PATH "%USERPROFILE%\bin;%PATH%"
+```
+
+Add a matching extensionless `python3` shell script in the same directory if
+your hooks run under Git Bash rather than cmd.
+
+`MEMO_GUARD_HOME` should be pinned to a native path (`C:\Users\you\.claude\memo-guard`)
+in `~/.claude/settings.json`. A Git Bash path like `/c/Users/you/...` is not a
+path Windows Python can open; it silently creates `C:\c\Users\...` instead.
+
+Nothing else differs. Text is read and written as utf-8 everywhere rather than
+in the machine's locale encoding — before that, the first `▸` the compressor
+printed on a cp1250 machine raised `UnicodeEncodeError` and took the hook with
+it, and the selftest measured its lookups with `grep`, which Windows does not
+have.
+
 ### Optional: local embedding models
 
 Semantic matching and retrieval activate automatically when an embedding model

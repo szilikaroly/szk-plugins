@@ -296,7 +296,7 @@ def apply_to_memo_dir(db: sqlite3.Connection, memo_dir: Path) -> dict:
         return {"scanned": 0, "changed": 0, "blocked": []}
     for f in sorted(memo_dir.rglob("*.md")):
         try:
-            lines = f.read_text().splitlines()
+            lines = f.read_text(encoding="utf-8").splitlines()
         except OSError:
             continue
         out, dirty = [], False
@@ -326,7 +326,7 @@ def apply_to_memo_dir(db: sqlite3.Connection, memo_dir: Path) -> dict:
                             "score": v["score"], "text": body[:80]})
             changed, dirty = changed + 1, True
         if dirty:
-            f.write_text("\n".join(out) + "\n")
+            f.write_text("\n".join(out) + "\n", encoding="utf-8")
     db.commit()
     return {"scanned": scanned, "changed": changed, "blocked": blocked}
 

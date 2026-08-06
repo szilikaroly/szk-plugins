@@ -33,7 +33,7 @@ def newest_resume_for(cwd: str, sid: str, max_age_h: float):
     best, best_m = None, 0.0
     for st in mg.sessions_dir().glob("*/STATE.json"):
         try:
-            d = json.loads(st.read_text())
+            d = json.loads(st.read_text(encoding="utf-8"))
         except Exception:
             continue
         if d.get("phase") != "done":
@@ -75,13 +75,13 @@ def main() -> int:
         return 0
 
     if source in ("compact", "clear", "resume"):
-        body = resume.read_text()[:9500]
+        body = resume.read_text(encoding="utf-8")[:9500]
         print("=== memo-guard: compressed context restored ===")
         print(body)
         print("=== end memo-guard resume ===")
     elif source in ("startup", "fork") and cfg.get("inject_on_startup", True):
         try:
-            st = json.loads((resume.parent / "STATE.json").read_text())
+            st = json.loads((resume.parent / "STATE.json").read_text(encoding="utf-8"))
         except Exception:
             st = {}
         age_h = (time.time() - resume.stat().st_mtime) / 3600

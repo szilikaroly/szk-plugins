@@ -22,6 +22,30 @@ sys.path.insert(0, str(HERE))
 import mg_lib as mg  # noqa: E402
 
 
+def grep(term: str, root: Path, files_only: bool = False) -> list[str]:
+    """`grep -rin` over a directory, in Python because Windows has no grep.
+
+    Shelling out made the measurement depend on a tool that is absent on one of
+    the three platforms this plugin runs on, and a missing grep there scored the
+    lookups as free rather than failing loudly.
+    """
+    term, hits = term.lower(), []
+    for p in sorted(root.rglob("*")):
+        if not p.is_file():
+            continue
+        try:
+            lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        for n, line in enumerate(lines, 1):
+            if term in line.lower():
+                if files_only:
+                    hits.append(str(p))
+                    break
+                hits.append(f"{p}:{n}:{line}")
+    return hits
+
+
 def build_transcript(path: Path, big_files=14, lines_each=900) -> None:
     """A realistic shape: a few huge Read results, some bash noise, dialogue."""
     recs = []
@@ -52,13 +76,13 @@ def build_transcript(path: Path, big_files=14, lines_each=900) -> None:
                      f"switch module_{i} to exponential backoff."}],
             "usage": {"input_tokens": ctx, "cache_read_input_tokens": 0,
                       "cache_creation_input_tokens": 0, "output_tokens": 120}}})
-    path.write_text("\n".join(json.dumps(r) for r in recs))
+    path.write_text("\n".join(json.dumps(r) for r in recs), encoding="utf-8")
 
 
 def hook(script: str, payload: dict) -> tuple[int, str]:
     p = subprocess.run([sys.executable, str(HERE / script)],
                        input=json.dumps(payload), capture_output=True,
-                       text=True)
+                       text=True, encoding="utf-8")
     return p.returncode, (p.stdout or "") + (p.stderr or "")
 
 
@@ -93,11 +117,11 @@ def main() -> int:
     wd = home / "sessions" / sid
     for _ in range(120):
         st = wd / "STATE.json"
-        if st.exists() and json.loads(st.read_text()).get("phase") in (
+        if st.exists() and json.loads(st.read_text(encoding="utf-8")).get("phase") in (
                 "done", "error"):
             break
         time.sleep(0.5)
-    state = json.loads((wd / "STATE.json").read_text())
+    state = json.loads((wd / "STATE.json").read_text(encoding="utf-8"))
     print(f"\n2) compressor phase={state.get('phase')} "
           f"mode={state.get('mode')}")
     if state.get("phase") != "done":
@@ -114,7 +138,7 @@ def main() -> int:
         print("   " + ln)
     print("   ...")
 
-    row = json.loads((home / "metrics.jsonl").read_text().splitlines()[-1])
+    row = json.loads((home / "metrics.jsonl").read_text(encoding="utf-8").splitlines()[-1])
     print("\n4) MEASURED")
     print(f"   raw window            ~{row['raw_tokens_est']:,} tok")
     print(f"   distilled working set ~{row['kept_tokens_est']:,} tok "
@@ -130,9 +154,7 @@ def main() -> int:
               "module_7", "ERROR"]
     lookup_tok = 0
     for q in probes:
-        g = subprocess.run(["grep", "-rn", "-i", q, str(wd / "distilled")],
-                           capture_output=True, text=True).stdout
-        lookup_tok += mg.est_tokens("\n".join(g.splitlines()[:8]))
+        lookup_tok += mg.est_tokens("\n".join(grep(q, wd / "distilled")[:8]))
     realistic = row["resume_tokens_est"] + lookup_tok
     red = 100 - 100 * realistic / row["raw_tokens_est"]
     print(f"   realistic session     ~{realistic:,} tok "
@@ -143,10 +165,8 @@ def main() -> int:
           f"{'PASS' if ok else 'FAIL'}")
 
     # the compression must not lose the decisions
-    resume = (wd / "RESUME.md").read_text()
-    hit = subprocess.run(
-        ["grep", "-ril", "exponential backoff", str(wd / "sources")],
-        capture_output=True, text=True).stdout.strip()
+    resume = (wd / "RESUME.md").read_text(encoding="utf-8")
+    hit = grep("exponential backoff", wd / "sources", files_only=True)
     print(f"   decision recoverable from compressed sources: "
           f"{'yes' if hit else 'NO'}")
     print(f"   archive path in RESUME: "

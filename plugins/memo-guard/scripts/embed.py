@@ -58,6 +58,15 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+# Same reason as mg_lib.utf8_stdio, repeated because this file deliberately
+# imports nothing local: print() encodes with the locale encoding, and cp1250
+# cannot represent the characters this tool reports with.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
+
 OLLAMA = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
 
 MODELS = {
