@@ -145,6 +145,60 @@ def search_crossref(query: str, limit: int = 25) -> dict:
             "records": recs, "note": "total is corpus-wide, not a search yield"}
 
 
+def _els_error(d: dict) -> str:
+    """Turn an Elsevier failure into something actionable.
+
+    QUOTA_EXCEEDED and an invalid key both stop the search, but they mean
+    opposite things: one is a key that works and will work again when the
+    window resets, the other is a key that will never work. Collapsing them
+    into "unavailable" sends you looking for a new key you do not need.
+    """
+    # On an HTTP error _get returns the body as a STRING under _body, so looking
+    # for service-error at the top level found nothing and the caller printed
+    # raw JSON — exactly the unreadable output this function exists to replace.
+    if isinstance(d, dict) and "_body" in d:
+        try:
+            d = {**d, **json.loads(d["_body"])}
+        except Exception:
+            pass
+    e = (d or {}).get("service-error") or (d or {}).get("error-response") or {}
+    st = e.get("status", {}) if isinstance(e, dict) else {}
+    code = st.get("statusCode") or e.get("error-code") or ""
+    if code == "QUOTA_EXCEEDED":
+        return "QUOTA_EXCEEDED — the key is valid; the allowance for this period is spent"
+    if d and d.get("_http_error") == 401:
+        return "401 — key not accepted for this API"
+    return st.get("statusText") or e.get("error-message") or str(d)[:120]
+
+
+def search_sciencedirect(query: str, limit: int = 25) -> dict:
+    """Elsevier full-text article search. Verified working."""
+    key = get_key("ELSEVIER_API_KEY")
+    if not key:
+        return {"source": "sciencedirect", "hits": 0, "records": [],
+                "error": "no ELSEVIER_API_KEY"}
+    d = _get("https://api.elsevier.com/content/search/sciencedirect?"
+             + urllib.parse.urlencode({"query": query, "count": min(limit, 100)}),
+             headers={"X-ELS-APIKey": key})
+    if not d or "search-results" not in d:
+        return {"source": "sciencedirect", "hits": 0, "records": [],
+                "error": _els_error(d)}
+    sr = d["search-results"]
+    recs = []
+    for r in sr.get("entry", []):
+        recs.append({"title": (r.get("dc:title") or "").rstrip("."),
+                     "year": (r.get("prism:coverDate") or "")[:4],
+                     "journal": r.get("prism:publicationName", ""),
+                     "doi": (r.get("prism:doi") or "").lower(),
+                     "pmid": "", "pmcid": "",
+                     "open_access": bool(r.get("openaccess")),
+                     "source": "sciencedirect"})
+    return {"source": "sciencedirect",
+            "hits": int(sr.get("opensearch:totalResults", 0) or 0),
+            "records": recs,
+            "note": "Elsevier journals only — not a bibliographic database"}
+
+
 def search_embase(query: str, limit: int = 25) -> dict:
     key = get_key("ELSEVIER_API_KEY")
     if not key:
@@ -154,7 +208,7 @@ def search_embase(query: str, limit: int = 25) -> dict:
              + urllib.parse.urlencode({"query": query, "count": min(limit, 25)}),
              headers={"X-ELS-APIKey": key})
     if not d or "search-results" not in d:
-        return {"source": "embase", "hits": 0, "records": [], "error": d}
+        return {"source": "embase", "hits": 0, "records": [], "error": _els_error(d)}
     sr = d["search-results"]
     recs = []
     for r in sr.get("entry", []):
@@ -168,9 +222,51 @@ def search_embase(query: str, limit: int = 25) -> dict:
             "records": recs}
 
 
+def search_wos(query: str, limit: int = 25) -> dict:
+    """Web of Science Starter API. UNTESTED — see below.
+
+    Written from the documented request shape but never run against a working
+    key: both keys supplied so far were rejected. Clarivate returns the same
+    401 "Unauthorized" for a valid-looking key it does not accept as it does
+    for an obviously fake one, and a different message ("No API key found in
+    request") when the header is absent — so a rejection here means the key is
+    not entitled, not that the request is malformed. Treat the parsing below as
+    unverified until one real response has been seen.
+
+    WoS query syntax is not free text: TS=(...) topic, TI=(...) title,
+    AU=(...) author. Passing a bare phrase returns an error, not zero hits.
+    """
+    key = get_key("WOS_API_KEY")
+    if not key:
+        return {"source": "wos", "hits": 0, "records": [],
+                "error": "no WOS_API_KEY (env or ~/.science-monitor/keys.json)"}
+    q = query if "=" in query else f"TS=({query})"
+    d = _get("https://api.clarivate.com/apis/wos-starter/v1/documents?"
+             + urllib.parse.urlencode({"q": q, "limit": min(limit, 50), "page": 1}),
+             headers={"X-ApiKey": key})
+    if not d or "hits" not in d:
+        return {"source": "wos", "hits": 0, "records": [], "error": d,
+                "note": "adapter unverified — no successful response yet"}
+    recs = []
+    for r in d.get("hits", []):
+        ids = r.get("identifiers") or {}
+        src = r.get("source") or {}
+        recs.append({"title": (r.get("title") or "").rstrip("."),
+                     "year": str(src.get("publishYear", "")),
+                     "journal": src.get("sourceTitle", ""),
+                     "doi": (ids.get("doi") or "").lower(),
+                     "pmid": str(ids.get("pmid", "") or "").replace("MEDLINE:", ""),
+                     "pmcid": "", "open_access": False, "source": "wos"})
+    return {"source": "wos", "hits": (d.get("metadata") or {}).get("total", len(recs)),
+            "records": recs, "note": "adapter unverified against a live key"}
+
+
 SOURCES = {"europepmc": search_europepmc, "openalex": search_openalex,
-           "crossref": search_crossref, "embase": search_embase}
+           "crossref": search_crossref, "sciencedirect": search_sciencedirect,
+           "embase": search_embase, "wos": search_wos}
 FREE = ("europepmc", "openalex", "crossref")
+KEYED = {"sciencedirect": "ELSEVIER_API_KEY",
+         "embase": "ELSEVIER_API_KEY", "wos": "WOS_API_KEY"}
 
 
 # --------------------------------------------------------------------------- dedup
@@ -285,10 +381,11 @@ def main() -> int:
         print(f"mailto    : {mailto()}")
         for s in SOURCES:
             if s in FREE:
-                print(f"  {s:<11} ready (no key needed)")
+                print(f"  {s:<14} ready (no key needed)")
             else:
-                k = get_key("ELSEVIER_API_KEY")
-                print(f"  {s:<11} {'key present' if k else 'NO KEY — set ELSEVIER_API_KEY'}")
+                env = KEYED[s]
+                k = get_key(env)
+                print(f"  {s:<14} {'key present' if k else 'NO KEY — set ' + env}")
         return 0
 
     if not args.query:
