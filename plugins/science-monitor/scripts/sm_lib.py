@@ -111,6 +111,7 @@ PROJECT_STATE_LABEL = {
 CATEGORIES = {
     "kutatas": "kutatás / kézirat",
     "tamogato": "támogató kutatás (nem kézirat)",
+    "eloadas": "konferencia-előadás",
     "eszkoz": "eszköz- és specialista-konfiguráció",
     "pelda": "platform példaprojekt",
 }
@@ -151,6 +152,12 @@ FILE_ROLES = [
     "manuscript", "cover_letter", "response", "supplement",
     "figure", "table", "refs", "data", "code", "session", "other",
 ]
+
+SEARCH_SOURCES = [
+    "pubmed", "web", "scopus", "wos", "embase", "cochrane",
+    "europepmc", "crossref", "clinicaltrials", "other",
+]
+SEARCH_PURPOSES = ["topic", "verification", "journal-selection", "citation-chase"]
 
 REVIEW_STATES = ["open", "in_progress", "answered"]
 POINT_STATES = ["open", "drafted", "done", "declined"]
@@ -277,6 +284,22 @@ CREATE TABLE IF NOT EXISTS checklist (
   UNIQUE(submission_id, label)
 );
 
+CREATE TABLE IF NOT EXISTS search_log (
+  id         INTEGER PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  ran_at     TEXT NOT NULL DEFAULT '',
+  source     TEXT NOT NULL DEFAULT 'web',
+  query      TEXT NOT NULL,
+  filters    TEXT NOT NULL DEFAULT '',
+  hits       INTEGER NOT NULL DEFAULT 0,
+  kept       INTEGER NOT NULL DEFAULT 0,
+  purpose    TEXT NOT NULL DEFAULT 'topic',
+  notes      TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  UNIQUE(project_id, source, query)
+);
+
+CREATE INDEX IF NOT EXISTS idx_searchlog_project ON search_log(project_id);
 CREATE INDEX IF NOT EXISTS idx_checklist_sub ON checklist(submission_id);
 CREATE INDEX IF NOT EXISTS idx_sub_project ON submissions(project_id);
 CREATE INDEX IF NOT EXISTS idx_files_project ON files(project_id);
@@ -465,6 +488,19 @@ CHECKLIST_BASE = [
 ]
 
 # Extra items that only apply to certain article types.
+# A talk is not a manuscript: no cover letter, no reviewers. What it does have
+# is a form with a hard deadline, an abstract to a length, and a deck.
+CHECKLIST_PRESENTATION = [
+    "Bejelentőlap kitöltve",
+    "Bejelentőlap aláírva és beküldve a szervezőnek",
+    "Absztrakt a kiírt terjedelemben",
+    "Társszerzők jóváhagyták",
+    "Prezentáció elkészült",
+    "A kongresszus / intézmény sablonja szerinti formátum",
+    "Előadás időtartama ellenőrizve",
+    "Összeférhetetlenségi nyilatkozat",
+]
+
 CHECKLIST_BY_KIND = {
     "systematic-review": [
         "PRISMA 2020 flow diagram a tényleges számokkal",
@@ -495,9 +531,12 @@ CHECKLIST_BY_KIND = {
 }
 
 
-def seed_checklist(conn, submission_id, kind):
+def seed_checklist(conn, submission_id, kind, category="kutatas"):
     """Create the checklist rows for a submission. Existing rows are kept."""
-    items = CHECKLIST_BASE + CHECKLIST_BY_KIND.get(kind, [])
+    if category == "eloadas":
+        items = CHECKLIST_PRESENTATION
+    else:
+        items = CHECKLIST_BASE + CHECKLIST_BY_KIND.get(kind, [])
     for i, label in enumerate(items):
         conn.execute(
             "INSERT OR IGNORE INTO checklist (submission_id, idx, label) VALUES (?,?,?)",
@@ -542,6 +581,24 @@ def gaps(conn, project, sub):
     if missing:
         add("warn", f"{len(missing)} nyilvántartott fájl nincs meg a lemezen",
             fix=f"sm.py show {slug}")
+
+    if (project["category"] if "category" in project.keys() else "") == "eloadas":
+        if sub is None:
+            add("blocker", "Nincs rögzítve, melyik kongresszusra megy",
+                fix=f'sm.py submit {slug} --journal "..." --due YYYY-MM-DD')
+            return out
+        d = days_until(sub["due_at"])
+        if not sub["submitted"]:
+            sev = "blocker" if (d is None or d <= 7) else "warn"
+            late = " — A HATÁRIDŐ LEJÁRT" if (d is not None and d < 0) else ""
+            add(sev, f"A bejelentőlap nincs beküldve{late}",
+                fix=f"sm.py submit {slug} --sent")
+        done, total = checklist_progress(conn, sub["id"])
+        if total and done < total:
+            add("warn" if not sub["submitted"] else "info",
+                f"Előadás-checklist: {total - done} tétel nyitva",
+                fix=f"sm.py checklist show {slug}")
+        return out
 
     if not manuscript_work:
         return out

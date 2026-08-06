@@ -226,7 +226,7 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError("nincs ilyen beadás")
             p = conn.execute("SELECT * FROM projects WHERE id = ?",
                              (sub["project_id"],)).fetchone()
-            L.seed_checklist(conn, sid, p["kind"])
+            L.seed_checklist(conn, sid, p["kind"], p["category"])
             conn.commit()
             return {"ok": True, "reload": True}
 
