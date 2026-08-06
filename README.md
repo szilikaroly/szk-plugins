@@ -154,7 +154,7 @@ directory afterwards changes nothing in the installed copy:
 
 ```
 /plugin marketplace update szk-plugins
-/plugin update memo-guard
+/plugin update memo-guard@szk-plugins
 ```
 
 ---

@@ -54,5 +54,8 @@ Run /memo-guard:status once; it prints the concrete cache path to use.
 
 Note: installing COPIES the plugin into ~/.claude/plugins/cache. Editing this
 directory afterwards changes nothing in the installed copy. After you edit and
-push, run:  /plugin marketplace update szk-plugins  &&  /plugin update memo-guard
+push, run:  /plugin marketplace update szk-plugins  &&  /plugin update memo-guard@szk-plugins
+
+The plugin id has to carry the marketplace. `update memo-guard` on its own
+answers "Plugin not found" even when it is installed and enabled.
 EOF
