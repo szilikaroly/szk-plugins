@@ -159,7 +159,7 @@ def export(db, out: Path) -> dict:
         pass
 
     (out / "sync-meta.json").write_text(json.dumps(
-        {"schema": 1, "machine": os.uname().nodename, "written": written},
+        {"schema": 1, "machine": mg.machine_name(), "written": written},
         indent=1, sort_keys=True) + "\n")
     return written
 
@@ -354,7 +354,7 @@ def push(db) -> dict:
                 "pulled": pulled, "exported": written}
     _git("commit", "-q", "-m",
          f"knowledge base: {written['facts']} facts, {written['edges']} edges "
-         f"({os.uname().nodename})")
+         f"({mg.machine_name()})")
     rc, out = _git("push", "-q", "origin", "HEAD:main")
     return {"pushed": rc == 0, "git": out[:200] if rc else "",
             "pulled": pulled, "exported": written}
@@ -385,7 +385,7 @@ def request() -> int:
     marker.write_text(str(time.time()))
     subprocess.Popen([sys.executable, str(Path(__file__)), "--worker"],
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                     start_new_session=True)
+                     **mg.detached_kwargs())
     return 0
 
 

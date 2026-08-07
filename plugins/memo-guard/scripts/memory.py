@@ -149,10 +149,10 @@ def connect() -> sqlite3.Connection:
     if fresh:
         db.execute("INSERT OR REPLACE INTO meta (k,v) VALUES ('schema_version','1')")
         db.commit()
-    try:  # one file now holds facts from every project; keep it private
-        db_path().chmod(0o600)
-    except OSError:
-        pass
+    # Owner-only where the OS supports it. secure_file() reports whether it
+    # really did — on Windows chmod cannot deliver this, and the store holds
+    # material from every project.
+    mg.secure_file(db_path())
     return db
 
 
@@ -238,7 +238,7 @@ def forget(db: sqlite3.Connection, fid: int) -> bool:
         import sync
         db.execute("INSERT INTO tombstone (fp,deleted_at,machine)"
                    " VALUES (?,?,?) ON CONFLICT(fp) DO NOTHING",
-                   (sync.fp(row[0]), time.time(), os.uname().nodename))
+                   (sync.fp(row[0]), time.time(), mg.machine_name()))
     except Exception:
         pass
     fts_delete(db, fid)

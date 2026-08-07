@@ -239,6 +239,14 @@ metrics.jsonl                                every run, auditable
   only a safe length — `SAFE_CHARS`, with chunking above it. Re-run
   `embed.py --truncation-test` after any model change; the cut depends on
   Ollama's context defaults, not just the model.
+- **On Windows the `0600` file mode does not protect anything.** `os.chmod`
+  there only toggles the read-only attribute, so `memory.db` — which holds
+  material from every project — stays readable by every account on the machine.
+  The call is still made because it is correct on macOS and Linux, and
+  `mg_lib.secure_file()` returns whether it really applied. Getting the same
+  guarantee on Windows needs an ACL (`icacls`), which this does not set behind
+  your back. If you sync a knowledge base to a shared Windows box, set it
+  yourself.
 - **The retrieval floor is calibrated, not universal.** `SEMANTIC_FLOOR = 0.48`
   sits in a measured gap (relevant queries scored 0.562–0.724, nonsense queries
   0.320–0.408) — but that was a handful of facts. Re-check it against your own

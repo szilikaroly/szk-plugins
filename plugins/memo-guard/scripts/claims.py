@@ -100,10 +100,9 @@ def connect() -> sqlite3.Connection:
     db = sqlite3.connect(db_path(), timeout=5.0)
     db.execute("PRAGMA journal_mode=WAL")
     db.executescript(SCHEMA)
-    try:  # the store names things said in private sessions; keep it private
-        db_path().chmod(0o600)
-    except OSError:
-        pass
+    # The store names things said in private sessions. secure_file() reports
+    # whether the OS actually restricted it — on Windows it cannot.
+    mg.secure_file(db_path())
     return db
 
 

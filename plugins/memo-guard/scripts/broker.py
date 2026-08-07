@@ -344,7 +344,9 @@ def recover(level: int = 1, hw: dict | None = None) -> dict:
                 break
             time.sleep(1.0)
     if level >= 3:
-        if sys.platform == "darwin":
+        if os.name == "nt":
+            _run(["taskkill", "/IM", "ollama.exe", "/F"], timeout=10)
+        elif sys.platform == "darwin":
             _run(["pkill", "-f", "ollama serve"], timeout=5)
         else:
             _run(["systemctl", "--user", "restart", "ollama"], timeout=10)
@@ -366,8 +368,28 @@ def _read(p: Path) -> dict:
 
 
 def _alive(pid: int) -> bool:
+    """Is this process still running? Cross-platform, and deliberately so.
+
+    `os.kill(pid, 0)` is the POSIX idiom, but on Windows os.kill maps to
+    TerminateProcess for every signal value — including 0. The liveness probe
+    would have killed the process it was asking about, and a stale-lock check
+    would become a process killer. OpenProcess answers the same question
+    without touching anything.
+    """
     if pid <= 0:
         return False
+    if os.name == "nt":
+        try:
+            import ctypes
+            SYNCHRONIZE = 0x00100000
+            h = ctypes.windll.kernel32.OpenProcess(SYNCHRONIZE, False, pid)
+            if h:
+                ctypes.windll.kernel32.CloseHandle(h)
+                return True
+            # ERROR_ACCESS_DENIED means it exists and is not ours.
+            return ctypes.windll.kernel32.GetLastError() == 5
+        except Exception:
+            return True          # cannot tell; assume alive rather than steal
     try:
         os.kill(pid, 0)
         return True
