@@ -348,7 +348,11 @@ def recover(level: int = 1, hw: dict | None = None) -> dict:
                 break
             time.sleep(1.0)
     if level >= 3:
-        if sys.platform == "darwin":
+        # Windows has neither pkill nor systemctl, so without this branch the
+        # else fell through to systemctl and level 3 silently did nothing.
+        if os.name == "nt":
+            _run(["taskkill", "/IM", "ollama.exe", "/F"], timeout=10)
+        elif sys.platform == "darwin":
             _run(["pkill", "-f", "ollama serve"], timeout=5)
         else:
             _run(["systemctl", "--user", "restart", "ollama"], timeout=10)
@@ -370,8 +374,28 @@ def _read(p: Path) -> dict:
 
 
 def _alive(pid: int) -> bool:
+    """Is this process still running?
+
+    `os.kill(pid, 0)` is the POSIX idiom for asking without touching, and it
+    does the opposite on Windows: os.kill there maps to TerminateProcess for
+    every signal value, including 0. This function is the stale-lock check, so
+    on Windows it would have killed the very process it was asking about — and
+    then taken its lock. OpenProcess answers the same question inertly.
+    """
     if pid <= 0:
         return False
+    if os.name == "nt":
+        try:
+            import ctypes
+            SYNCHRONIZE = 0x00100000
+            h = ctypes.windll.kernel32.OpenProcess(SYNCHRONIZE, False, pid)
+            if h:
+                ctypes.windll.kernel32.CloseHandle(h)
+                return True
+            # ERROR_ACCESS_DENIED: it exists, it just is not ours.
+            return ctypes.windll.kernel32.GetLastError() == 5
+        except Exception:
+            return True     # cannot tell — assume alive rather than steal a live lock
     try:
         os.kill(pid, 0)
         return True
