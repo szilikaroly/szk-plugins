@@ -1,0 +1,17 @@
+{
+  "stem": "examples/panel",
+  "style": "nature",
+  "dpi": 600,
+  "palette": "okabe-ito",
+  "formats": {
+    "png": "examples/panel.png"
+  },
+  "labels_checked": 2,
+  "obstacles": 0,
+  "qc_log": [
+    "clean after 0 iteration(s)"
+  ],
+  "residual_violations": [],
+  "clean": true,
+  "overlay": "examples/panel.overlay.png"
+}

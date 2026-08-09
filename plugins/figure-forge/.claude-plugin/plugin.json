@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "figure-forge",
+  "version": "0.1.0",
+  "displayName": "Figure Forge",
+  "description": "Builds Nature-style scientific figures — box plots, forest plots, flowcharts, diagrams and multi-panel composites — at 600 dpi with editable-text labels, then runs a self-correcting quality loop that guarantees no label sits outside its box or covers a curve, marker or arrow. Exports editable-text SVG plus 600 dpi PNG/TIFF, PDF and PPTX, and writes a QC audit and a visual proof overlay for every figure. `/ff:advise` recommends how to visualise before you plot.",
+  "author": {
+    "name": "Dr. Szili Károly"
+  },
+  "license": "MIT",
+  "keywords": [
+    "figures",
+    "nature-style",
+    "matplotlib",
+    "forest-plot",
+    "flowchart",
+    "svg",
+    "tiff",
+    "600dpi",
+    "publication"
+  ]
+}
