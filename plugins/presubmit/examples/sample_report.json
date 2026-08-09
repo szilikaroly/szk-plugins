@@ -1,0 +1,175 @@
+{
+  "manuscript": "examples/sample_with_errors.txt",
+  "source": "txt",
+  "journal": "Cureus",
+  "words": 125,
+  "sections_found": [
+    "abstract",
+    "keywords",
+    "introduction",
+    "results",
+    "discussion",
+    "conclusions",
+    "references"
+  ],
+  "counts": {
+    "error": 7,
+    "warn": 8,
+    "info": 4
+  },
+  "verdict": "NOT READY — fix the errors below before submitting",
+  "findings": [
+    {
+      "category": "structure",
+      "severity": "warn",
+      "code": "missing-section",
+      "message": "Expected section not found: 'materials and methods'.",
+      "where": "",
+      "fix": "Add a clearly-titled 'Materials And Methods' section, or rename the existing heading to match."
+    },
+    {
+      "category": "authors",
+      "severity": "warn",
+      "code": "no-corresponding-email",
+      "message": "No corresponding-author email found near the title block.",
+      "where": "title/authors",
+      "fix": "Add the corresponding author's email address."
+    },
+    {
+      "category": "authors",
+      "severity": "info",
+      "code": "no-orcid",
+      "message": "No ORCID iD found. Many journals now require ORCID for the corresponding (or all) authors.",
+      "where": "",
+      "fix": "Add ORCID iDs where required."
+    },
+    {
+      "category": "abstract",
+      "severity": "info",
+      "code": "abstract-short",
+      "message": "Abstract is only 12 words.",
+      "where": "abstract",
+      "fix": "Make sure background, methods, results and conclusion are all represented."
+    },
+    {
+      "category": "references",
+      "severity": "error",
+      "code": "ref-dup-doi",
+      "message": "References 1 and 3 share the same DOI (10.1000/abc123).",
+      "where": "ref 3",
+      "fix": "Remove the duplicate entry."
+    },
+    {
+      "category": "references",
+      "severity": "error",
+      "code": "ref-duplicate",
+      "message": "References 1 and 3 appear to be duplicates.",
+      "where": "ref 1/3",
+      "fix": "Keep one; delete the other and renumber."
+    },
+    {
+      "category": "references",
+      "severity": "error",
+      "code": "cite-out-of-range",
+      "message": "In-text citation [99] has no matching reference (only 3 in the list).",
+      "where": "body",
+      "fix": "Add the reference or fix the citation number."
+    },
+    {
+      "category": "references",
+      "severity": "warn",
+      "code": "ref-no-year",
+      "message": "Reference 2 has no publication year.",
+      "where": "ref 2",
+      "fix": "Add the year: Brown B. Another paper without a year. Some Journal. doi:10.…"
+    },
+    {
+      "category": "references",
+      "severity": "warn",
+      "code": "ref-uncited",
+      "message": "1 reference(s) never cited in the text: [3].",
+      "where": "references",
+      "fix": "Cite each reference in the text, or remove it."
+    },
+    {
+      "category": "references",
+      "severity": "info",
+      "code": "ref-count",
+      "message": "3 references detected.",
+      "where": "references",
+      "fix": ""
+    },
+    {
+      "category": "ethics",
+      "severity": "error",
+      "code": "missing-conflict-of-interest",
+      "message": "Required disclosure missing: conflict of interest.",
+      "where": "",
+      "fix": "Add an explicit Conflict Of Interest statement — Cureus requires it at submission."
+    },
+    {
+      "category": "ethics",
+      "severity": "error",
+      "code": "missing-funding",
+      "message": "Required disclosure missing: funding.",
+      "where": "",
+      "fix": "Add an explicit Funding statement — Cureus requires it at submission."
+    },
+    {
+      "category": "ethics",
+      "severity": "error",
+      "code": "missing-human-subjects",
+      "message": "Required disclosure missing: human subjects.",
+      "where": "",
+      "fix": "Add an explicit Human Subjects statement — Cureus requires it at submission."
+    },
+    {
+      "category": "ethics",
+      "severity": "error",
+      "code": "missing-informed-consent",
+      "message": "Required disclosure missing: informed consent.",
+      "where": "",
+      "fix": "Add an explicit Informed Consent statement — Cureus requires it at submission."
+    },
+    {
+      "category": "ethics",
+      "severity": "warn",
+      "code": "missing-animal-subjects",
+      "message": "Recommended statement missing: animal subjects.",
+      "where": "",
+      "fix": "Add a Animal Subjects statement."
+    },
+    {
+      "category": "ethics",
+      "severity": "warn",
+      "code": "missing-data-availability",
+      "message": "Recommended statement missing: data availability.",
+      "where": "",
+      "fix": "Add a Data Availability statement."
+    },
+    {
+      "category": "ethics",
+      "severity": "warn",
+      "code": "missing-acknowledgements",
+      "message": "Recommended statement missing: acknowledgements.",
+      "where": "",
+      "fix": "Add a Acknowledgements statement."
+    },
+    {
+      "category": "format",
+      "severity": "warn",
+      "code": "repeated-word",
+      "message": "Repeated word(s): the.",
+      "where": "",
+      "fix": "Delete the accidental duplication."
+    },
+    {
+      "category": "format",
+      "severity": "info",
+      "code": "space-before-punct",
+      "message": "Space before a comma/period/semicolon found.",
+      "where": "",
+      "fix": "Remove the space before punctuation."
+    }
+  ]
+}
