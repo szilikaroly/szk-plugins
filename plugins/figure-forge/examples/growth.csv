@@ -1,0 +1,9 @@
+day,volume,arm
+0,100,Control
+3,140,Control
+6,190,Control
+9,250,Control
+0,100,Treated
+3,120,Treated
+6,130,Treated
+9,135,Treated

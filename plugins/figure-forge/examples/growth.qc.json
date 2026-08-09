@@ -1,0 +1,18 @@
+{
+  "stem": "examples/growth",
+  "style": "nature",
+  "dpi": 600,
+  "palette": "okabe-ito",
+  "formats": {
+    "png": "examples/growth.png",
+    "svg": "examples/growth.svg"
+  },
+  "labels_checked": 2,
+  "obstacles": 2,
+  "qc_log": [
+    "clean after 0 iteration(s)"
+  ],
+  "residual_violations": [],
+  "clean": true,
+  "overlay": "examples/growth.overlay.png"
+}

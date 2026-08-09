@@ -24,6 +24,15 @@
       "license": "MIT",
       "category": "productivity",
       "keywords": ["manuscript", "submission", "peer-review", "journal", "research"]
+    },
+    {
+      "name": "figure-forge",
+      "source": "./plugins/figure-forge",
+      "description": "Nature-style scientific figures at 600 dpi with editable-text labels and a self-correcting quality loop that guarantees no label sits outside its box or covers a curve, marker or arrow. Builds box plots, forest plots, flowcharts, diagrams and multi-panel composites; exports editable SVG plus 600 dpi PNG/TIFF, PDF and PPTX; writes a QC audit and a visual proof overlay for every figure.",
+      "author": { "name": "Dr. Szili Károly" },
+      "license": "MIT",
+      "category": "productivity",
+      "keywords": ["figures", "nature-style", "forest-plot", "flowchart", "svg", "tiff", "600dpi", "publication"]
     }
   ]
 }
