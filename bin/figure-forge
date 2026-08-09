@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# figure-forge — global launcher for the Figure Forge engine.
+# Always runs the real SOURCE (.py), never a bytecode-only copy, so any shell or
+# session on this machine gets the full engine (600 dpi, editable SVG/PPTX,
+# self-correcting label QC) instead of falling back to bare matplotlib.
+#
+# Resolution order:
+#   1) the git working copy (source of truth, editable, always current)
+#   2) the newest installed plugin cache
+#   3) the marketplace clone
+set -euo pipefail
+
+PY="${FIGURE_FORGE_PYTHON:-python3}"   # anaconda python3 by default (has deps)
+
+candidates=(
+  "$HOME/Documents/claude/szk-plugins/plugins/figure-forge/scripts/ff.py"
+  "$HOME/.claude/plugins/marketplaces/szk-plugins/plugins/figure-forge/scripts/ff.py"
+)
+# newest installed cache version, if any
+cache_base="$HOME/.claude/plugins/cache/szk-plugins/figure-forge"
+if [[ -d "$cache_base" ]]; then
+  latest="$(ls -1 "$cache_base" 2>/dev/null | sort -V | tail -1 || true)"
+  [[ -n "${latest:-}" ]] && candidates+=("$cache_base/$latest/scripts/ff.py")
+fi
+
+for ff in "${candidates[@]}"; do
+  if [[ -f "$ff" ]]; then
+    exec "$PY" "$ff" "$@"
+  fi
+done
+
+echo "figure-forge: could not find ff.py in the repo, marketplace clone, or install cache." >&2
+echo "  Install it with:  claude plugin install figure-forge@szk-plugins" >&2
+exit 1

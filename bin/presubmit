@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# presubmit — global launcher for the Presubmit manuscript checker.
+# Always runs the real SOURCE (.py) from the repo, install cache, or marketplace
+# clone, so any shell or session on this machine gets the full checker.
+set -euo pipefail
+
+PY="${PRESUBMIT_PYTHON:-python3}"
+
+candidates=(
+  "$HOME/Documents/claude/szk-plugins/plugins/presubmit/scripts/pc.py"
+  "$HOME/.claude/plugins/marketplaces/szk-plugins/plugins/presubmit/scripts/pc.py"
+)
+cache_base="$HOME/.claude/plugins/cache/szk-plugins/presubmit"
+if [[ -d "$cache_base" ]]; then
+  latest="$(ls -1 "$cache_base" 2>/dev/null | sort -V | tail -1 || true)"
+  [[ -n "${latest:-}" ]] && candidates+=("$cache_base/$latest/scripts/pc.py")
+fi
+
+for pc in "${candidates[@]}"; do
+  if [[ -f "$pc" ]]; then
+    exec "$PY" "$pc" "$@"
+  fi
+done
+
+echo "presubmit: could not find pc.py in the repo, marketplace clone, or install cache." >&2
+echo "  Install it with:  claude plugin install presubmit@szk-plugins" >&2
+exit 1
