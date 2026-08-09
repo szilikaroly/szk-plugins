@@ -1,0 +1,27 @@
+A Study of Hearts in Mice
+John Smith, Jane Doe
+Department of Cardiology, Example University
+
+Abstract
+This is a short abstract about hearts and mice and cardiology outcomes.
+
+Keywords
+heart, mice, cardiology, study
+
+Introduction
+The the study begins here. We cite the first work [1] and the second [2].
+We also cite a reference that does not exist [99] .
+
+Results
+Hearts were observed in the the cohort.
+
+Discussion
+This matters a lot.
+
+Conclusions
+Done.
+
+References
+1. Smith J, Doe A. A study of hearts. Cardiology Journal. 2019;10:1-5. doi:10.1000/abc123
+2. Brown B. Another paper without a year. Some Journal. doi:10.1000/xyz789
+3. Smith J, Doe A. A study of hearts. Cardiology Journal. 2019;10:1-5. doi:10.1000/abc123

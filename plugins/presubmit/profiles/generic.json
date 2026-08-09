@@ -1,0 +1,12 @@
+{
+  "name": "Generic (IMRaD)",
+  "abstract_max_words": 300,
+  "abstract_min_words": 100,
+  "keywords_min": 3,
+  "keywords_max": 6,
+  "reference_style": "numbered or author-year",
+  "required_sections": ["introduction", "methods", "results", "discussion"],
+  "required_disclosures": ["conflict of interest", "funding"],
+  "recommended_disclosures": ["ethics approval", "informed consent", "data availability", "author contributions"],
+  "notes": "Baseline IMRaD expectations. Pass --journal to use a journal-specific profile."
+}

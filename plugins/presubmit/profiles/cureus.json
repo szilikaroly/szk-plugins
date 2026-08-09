@@ -1,0 +1,13 @@
+{
+  "name": "Cureus",
+  "abstract_max_words": 250,
+  "abstract_min_words": 100,
+  "keywords_min": 3,
+  "keywords_max": 5,
+  "reference_style": "AMA / ScispaceNumbered (numbered, superscript in text)",
+  "required_sections": ["introduction", "materials and methods", "results", "discussion", "conclusions"],
+  "case_report_sections": ["introduction", "case presentation", "discussion", "conclusions"],
+  "required_disclosures": ["conflict of interest", "funding", "human subjects", "informed consent"],
+  "recommended_disclosures": ["animal subjects", "data availability", "acknowledgements"],
+  "notes": "Cureus grants free publication only to manuscripts with few or no formatting errors. Disclosures are mandatory at submission: Human/Animal Subjects, Conflicts of Interest, and Funding statements. References are numbered (AMA-like)."
+}

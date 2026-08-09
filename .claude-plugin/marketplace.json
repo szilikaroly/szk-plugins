@@ -33,6 +33,15 @@
       "license": "MIT",
       "category": "productivity",
       "keywords": ["figures", "nature-style", "forest-plot", "flowchart", "svg", "tiff", "600dpi", "publication"]
+    },
+    {
+      "name": "presubmit",
+      "source": "./plugins/presubmit",
+      "description": "Catches the common manuscript submission mistakes before a journal does — missing sections, incomplete author info, over-long abstracts, reference problems (duplicates by DOI or text, missing years, in-text citations with no matching reference, uncited references), and missing ethics/disclosure statements. Reads .docx/.pdf/.tex/.txt, applies a journal profile (Cureus built in), and prints a severity-ranked readiness report with fix hints. Offline and deterministic — no false positives on medical terms.",
+      "author": { "name": "Dr. Szili Károly" },
+      "license": "MIT",
+      "category": "productivity",
+      "keywords": ["manuscript", "submission", "references", "ethics", "cureus", "checklist"]
     }
   ]
 }
