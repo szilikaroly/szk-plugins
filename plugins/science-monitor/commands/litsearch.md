@@ -1,6 +1,6 @@
 ---
 description: Irodalomkeresés több forráson — lefuttatja a keresést és be is naplózza
-argument-hint: "<query>" [--slug SLUG] [--sources europepmc,openalex,crossref,embase]
+argument-hint: '<query> [--slug SLUG] [--sources europepmc,openalex,crossref,embase]'
 allowed-tools: Bash
 ---
 Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/litsearch.py"`.
