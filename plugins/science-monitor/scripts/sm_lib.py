@@ -55,6 +55,13 @@ def save_config(cfg):
         fh.write("\n")
     return CONFIG_PATH
 
+# Slash commands are namespaced by the plugin's own directory name, so a button
+# that emits f"{CMD_PREFIX}context" emits a command that does not exist. Kept as one
+# constant: a plugin rename must not silently break every button on the page.
+PLUGIN_NAME = "science-monitor"
+CMD_PREFIX = f"/{PLUGIN_NAME}:"
+
+
 # --- vocabulary -------------------------------------------------------------
 
 # Where a submission attempt stands. Ordered from earliest to terminal.
@@ -605,7 +612,7 @@ def gaps(conn, project, sub):
 
     if not files_of(conn, project["id"], "manuscript"):
         add("blocker", "Nincs nyilvántartva kézirat-fájl",
-            ask=f"/sm:scan {project['root_path']}" if project["root_path"] else None)
+            ask=f"{CMD_PREFIX}scan {project['root_path']}" if project["root_path"] else None)
 
     if sub is None:
         add("warn", "Nincs megnyitott beadás",
@@ -630,7 +637,7 @@ def gaps(conn, project, sub):
 
     if sub["submitted"] and not sub["journal_ms_id"]:
         add("info", "Nincs rögzítve a folyóirat kéziratazonosítója",
-            fix=f'sm.py submit {slug} --ms-id "..."', ask="/sm:inbox")
+            fix=f'sm.py submit {slug} --ms-id "..."', ask=f"{CMD_PREFIX}inbox")
     if sub["submitted"] and not sub["submitted_at"]:
         add("info", "Beküldve, de dátum nélkül",
             fix=f"sm.py submit {slug} --sent --date YYYY-MM-DD")
@@ -641,23 +648,23 @@ def gaps(conn, project, sub):
     revs = open_reviews(conn, sub["id"])
     if sub["status"] in NEEDS_ACTION and not revs:
         add("blocker", "Revíziót kértek, de nincs betöltve bírálói levél",
-            ask=f"/sm:review {slug}")
+            ask=f"{CMD_PREFIX}review {slug}")
     if sub["status"] in REJECTED:
         which = ("Desk rejection" if sub["status"] == "desk_rejection"
                  else "Bírálat utáni elutasítás")
         add("warn", f"{which} — nincs kijelölve új folyóirat",
-            ask=f"/sm:journal {slug}")
+            ask=f"{CMD_PREFIX}journal {slug}")
     for rv in revs:
         rdone, rtotal = point_progress(conn, rv["id"])
         if rtotal == 0:
             add("blocker", f"A #{rv['id']} bírálat nincs pontokra bontva",
-                ask=f"/sm:review {slug}")
+                ask=f"{CMD_PREFIX}review {slug}")
         elif rdone < rtotal:
             d = days_until(rv["due_at"])
             sev = "blocker" if (d is not None and d <= 14) else "warn"
             add(sev, f"{rtotal - rdone} megválaszolatlan bírálói pont"
                      + (f", {d} nap a határidőig" if d is not None else ""),
-                ask=f"/sm:respond {rv['id']}")
+                ask=f"{CMD_PREFIX}respond {rv['id']}")
     if sub["status"] in NEEDS_ACTION and not sub["due_at"]:
         add("warn", "Revízió határidő nélkül",
             fix=f"sm.py submit {slug} --due YYYY-MM-DD")

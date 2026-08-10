@@ -425,9 +425,9 @@ def next_steps(p, sub):
     return (
         '<div class="nextsteps"><b>Tovább innen</b>'
         f'<p class="meta">{esc(why)}</p><div class="chips">'
-        + button("Célújság választás", cmd=f"/sm:journal {p['slug']}",
+        + button("Célújság választás", cmd=f"{L.CMD_PREFIX}journal {p['slug']}",
                  cls="primary" if desk else "")
-        + button("Újraírás", cmd=f"/sm:context {p['slug']}",
+        + button("Újraírás", cmd=f"{L.CMD_PREFIX}context {p['slug']}",
                  cls="" if desk else "primary")
         + button("Korrekció",
                  cmd=f"sm.py state {p['slug']} korrekcio",
@@ -547,7 +547,7 @@ def reviews_html(conn, p, sub, live):
         meter = f"m-rev-{rv['id']}"
         if not pts:
             body = ('<p class="meta">Nincs pontokra bontva.</p>'
-                    + button("Bontsd pontokra", cmd=f"/sm:review {p['slug']}",
+                    + button("Bontsd pontokra", cmd=f"{L.CMD_PREFIX}review {p['slug']}",
                              cls="primary"))
         else:
             items = []
@@ -566,7 +566,7 @@ def reviews_html(conn, p, sub, live):
                     f'{esc(pt["comment"][:220])}</span></li>')
             body = (f'<ul class="check">{"".join(items)}</ul>'
                     + button("Válaszlevél összeállítása",
-                             cmd=f"/sm:respond {rv['id']}", cls="primary"))
+                             cmd=f"{L.CMD_PREFIX}respond {rv['id']}", cls="primary"))
         blocks.append(
             f'<details open><summary>Bírálat #{rv["id"]} — '
             f'{esc(rv["decision"] or "n/a")} {bar_html(done, total, meter)}'
@@ -625,9 +625,9 @@ def build(conn, api_token=None):
             + stage_track(p, sub)
             + (f'<div class="chips">{verdict_controls(p, sub)}</div>' if sub else "")
             + f'<div class="chips">{submission_controls(p, sub, live)}'
-            + button("Kontextus behívása", cmd=f"/sm:context {p['slug']}")
-            + button("Bírálat felvétele", cmd=f"/sm:review {p['slug']}")
-            + button("Célújság", cmd=f"/sm:journal {p['slug']}")
+            + button("Kontextus behívása", cmd=f"{L.CMD_PREFIX}context {p['slug']}")
+            + button("Bírálat felvétele", cmd=f"{L.CMD_PREFIX}review {p['slug']}")
+            + button("Célújság", cmd=f"{L.CMD_PREFIX}journal {p['slug']}")
             + "</div>"
             + next_steps(p, sub)
             + gaps_html(items)

@@ -91,7 +91,7 @@ def cmd_status(conn, args):
                 actionable.append((p, sub, rv, done, total))
             if sub["status"] in L.NEEDS_ACTION and not L.open_reviews(conn, sub["id"]):
                 print("    ⚠ revision kért, de nincs betöltve bírálói levél "
-                      f"→ `/sm:review {p['slug']}`")
+                      f"→ `{L.CMD_PREFIX}review {p['slug']}`")
         print()
 
     if actionable:
