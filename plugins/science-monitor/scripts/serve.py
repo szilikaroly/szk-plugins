@@ -174,6 +174,20 @@ class Handler(BaseHTTPRequestHandler):
             conn.commit()
             return {"ok": True, "reload": True}
 
+        if path == "/api/task":
+            row = conn.execute("SELECT * FROM tasks WHERE id = ?",
+                               (int(data["id"]),)).fetchone()
+            if not row:
+                raise ValueError("nincs ilyen részfeladat")
+            state = data.get("state")
+            if state not in L.TASK_STATES:
+                state = "open" if row["state"] == "done" else "done"
+            conn.execute("UPDATE tasks SET state = ?, done_at = ? WHERE id = ?",
+                         (state, L.today() if state == "done" else "", row["id"]))
+            conn.commit()
+            d, t = L.task_progress(conn, row["project_id"])
+            return {"ok": True, "state": state, "progress": [d, t]}
+
         if path == "/api/project/new":
             title = str(data.get("title", "")).strip()
             if not title:

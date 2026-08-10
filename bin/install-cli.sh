@@ -14,7 +14,7 @@ REPO="$(pwd)"
 BIN_DIR="${BIN_DIR:-$HOME/.local/bin}"
 mkdir -p "$BIN_DIR"
 
-for tool in figure-forge presubmit; do
+for tool in figure-forge presubmit science-monitor; do
   src="$REPO/bin/$tool"
   dst="$BIN_DIR/$tool"
   ln -sf "$src" "$dst"
@@ -32,3 +32,4 @@ echo
 echo "Verify:"
 echo "  figure-forge selftest    # 11 checks"
 echo "  presubmit selftest       # 10 planted mistakes caught"
+echo "  science-monitor status   # the manuscript pipeline"

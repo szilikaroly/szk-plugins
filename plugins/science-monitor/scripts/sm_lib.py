@@ -61,6 +61,10 @@ def save_config(cfg):
 PLUGIN_NAME = "science-monitor"
 CMD_PREFIX = f"/{PLUGIN_NAME}:"
 
+# The shell command a "copy" button hands the user. `bin/science-monitor` puts
+# this on PATH; a bare "sm.py" is not runnable from anywhere.
+CLI_NAME = PLUGIN_NAME
+
 
 # --- vocabulary -------------------------------------------------------------
 
@@ -307,6 +311,31 @@ CREATE TABLE IF NOT EXISTS search_log (
 );
 
 CREATE INDEX IF NOT EXISTS idx_searchlog_project ON search_log(project_id);
+CREATE TABLE IF NOT EXISTS tasks (
+  id            INTEGER PRIMARY KEY,
+  project_id    INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  submission_id INTEGER REFERENCES submissions(id) ON DELETE SET NULL,
+  idx           INTEGER NOT NULL DEFAULT 0,
+  title         TEXT NOT NULL,
+  state         TEXT NOT NULL DEFAULT 'open',
+  assignee      TEXT NOT NULL DEFAULT '',
+  due_at        TEXT NOT NULL DEFAULT '',
+  note          TEXT NOT NULL DEFAULT '',
+  created_at    TEXT NOT NULL,
+  done_at       TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS stage_log (
+  id            INTEGER PRIMARY KEY,
+  submission_id INTEGER NOT NULL REFERENCES submissions(id) ON DELETE CASCADE,
+  stage         TEXT NOT NULL,
+  status        TEXT NOT NULL,
+  at            TEXT NOT NULL,
+  UNIQUE(submission_id, status)
+);
+
+CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id, state);
+CREATE INDEX IF NOT EXISTS idx_stage_sub ON stage_log(submission_id);
 CREATE INDEX IF NOT EXISTS idx_checklist_sub ON checklist(submission_id);
 CREATE INDEX IF NOT EXISTS idx_sub_project ON submissions(project_id);
 CREATE INDEX IF NOT EXISTS idx_files_project ON files(project_id);
@@ -320,7 +349,16 @@ CREATE INDEX IF NOT EXISTS idx_events_project ON events(project_id, at);
 MIGRATIONS = [
     ("projects", "state", "TEXT NOT NULL DEFAULT 'folyamatban'"),
     ("projects", "category", "TEXT NOT NULL DEFAULT 'kutatas'"),
+    # Who owes the work — a review point with no owner is the first thing that
+    # goes missing once more than one author is involved.
+    ("review_points", "assignee", "TEXT NOT NULL DEFAULT ''"),
+    # File identity, so "which .docx is current" stops being a guess.
+    ("files", "sha256", "TEXT NOT NULL DEFAULT ''"),
+    ("files", "size", "INTEGER NOT NULL DEFAULT 0"),
+    ("files", "mtime", "TEXT NOT NULL DEFAULT ''"),
 ]
+
+TASK_STATES = ["open", "doing", "done", "dropped"]
 
 
 def connect():
@@ -430,6 +468,61 @@ def point_progress(conn, review_id):
     total = sum(counts.values())
     done = counts.get("done", 0) + counts.get("declined", 0)
     return done, total
+
+
+def tasks_of(conn, project_id, open_only=False):
+    q = "SELECT * FROM tasks WHERE project_id = ?"
+    if open_only:
+        q += " AND state IN ('open','doing')"
+    return conn.execute(q + " ORDER BY state='done', state='dropped', idx, id",
+                        (project_id,)).fetchall()
+
+
+def task_progress(conn, project_id):
+    rows = tasks_of(conn, project_id)
+    live = [r for r in rows if r["state"] != "dropped"]
+    return sum(1 for r in live if r["state"] == "done"), len(live)
+
+
+def record_stage(conn, submission_id, status):
+    """First time a submission reaches a status, remember when.
+
+    Turnaround is the question everyone actually asks — 'how long has it been
+    sitting there' — and it is unanswerable without the dates.
+    """
+    stage = STAGE_OF.get(status)
+    if not stage:
+        return
+    conn.execute("INSERT OR IGNORE INTO stage_log (submission_id, stage, status, at) "
+                 "VALUES (?,?,?,?)", (submission_id, stage, status, today()))
+
+
+def stage_dates(conn, submission_id):
+    return {r["status"]: r["at"] for r in conn.execute(
+        "SELECT status, at FROM stage_log WHERE submission_id = ?", (submission_id,))}
+
+
+def days_at_journal(sub):
+    """Days since the package went out, for a submission still in play."""
+    if not sub or not sub["submitted"] or not sub["submitted_at"]:
+        return None
+    d = days_until(sub["submitted_at"])
+    return None if d is None else -d
+
+
+def file_identity(path):
+    """(sha256, size, mtime) — cheap enough to run over a project's files."""
+    import hashlib
+    from datetime import datetime as _dt
+    try:
+        st = os.stat(path)
+    except OSError:
+        return "", 0, ""
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for block in iter(lambda: fh.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest(), st.st_size, _dt.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d")
 
 
 def log_event(conn, project_id, kind, summary, submission_id=None):
@@ -587,24 +680,24 @@ def gaps(conn, project, sub):
                if not os.path.exists(f["path"])]
     if missing:
         add("warn", f"{len(missing)} nyilvántartott fájl nincs meg a lemezen",
-            fix=f"sm.py show {slug}")
+            fix=f"{CLI_NAME} show {slug}")
 
     if (project["category"] if "category" in project.keys() else "") == "eloadas":
         if sub is None:
             add("blocker", "Nincs rögzítve, melyik kongresszusra megy",
-                fix=f'sm.py submit {slug} --journal "..." --due YYYY-MM-DD')
+                fix=f'{CLI_NAME} submit {slug} --journal "..." --due YYYY-MM-DD')
             return out
         d = days_until(sub["due_at"])
         if not sub["submitted"]:
             sev = "blocker" if (d is None or d <= 7) else "warn"
             late = " — A HATÁRIDŐ LEJÁRT" if (d is not None and d < 0) else ""
             add(sev, f"A bejelentőlap nincs beküldve{late}",
-                fix=f"sm.py submit {slug} --sent")
+                fix=f"{CLI_NAME} submit {slug} --sent")
         done, total = checklist_progress(conn, sub["id"])
         if total and done < total:
             add("warn" if not sub["submitted"] else "info",
                 f"Előadás-checklist: {total - done} tétel nyitva",
-                fix=f"sm.py checklist show {slug}")
+                fix=f"{CLI_NAME} checklist show {slug}")
         return out
 
     if not manuscript_work:
@@ -616,34 +709,50 @@ def gaps(conn, project, sub):
 
     if sub is None:
         add("warn", "Nincs megnyitott beadás",
-            fix=f'sm.py submit {slug} --journal "..."')
+            fix=f'{CLI_NAME} submit {slug} --journal "..."')
         return out
 
     if sub["cover_letter_state"] == "missing":
         add("blocker", "Nincs cover letter",
-            fix=f"sm.py submit {slug} --cover PATH --cover-state ready")
+            fix=f"{CLI_NAME} submit {slug} --cover PATH --cover-state ready")
     elif sub["cover_letter_state"] == "draft":
         add("warn", "A cover letter csak piszkozat",
-            fix=f"sm.py submit {slug} --cover-state ready")
+            fix=f"{CLI_NAME} submit {slug} --cover-state ready")
 
     done, total = checklist_progress(conn, sub["id"])
     if total == 0:
         add("info", "A beadási checklist nincs létrehozva",
-            fix=f"sm.py checklist init {slug}")
+            fix=f"{CLI_NAME} checklist init {slug}")
     elif done < total:
         add("warn" if sub["status"] in ("ready", "drafting") else "info",
             f"Beadási checklist: {total - done} tétel nyitva",
-            fix=f"sm.py checklist show {slug}")
+            fix=f"{CLI_NAME} checklist show {slug}")
 
     if sub["submitted"] and not sub["journal_ms_id"]:
         add("info", "Nincs rögzítve a folyóirat kéziratazonosítója",
-            fix=f'sm.py submit {slug} --ms-id "..."', ask=f"{CMD_PREFIX}inbox")
+            fix=f'{CLI_NAME} submit {slug} --ms-id "..."', ask=f"{CMD_PREFIX}inbox")
     if sub["submitted"] and not sub["submitted_at"]:
         add("info", "Beküldve, de dátum nélkül",
-            fix=f"sm.py submit {slug} --sent --date YYYY-MM-DD")
+            fix=f"{CLI_NAME} submit {slug} --sent --date YYYY-MM-DD")
     if not sub["submitted"] and sub["status"] == "ready":
         add("blocker", f"Kész, de nincs beküldve ide: {sub['journal']}",
-            fix=f"sm.py submit {slug} --sent")
+            fix=f"{CLI_NAME} submit {slug} --sent")
+
+    tdone, ttotal = task_progress(conn, project["id"])
+    if ttotal and tdone < ttotal:
+        overdue = [t for t in tasks_of(conn, project["id"], open_only=True)
+                   if t["due_at"] and (days_until(t["due_at"]) or 0) < 0]
+        add("blocker" if overdue else "warn",
+            f"{ttotal - tdone} nyitott részfeladat"
+            + (f", ebből {len(overdue)} lejárt" if overdue else ""),
+            fix=f"{CLI_NAME} task list {slug}")
+
+    waited = days_at_journal(sub)
+    if waited is not None and sub["status"] in ("submitted", "desk_review", "under_review"):
+        if waited > 120:
+            add("warn", f"{waited} napja a folyóiratnál, döntés nélkül — "
+                        "érdemes rákérdezni a szerkesztőségnél",
+                fix=f'{CLI_NAME} event {slug} nudge "..."')
 
     revs = open_reviews(conn, sub["id"])
     if sub["status"] in NEEDS_ACTION and not revs:
@@ -667,7 +776,7 @@ def gaps(conn, project, sub):
                 ask=f"{CMD_PREFIX}respond {rv['id']}")
     if sub["status"] in NEEDS_ACTION and not sub["due_at"]:
         add("warn", "Revízió határidő nélkül",
-            fix=f"sm.py submit {slug} --due YYYY-MM-DD")
+            fix=f"{CLI_NAME} submit {slug} --due YYYY-MM-DD")
 
     return out
 

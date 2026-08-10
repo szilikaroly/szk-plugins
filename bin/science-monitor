@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# science-monitor — global launcher for the Science Monitor CLI.
+# Always runs the real SOURCE (.py) from the repo, install cache, or marketplace
+# clone, so every shell and every dashboard "copy" button gets a command that
+# actually runs.
+set -euo pipefail
+
+PY="${SCIENCE_MONITOR_PYTHON:-python3}"
+
+candidates=(
+  "$HOME/Documents/claude/szk-plugins/plugins/science-monitor/scripts/sm.py"
+  "$HOME/.claude/plugins/marketplaces/szk-plugins/plugins/science-monitor/scripts/sm.py"
+)
+cache_base="$HOME/.claude/plugins/cache/szk-plugins/science-monitor"
+if [[ -d "$cache_base" ]]; then
+  latest="$(ls -1 "$cache_base" 2>/dev/null | sort -V | tail -1 || true)"
+  [[ -n "${latest:-}" ]] && candidates+=("$cache_base/$latest/scripts/sm.py")
+fi
+
+for sm in "${candidates[@]}"; do
+  if [[ -f "$sm" ]]; then
+    exec "$PY" "$sm" "$@"
+  fi
+done
+
+echo "science-monitor: could not find sm.py in the repo, marketplace clone, or install cache." >&2
+echo "  Install it with:  claude plugin install science-monitor@szk-plugins" >&2
+exit 1

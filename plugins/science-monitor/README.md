@@ -27,6 +27,9 @@ Az adat lokális SQLite: `~/.science-monitor/monitor.db`. Semmi nem megy sehova.
 | `/science-monitor:inbox` | Outlook/O365 (és Gmail) átnézése szerkesztői döntésekért (csak olvas) |
 | `/science-monitor:dashboard` | Dashboard — hiánylisták, checklistek, kattintható gombok |
 | `/science-monitor:journal SLUG` | Célújság választás — folyóirat-illesztés bizonyítékból |
+| `/science-monitor:due [NAP]` | Mi jár le hamarosan — napi futtatásra is |
+| `/science-monitor:task SLUG` | Részfeladatok: mi van hátra, kire vár |
+| `/science-monitor:refaudit SLUG` | Hivatkozás-audit Crossref + Europe PMC ellen |
 | `/science-monitor:repo pull\|push` | Szinkron a szerzőtársakkal egy közös git repón át |
 
 ### A dashboard két módja
@@ -113,7 +116,18 @@ megtett változtatás, és az állapot (`open` / `drafted` / `done` / `declined`
 szabva (systematic-review → PRISMA + RoB, hypothesis → falszifikálhatóság stb.).
 Minden tétel `done` / `n/a` / nyitva.
 
+**tasks** — részfeladatok kéziratonként: cím, felelős, határidő, állapot
+(`open` / `doing` / `done` / `dropped`). Ez a szabad szövegű jegyzet helyett —
+egy „hátra: ábrák, PROBAST, 4 levél" jegyzet nem számolható és nem pipálható.
+
+**stage_log** — mikor ért a beadás az egyes állomásokra. Ebből jön ki az
+átfutás: hány napja ül a folyóiratnál. 120 nap fölött a hiánylista jelzi.
+
 **events** — idővonal minden kézirathoz.
+
+A **fájlokon** tartalom-ujjlenyomat (`sha256`, méret, módosítás) is van:
+a `science-monitor files SLUG` megmondja, melyik változat a legfrissebb, mi
+változott a felvétel óta, és mely fájlok azonos tartalmúak más néven.
 
 A **hiánylista** nincs tárolva, mindig frissen számolódik (`sm.py gaps`): nincs
 cover letter, kész de nincs beküldve, revíziót kértek de nincs bírálói levél,

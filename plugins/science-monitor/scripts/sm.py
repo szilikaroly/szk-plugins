@@ -959,6 +959,151 @@ def cmd_state(conn, args):
           f"{L.PROJECT_STATE_LABEL[args.value]}")
 
 
+TASK_ICON = {"open": "○", "doing": "◐", "done": "●", "dropped": "⊘"}
+
+
+def cmd_task(conn, args):
+    p = L.get_project(conn, args.ref)
+    if args.action == "add":
+        sub = L.current_submission(conn, p["id"])
+        nxt = (conn.execute("SELECT COALESCE(MAX(idx),0) m FROM tasks WHERE project_id = ?",
+                            (p["id"],)).fetchone()["m"]) + 1
+        for title in args.title:
+            conn.execute(
+                "INSERT INTO tasks (project_id, submission_id, idx, title, assignee, "
+                "due_at, created_at) VALUES (?,?,?,?,?,?,?)",
+                (p["id"], sub["id"] if sub else None, nxt, title,
+                 args.assignee or "", args.due or "", L.now()))
+            nxt += 1
+        conn.commit()
+        print(f"{len(args.title)} részfeladat felvéve [{p['slug']}]")
+        return
+
+    if args.action == "set":
+        row = conn.execute("SELECT * FROM tasks WHERE id = ? AND project_id = ?",
+                           (args.id, p["id"])).fetchone()
+        if not row:
+            L.die(f"nincs ilyen részfeladat: {args.id}")
+        sets, vals = [], []
+        for col, val in (("state", args.state), ("assignee", args.assignee),
+                         ("due_at", args.due), ("note", args.note),
+                         ("title", args.title_text)):
+            if val is not None:
+                if col == "state" and val not in L.TASK_STATES:
+                    L.die(f"állapot csak ez lehet: {', '.join(L.TASK_STATES)}")
+                sets.append(f"{col} = ?"); vals.append(val)
+        if args.state == "done":
+            sets.append("done_at = ?"); vals.append(L.today())
+        if not sets:
+            L.die("nincs megadva módosítandó mező")
+        vals.append(row["id"])
+        conn.execute(f"UPDATE tasks SET {', '.join(sets)} WHERE id = ?", vals)
+        conn.commit()
+        print(f"#{row['id']} {row['title'][:60]} → {args.state or 'frissítve'}")
+        return
+
+    rows = L.tasks_of(conn, p["id"])
+    if not rows:
+        print(f"Nincs részfeladat. Felvétel: `{L.CLI_NAME} task add {p['slug']} \"...\"`")
+        return
+    done, total = L.task_progress(conn, p["id"])
+    print(f"RÉSZFELADATOK — {p['title'][:56]}\n  {bar(done, total)}\n")
+    for t in rows:
+        due = ""
+        if t["due_at"]:
+            d = L.days_until(t["due_at"])
+            due = f"  [{t['due_at']}" + (f", LEJÁRT {abs(d)} napja]" if d is not None and d < 0
+                                          else f", {d} nap]" if d is not None else "]")
+        who = f"  @{t['assignee']}" if t["assignee"] else ""
+        print(f"  {TASK_ICON[t['state']]} #{t['id']:<4} {t['title']}{who}{due}")
+        if t["note"]:
+            print(f"          {t['note']}")
+
+
+def cmd_files(conn, args):
+    """Which file is current, and what changed since it was registered."""
+    p = L.get_project(conn, args.ref)
+    rows = L.files_of(conn, p["id"], args.role)
+    if not rows:
+        print("Nincs nyilvántartott fájl ebben a szerepben.")
+        return
+    seen, out = {}, []
+    for f in rows:
+        digest, size, mtime = L.file_identity(f["path"])
+        state = ("HIÁNYZIK" if not digest else
+                 "változott" if f["sha256"] and f["sha256"] != digest else
+                 "új" if not f["sha256"] else "változatlan")
+        if args.refresh and digest:
+            conn.execute("UPDATE files SET sha256 = ?, size = ?, mtime = ? WHERE id = ?",
+                         (digest, size, mtime, f["id"]))
+        out.append((f, digest, size, mtime, state))
+        if digest:
+            seen.setdefault(digest, []).append(f["path"])
+    if args.refresh:
+        conn.commit()
+
+    by_role = {}
+    for item in out:
+        by_role.setdefault(item[0]["role"], []).append(item)
+    for role, items in by_role.items():
+        items.sort(key=lambda i: i[3], reverse=True)
+        print(f"\n{role.upper()}  ({len(items)})")
+        for i, (f, digest, size, mtime, state) in enumerate(items):
+            mark = "→ LEGFRISSEBB" if i == 0 and digest else ""
+            print(f"  {mtime or '????-??-??'}  {size/1024:>7.0f} kB  {state:<11}"
+                  f"{os.path.basename(f['path'])}  {mark}")
+    dupes = {d: paths for d, paths in seen.items() if len(paths) > 1}
+    if dupes:
+        print(f"\nAZONOS TARTALOM ({len(dupes)} csoport) — ezek ugyanaz a fájl más néven:")
+        for paths in dupes.values():
+            for path in paths:
+                print(f"  · {os.path.basename(path)}")
+            print()
+
+
+def cmd_due(conn, args):
+    """Everything that needs attention within N days. Silent when nothing does."""
+    horizon = args.days
+    items = []
+    for p in conn.execute("SELECT * FROM projects WHERE archived = 0 ORDER BY id"):
+        sub = L.current_submission(conn, p["id"])
+        if sub and sub["due_at"] and sub["status"] not in L.TERMINAL:
+            d = L.days_until(sub["due_at"])
+            if d is not None and d <= horizon:
+                items.append((d, p["slug"], f"{sub['journal']} — "
+                              f"{L.STATUS_LABEL.get(sub['status'], sub['status'])}",
+                              sub["due_at"]))
+        if sub:
+            for rv in L.open_reviews(conn, sub["id"]):
+                d = L.days_until(rv["due_at"])
+                if d is not None and d <= horizon:
+                    done, total = L.point_progress(conn, rv["id"])
+                    items.append((d, p["slug"], f"bírálat #{rv['id']}: "
+                                  f"{total - done} nyitott pont", rv["due_at"]))
+        for t in L.tasks_of(conn, p["id"], open_only=True):
+            d = L.days_until(t["due_at"])
+            if d is not None and d <= horizon:
+                items.append((d, p["slug"], f"részfeladat: {t['title'][:50]}", t["due_at"]))
+
+    if not items:
+        if not args.quiet:
+            print(f"Nincs teendő {horizon} napon belül.")
+        return
+    items.sort()
+    overdue = [i for i in items if i[0] < 0]
+    print(f"{len(items)} tétel {horizon} napon belül"
+          + (f", ebből {len(overdue)} LEJÁRT" if overdue else ""))
+    for d, slug, what, when in items:
+        flag = f"LEJÁRT {abs(d)} napja" if d < 0 else f"{d} nap"
+        print(f"  {when}  [{flag:>13}]  {slug} — {what}")
+    raise SystemExit(1 if overdue else 0)
+
+
+def cmd_refaudit(conn, args):
+    import refaudit as R
+    R.run(conn, args.ref, path=args.file, limit=args.limit)
+
+
 def cmd_gaps(conn, args):
     projects = ([L.get_project(conn, args.ref)] if args.ref else
                 conn.execute("SELECT * FROM projects WHERE archived = 0 ORDER BY id"
@@ -1243,6 +1388,34 @@ def build_parser():
     c.add_argument("--note")
     c.add_argument("--seq", type=int)
     p.set_defaults(fn=cmd_checklist)
+
+    p = sub.add_parser("task", help="részfeladatok egy kézirathoz")
+    ts = p.add_subparsers(dest="action", required=True)
+    c = ts.add_parser("add"); c.add_argument("ref"); c.add_argument("title", nargs="+")
+    c.add_argument("--assignee"); c.add_argument("--due")
+    c = ts.add_parser("set"); c.add_argument("ref"); c.add_argument("id", type=int)
+    c.add_argument("--state", choices=L.TASK_STATES); c.add_argument("--assignee")
+    c.add_argument("--due"); c.add_argument("--note")
+    c.add_argument("--title", dest="title_text")
+    c = ts.add_parser("list"); c.add_argument("ref")
+    p.set_defaults(fn=cmd_task)
+
+    p = sub.add_parser("files", help="fájl-verziók: melyik a legfrissebb, mi változott")
+    p.add_argument("ref")
+    p.add_argument("--role", choices=L.FILE_ROLES)
+    p.add_argument("--refresh", action="store_true", help="a mért ujjlenyomat rögzítése")
+    p.set_defaults(fn=cmd_files)
+
+    p = sub.add_parser("due", help="mi jár le N napon belül (némán hallgat, ha semmi)")
+    p.add_argument("--days", type=int, default=7)
+    p.add_argument("--quiet", action="store_true", help="csak akkor ír, ha van teendő")
+    p.set_defaults(fn=cmd_due)
+
+    p = sub.add_parser("refaudit", help="hivatkozásjegyzék ellenőrzése Crossref + Europe PMC ellen")
+    p.add_argument("ref", nargs="?")
+    p.add_argument("--file", help="konkrét szövegfájl a nyilvántartott kézirat helyett")
+    p.add_argument("--limit", type=int)
+    p.set_defaults(fn=cmd_refaudit)
 
     p = sub.add_parser("gaps", help="hiánylista: mi hiányzik és mi javítja")
     p.add_argument("ref", nargs="?")

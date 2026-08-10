@@ -230,7 +230,8 @@ document.addEventListener('change', async (e) => {
   const cb = e.target;
   if (!cb.matches('input[type=checkbox][data-kind]')) return;
   const li = cb.closest('li');
-  const path = cb.dataset.kind === 'check' ? '/api/checklist' : '/api/point';
+  const paths = {check: '/api/checklist', point: '/api/point', task: '/api/task'};
+  const path = paths[cb.dataset.kind];
   const res = await api(path, {id: Number(cb.dataset.id)});
   if (!res) { cb.checked = !cb.checked; return; }
   li.classList.toggle('is-done', !!(res.done || res.state === 'done'));
@@ -314,7 +315,7 @@ def archived_section(conn, live):
         items.append(
             f'<li><span class="txt">{esc(p["title"][:80])}'
             f'<code>{esc(p["slug"])}</code></span>'
-            + button("Visszaállítás", cmd=f"sm.py set {p['slug']} --unarchive",
+            + button("Visszaállítás", cmd=f"{L.CLI_NAME} set {p['slug']} --unarchive",
                      api={"path": "/api/project",
                           "body": {"id": p["id"], "field": "archived", "value": 0}})
             + "</li>")
@@ -326,7 +327,7 @@ def state_controls(p):
     """The work state as six one-click buttons; the current one is marked."""
     return "".join(
         button(L.PROJECT_STATE_LABEL[st],
-               cmd=f"sm.py state {p['slug']} {st}",
+               cmd=f"{L.CLI_NAME} state {p['slug']} {st}",
                api={"path": "/api/project",
                     "body": {"id": p["id"], "field": "state", "value": st}},
                cls="done" if p["state"] == st else "")
@@ -350,7 +351,7 @@ def verdict_controls(p, sub):
     """What the journal said — one button per verdict, current one marked."""
     return "".join(
         button(label,
-               cmd=f"sm.py submit {p['slug']} --status {status}",
+               cmd=f"{L.CLI_NAME} submit {p['slug']} --status {status}",
                api={"path": "/api/submission",
                     "body": {"id": sub["id"], "field": "status", "value": status}},
                cls="done" if sub["status"] == status else "")
@@ -376,7 +377,7 @@ def stage_track(p, sub):
         return ('<div class="track notstarted">'
                 '<span class="meta">A beadási folyamat még nem indult el.</span>'
                 + button("▶ Beadva — folyamat indítása",
-                         cmd=f"sm.py submit {p['slug']} --sent",
+                         cmd=f"{L.CLI_NAME} submit {p['slug']} --sent",
                          api={"path": "/api/submission",
                               "body": {"id": sub["id"], "field": "submitted",
                                        "value": 1}},
@@ -397,7 +398,7 @@ def stage_track(p, sub):
             target = STAGE_CLICK[key]
             cells.append(
                 f'<div class="stage {cls}">'
-                + button(inner, cmd=f"sm.py submit {p['slug']} --status {target}",
+                + button(inner, cmd=f"{L.CLI_NAME} submit {p['slug']} --status {target}",
                          api={"path": "/api/submission",
                               "body": {"id": sub["id"], "field": "status",
                                        "value": target}})
@@ -430,11 +431,11 @@ def next_steps(p, sub):
         + button("Újraírás", cmd=f"{L.CMD_PREFIX}context {p['slug']}",
                  cls="" if desk else "primary")
         + button("Korrekció",
-                 cmd=f"sm.py state {p['slug']} korrekcio",
+                 cmd=f"{L.CLI_NAME} state {p['slug']} korrekcio",
                  api={"path": "/api/project",
                       "body": {"id": p["id"], "field": "state", "value": "korrekcio"}})
         + button("Új beadási kör",
-                 cmd=f'sm.py submit {p["slug"]} --journal "..." --new')
+                 cmd=f'{L.CLI_NAME} submit {p["slug"]} --journal "..." --new')
         + "</div></div>")
 
 
@@ -445,14 +446,14 @@ def submission_controls(p, sub, live):
     """The chips that double as the one-click actions on a submission."""
     if sub is None:
         return chip("nincs beadás") + button(
-            "Beadás nyitása", cmd=f'sm.py submit {p["slug"]} --journal "..."',
+            "Beadás nyitása", cmd=f'{L.CLI_NAME} submit {p["slug"]} --journal "..."',
             cls="primary")
 
     out = []
     state = sub["cover_letter_state"]
     out.append(button(
         f"cover: {L.COVER_LABEL[state]}",
-        cmd=f'sm.py submit {p["slug"]} --cover-state {COVER_NEXT[state]}',
+        cmd=f'{L.CLI_NAME} submit {p["slug"]} --cover-state {COVER_NEXT[state]}',
         api={"path": "/api/submission",
              "body": {"id": sub["id"], "field": "cover_letter_state",
                       "value": COVER_NEXT[state]}},
@@ -461,14 +462,14 @@ def submission_controls(p, sub, live):
     if sub["submitted"]:
         out.append(button(
             f"✓ beküldve {sub['submitted_at'] or '?'}",
-            cmd=f'sm.py submit {p["slug"]} --unsent',
+            cmd=f'{L.CLI_NAME} submit {p["slug"]} --unsent',
             api={"path": "/api/submission",
                  "body": {"id": sub["id"], "field": "submitted", "value": 0}},
             cls="done"))
     else:
         out.append(button(
             "Beküldve? — jelöld be",
-            cmd=f'sm.py submit {p["slug"]} --sent',
+            cmd=f'{L.CLI_NAME} submit {p["slug"]} --sent',
             api={"path": "/api/submission",
                  "body": {"id": sub["id"], "field": "submitted", "value": 1}},
             cls="primary"))
@@ -477,6 +478,34 @@ def submission_controls(p, sub, live):
     if sub["due_at"]:
         out.append(due_chip(sub["due_at"]))
     return "".join(out)
+
+
+TASK_STATE_NEXT = {"open": "doing", "doing": "done", "done": "open", "dropped": "open"}
+
+
+def tasks_html(conn, p, live):
+    rows = L.tasks_of(conn, p["id"])
+    if not rows:
+        return ""
+    done, total = L.task_progress(conn, p["id"])
+    items = []
+    for t in rows:
+        cls = "is-done" if t["state"] == "done" else ("is-na" if t["state"] == "dropped" else "")
+        if live:
+            box = (f'<input type="checkbox" data-kind="task" data-id="{t["id"]}"'
+                   f'{" checked" if t["state"] == "done" else ""}>')
+        else:
+            box = f'<span class="ic">{ {"open":"○","doing":"◐","done":"●","dropped":"⊘"}[t["state"]] }</span>'
+        extra = []
+        if t["assignee"]:
+            extra.append(chip("@" + t["assignee"], "acc"))
+        if t["due_at"]:
+            extra.append(due_chip(t["due_at"]))
+        items.append(f'<li class="{cls}">{box}<span>{esc(t["title"])}</span>'
+                     f'{"".join(extra)}</li>')
+    return (f'<details{" open" if done < total else ""}>'
+            f'<summary>Részfeladatok — {bar_html(done, total)}</summary>'
+            f'<ul class="check">{"".join(items)}</ul></details>')
 
 
 def gaps_html(items):
@@ -507,7 +536,7 @@ def checklist_html(conn, p, sub, live):
         return ('<details><summary>Beadási checklist</summary>'
                 '<p class="meta">Nincs létrehozva.</p>'
                 + button("Checklist létrehozása",
-                         cmd=f"sm.py checklist init {p['slug']}",
+                         cmd=f"{L.CLI_NAME} checklist init {p['slug']}",
                          api={"path": "/api/checklist/init", "body": {"id": sub["id"]}},
                          cls="primary")
                 + "</details>")
@@ -527,7 +556,7 @@ def checklist_html(conn, p, sub, live):
         else:
             box = '<span class="ic">' + ("⊘" if r["na"] else
                                          ("●" if r["done"] else "○")) + "</span>"
-            na_btn = button("pipa", cmd=f"sm.py checklist set {p['slug']} {r['id']} --done",
+            na_btn = button("pipa", cmd=f"{L.CLI_NAME} checklist set {p['slug']} {r['id']} --done",
                             cls="na")
         items.append(f'<li class="{cls}">{box}<span>{esc(r["label"])}</span>{na_btn}</li>')
 
@@ -617,7 +646,7 @@ def build(conn, api_token=None):
             + (f' · ms {esc(sub["journal_ms_id"])}' if sub and sub["journal_ms_id"] else "")
             + "</div>"
             f'<div class="chips">{state_controls(p)}'
-            + button("Archiválás", cmd=f"sm.py set {p['slug']} --archive",
+            + button("Archiválás", cmd=f"{L.CLI_NAME} set {p['slug']} --archive",
                      api={"path": "/api/project",
                           "body": {"id": p["id"], "field": "archived", "value": 1}},
                      cls="ghost")
@@ -631,6 +660,7 @@ def build(conn, api_token=None):
             + "</div>"
             + next_steps(p, sub)
             + gaps_html(items)
+            + tasks_html(conn, p, live)
             + checklist_html(conn, p, sub, live)
             + reviews_html(conn, p, sub, live)
             + "</div>")
