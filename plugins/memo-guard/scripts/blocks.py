@@ -98,10 +98,7 @@ def connect() -> sqlite3.Connection:
     db = sqlite3.connect(db_path(), timeout=5.0)
     db.execute("PRAGMA journal_mode=WAL")
     db.executescript(SCHEMA)
-    try:
-        db_path().chmod(0o600)
-    except OSError:
-        pass
+    mg.secure_file(db_path())
     return db
 
 

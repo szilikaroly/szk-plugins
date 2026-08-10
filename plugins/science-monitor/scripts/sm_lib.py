@@ -55,6 +55,13 @@ def save_config(cfg):
         fh.write("\n")
     return CONFIG_PATH
 
+# Slash commands are namespaced by the plugin's own directory name, so a button
+# that emits f"{CMD_PREFIX}context" emits a command that does not exist. Kept as one
+# constant: a plugin rename must not silently break every button on the page.
+PLUGIN_NAME = "science-monitor"
+CMD_PREFIX = f"/{PLUGIN_NAME}:"
+
+
 # --- vocabulary -------------------------------------------------------------
 
 # Where a submission attempt stands. Ordered from earliest to terminal.
@@ -62,6 +69,7 @@ STATUSES = [
     "drafting",         # manuscript still being written
     "ready",            # complete, not sent
     "submitted",        # sent, no editor action yet
+    "desk_review",      # with the editor, not yet sent out
     "under_review",     # with reviewers
     "desk_rejection",   # refused by the editor without going to review
     "major_revision",
@@ -110,6 +118,7 @@ PROJECT_STATE_LABEL = {
 CATEGORIES = {
     "kutatas": "kutatás / kézirat",
     "tamogato": "támogató kutatás (nem kézirat)",
+    "eloadas": "konferencia-előadás",
     "eszkoz": "eszköz- és specialista-konfiguráció",
     "pelda": "platform példaprojekt",
 }
@@ -127,10 +136,35 @@ STATE_FROM_STATUS = {
     "ready": "kesz",
 }
 
+# The submission process, once "beadva" starts it. Each stage owns the statuses
+# that belong to it, so the track can show where a manuscript actually is.
+STAGES = [
+    ("beadva",   "Beadva",      ["submitted"]),
+    ("desk",     "Desk review", ["desk_review"]),
+    ("peer",     "Peer review", ["under_review"]),
+    ("revizio",  "Revízió",     ["major_revision", "minor_revision", "revision_sent"]),
+    ("dontes",   "Döntés",      ["accepted", "rejected", "desk_rejection", "withdrawn"]),
+]
+STAGE_OF = {st: key for key, _, sts in STAGES for st in sts}
+STAGE_ORDER = [key for key, _, _ in STAGES]
+
+
+def stage_index(status):
+    """How far along the submission process a status sits. -1 = not started."""
+    key = STAGE_OF.get(status)
+    return STAGE_ORDER.index(key) if key else -1
+
+
 FILE_ROLES = [
     "manuscript", "cover_letter", "response", "supplement",
     "figure", "table", "refs", "data", "code", "session", "other",
 ]
+
+SEARCH_SOURCES = [
+    "pubmed", "web", "scopus", "wos", "embase", "cochrane",
+    "europepmc", "crossref", "clinicaltrials", "other",
+]
+SEARCH_PURPOSES = ["topic", "verification", "journal-selection", "citation-chase"]
 
 REVIEW_STATES = ["open", "in_progress", "answered"]
 POINT_STATES = ["open", "drafted", "done", "declined"]
@@ -257,6 +291,22 @@ CREATE TABLE IF NOT EXISTS checklist (
   UNIQUE(submission_id, label)
 );
 
+CREATE TABLE IF NOT EXISTS search_log (
+  id         INTEGER PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  ran_at     TEXT NOT NULL DEFAULT '',
+  source     TEXT NOT NULL DEFAULT 'web',
+  query      TEXT NOT NULL,
+  filters    TEXT NOT NULL DEFAULT '',
+  hits       INTEGER NOT NULL DEFAULT 0,
+  kept       INTEGER NOT NULL DEFAULT 0,
+  purpose    TEXT NOT NULL DEFAULT 'topic',
+  notes      TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  UNIQUE(project_id, source, query)
+);
+
+CREATE INDEX IF NOT EXISTS idx_searchlog_project ON search_log(project_id);
 CREATE INDEX IF NOT EXISTS idx_checklist_sub ON checklist(submission_id);
 CREATE INDEX IF NOT EXISTS idx_sub_project ON submissions(project_id);
 CREATE INDEX IF NOT EXISTS idx_files_project ON files(project_id);
@@ -396,6 +446,7 @@ STATUS_LABEL = {
     "drafting": "írás alatt",
     "ready": "kész, nincs beküldve",
     "submitted": "beküldve",
+    "desk_review": "desk review (szerkesztőnél)",
     "under_review": "peer-review alatt",
     "desk_rejection": "desk rejection",
     "major_revision": "major revision",
@@ -444,6 +495,19 @@ CHECKLIST_BASE = [
 ]
 
 # Extra items that only apply to certain article types.
+# A talk is not a manuscript: no cover letter, no reviewers. What it does have
+# is a form with a hard deadline, an abstract to a length, and a deck.
+CHECKLIST_PRESENTATION = [
+    "Bejelentőlap kitöltve",
+    "Bejelentőlap aláírva és beküldve a szervezőnek",
+    "Absztrakt a kiírt terjedelemben",
+    "Társszerzők jóváhagyták",
+    "Prezentáció elkészült",
+    "A kongresszus / intézmény sablonja szerinti formátum",
+    "Előadás időtartama ellenőrizve",
+    "Összeférhetetlenségi nyilatkozat",
+]
+
 CHECKLIST_BY_KIND = {
     "systematic-review": [
         "PRISMA 2020 flow diagram a tényleges számokkal",
@@ -474,9 +538,12 @@ CHECKLIST_BY_KIND = {
 }
 
 
-def seed_checklist(conn, submission_id, kind):
+def seed_checklist(conn, submission_id, kind, category="kutatas"):
     """Create the checklist rows for a submission. Existing rows are kept."""
-    items = CHECKLIST_BASE + CHECKLIST_BY_KIND.get(kind, [])
+    if category == "eloadas":
+        items = CHECKLIST_PRESENTATION
+    else:
+        items = CHECKLIST_BASE + CHECKLIST_BY_KIND.get(kind, [])
     for i, label in enumerate(items):
         conn.execute(
             "INSERT OR IGNORE INTO checklist (submission_id, idx, label) VALUES (?,?,?)",
@@ -522,12 +589,30 @@ def gaps(conn, project, sub):
         add("warn", f"{len(missing)} nyilvántartott fájl nincs meg a lemezen",
             fix=f"sm.py show {slug}")
 
+    if (project["category"] if "category" in project.keys() else "") == "eloadas":
+        if sub is None:
+            add("blocker", "Nincs rögzítve, melyik kongresszusra megy",
+                fix=f'sm.py submit {slug} --journal "..." --due YYYY-MM-DD')
+            return out
+        d = days_until(sub["due_at"])
+        if not sub["submitted"]:
+            sev = "blocker" if (d is None or d <= 7) else "warn"
+            late = " — A HATÁRIDŐ LEJÁRT" if (d is not None and d < 0) else ""
+            add(sev, f"A bejelentőlap nincs beküldve{late}",
+                fix=f"sm.py submit {slug} --sent")
+        done, total = checklist_progress(conn, sub["id"])
+        if total and done < total:
+            add("warn" if not sub["submitted"] else "info",
+                f"Előadás-checklist: {total - done} tétel nyitva",
+                fix=f"sm.py checklist show {slug}")
+        return out
+
     if not manuscript_work:
         return out
 
     if not files_of(conn, project["id"], "manuscript"):
         add("blocker", "Nincs nyilvántartva kézirat-fájl",
-            ask=f"/sm:scan {project['root_path']}" if project["root_path"] else None)
+            ask=f"{CMD_PREFIX}scan {project['root_path']}" if project["root_path"] else None)
 
     if sub is None:
         add("warn", "Nincs megnyitott beadás",
@@ -552,7 +637,7 @@ def gaps(conn, project, sub):
 
     if sub["submitted"] and not sub["journal_ms_id"]:
         add("info", "Nincs rögzítve a folyóirat kéziratazonosítója",
-            fix=f'sm.py submit {slug} --ms-id "..."', ask="/sm:inbox")
+            fix=f'sm.py submit {slug} --ms-id "..."', ask=f"{CMD_PREFIX}inbox")
     if sub["submitted"] and not sub["submitted_at"]:
         add("info", "Beküldve, de dátum nélkül",
             fix=f"sm.py submit {slug} --sent --date YYYY-MM-DD")
@@ -563,23 +648,23 @@ def gaps(conn, project, sub):
     revs = open_reviews(conn, sub["id"])
     if sub["status"] in NEEDS_ACTION and not revs:
         add("blocker", "Revíziót kértek, de nincs betöltve bírálói levél",
-            ask=f"/sm:review {slug}")
+            ask=f"{CMD_PREFIX}review {slug}")
     if sub["status"] in REJECTED:
         which = ("Desk rejection" if sub["status"] == "desk_rejection"
                  else "Bírálat utáni elutasítás")
         add("warn", f"{which} — nincs kijelölve új folyóirat",
-            ask=f"/sm:journal {slug}")
+            ask=f"{CMD_PREFIX}journal {slug}")
     for rv in revs:
         rdone, rtotal = point_progress(conn, rv["id"])
         if rtotal == 0:
             add("blocker", f"A #{rv['id']} bírálat nincs pontokra bontva",
-                ask=f"/sm:review {slug}")
+                ask=f"{CMD_PREFIX}review {slug}")
         elif rdone < rtotal:
             d = days_until(rv["due_at"])
             sev = "blocker" if (d is not None and d <= 14) else "warn"
             add(sev, f"{rtotal - rdone} megválaszolatlan bírálói pont"
                      + (f", {d} nap a határidőig" if d is not None else ""),
-                ask=f"/sm:respond {rv['id']}")
+                ask=f"{CMD_PREFIX}respond {rv['id']}")
     if sub["status"] in NEEDS_ACTION and not sub["due_at"]:
         add("warn", "Revízió határidő nélkül",
             fix=f"sm.py submit {slug} --due YYYY-MM-DD")
@@ -604,7 +689,7 @@ def suggest_state(conn, project, sub):
             if any(g["severity"] == "blocker" for g in gaps(conn, project, sub)):
                 return "hianypotlas", False
             return "kesz", False
-        if mapped or sub["status"] in ("submitted", "under_review"):
+        if mapped or sub["status"] in ("submitted", "desk_review", "under_review"):
             return "folyamatban", False
     if any(g["severity"] == "blocker" for g in gaps(conn, project, sub)):
         return "hianypotlas", False

@@ -91,7 +91,7 @@ def cmd_status(conn, args):
                 actionable.append((p, sub, rv, done, total))
             if sub["status"] in L.NEEDS_ACTION and not L.open_reviews(conn, sub["id"]):
                 print("    ⚠ revision kért, de nincs betöltve bírálói levél "
-                      f"→ `/sm:review {p['slug']}`")
+                      f"→ `{L.CMD_PREFIX}review {p['slug']}`")
         print()
 
     if actionable:
@@ -265,7 +265,7 @@ def cmd_submit(conn, args):
         )
         sub = conn.execute("SELECT * FROM submissions WHERE project_id = ? AND seq = ?",
                            (p["id"], seq)).fetchone()
-        n = L.seed_checklist(conn, sub["id"], p["kind"])
+        n = L.seed_checklist(conn, sub["id"], p["kind"], p["category"])
         L.log_event(conn, p["id"], "submission_opened", f"#{seq} → {args.journal}", sub["id"])
         print(f"új beadás nyitva: #{seq} → {args.journal} ({n} tételes checklisttel)")
 
@@ -863,7 +863,7 @@ def cmd_checklist(conn, args):
     sub = _resolve_submission(conn, p["id"], args.seq)
 
     if args.action == "init":
-        n = L.seed_checklist(conn, sub["id"], p["kind"])
+        n = L.seed_checklist(conn, sub["id"], p["kind"], p["category"])
         conn.commit()
         print(f"checklist kész: {n} tétel ({p['kind']} típusra szabva)")
         return
@@ -1198,6 +1198,22 @@ def build_parser():
     rs.add_parser("list")
     p.set_defaults(fn=cmd_review)
 
+    p = sub.add_parser("searchlog", help="irodalomkeresési napló (audit trail)")
+    p.add_argument("action", choices=["add", "import", "show", "methods"])
+    p.add_argument("ref")
+    p.add_argument("--query")
+    p.add_argument("--source", default="pubmed", choices=L.SEARCH_SOURCES)
+    # No default: `show` must not silently filter to one purpose. `add`/`import`
+    # fall back to "topic" themselves.
+    p.add_argument("--purpose", choices=L.SEARCH_PURPOSES)
+    p.add_argument("--filters", help="dátumtartomány, nyelv, publikációtípus")
+    p.add_argument("--hits", type=int, default=0)
+    p.add_argument("--kept", type=int, default=0)
+    p.add_argument("--ran-at", dest="ran_at", help="a keresés dátuma (alap: ma)")
+    p.add_argument("--notes")
+    p.add_argument("--json", dest="json_file", help="import: JSON fájl")
+    p.set_defaults(fn=cmd_searchlog)
+
     p = sub.add_parser("respond", help="response-to-reviewers vázlat")
     p.add_argument("review_id", type=int)
     p.add_argument("--out")
@@ -1277,6 +1293,126 @@ def build_parser():
     p.set_defaults(fn=cmd_serve)
 
     return ap
+
+
+# ---------------------------------------------------------------- searchlog
+
+def _searchlog_rows(conn, project_id, purpose=None):
+    sql = "SELECT * FROM search_log WHERE project_id = ?"
+    vals = [project_id]
+    if purpose:
+        sql += " AND purpose = ?"
+        vals.append(purpose)
+    return conn.execute(sql + " ORDER BY ran_at, id", vals).fetchall()
+
+
+def _searchlog_insert(conn, pid, item):
+    """Upsert one search record. Re-running the same query updates its counts."""
+    conn.execute(
+        "INSERT INTO search_log (project_id, ran_at, source, query, filters, hits, "
+        "kept, purpose, notes, created_at) VALUES (?,?,?,?,?,?,?,?,?,?) "
+        "ON CONFLICT(project_id, source, query) DO UPDATE SET "
+        "hits = excluded.hits, kept = excluded.kept, filters = excluded.filters, "
+        "purpose = excluded.purpose, "
+        "ran_at = CASE WHEN excluded.ran_at != '' THEN excluded.ran_at ELSE search_log.ran_at END, "
+        "notes = CASE WHEN excluded.notes != '' THEN excluded.notes ELSE search_log.notes END",
+        (pid, item.get("ran_at", ""), item.get("source", "web"), item["query"],
+         item.get("filters", ""), int(item.get("hits", 0) or 0),
+         int(item.get("kept", 0) or 0), item.get("purpose", "topic"),
+         item.get("notes", ""), L.now()))
+
+
+def cmd_searchlog(conn, args):
+    project = L.get_project(conn, args.ref)
+    pid = project["id"]
+
+    if args.action == "add":
+        _searchlog_insert(conn, pid, {
+            "ran_at": args.ran_at or L.today(), "source": args.source,
+            "query": args.query, "filters": args.filters or "",
+            "hits": args.hits, "kept": args.kept,
+            "purpose": args.purpose or "topic", "notes": args.notes or ""})
+        conn.commit()
+        print(f"keresés rögzítve [{args.source}/{args.purpose or 'topic'}]: {args.query[:70]}")
+        return
+
+    if args.action == "import":
+        if args.json_file:
+            with open(os.path.expanduser(args.json_file), encoding="utf-8") as fh:
+                payload = json.load(fh)
+        else:
+            payload = json.load(sys.stdin)
+        # Accept {"searches": [...]}, a bare list, or {"query": hits} mapping.
+        if isinstance(payload, dict):
+            payload = payload.get("searches", payload)
+        if isinstance(payload, dict):
+            payload = [{"query": q, "hits": n} for q, n in payload.items()]
+        n = 0
+        for item in payload:
+            item.setdefault("source", args.source)
+            item.setdefault("purpose", args.purpose or "topic")
+            item.setdefault("ran_at", args.ran_at or "")
+            _searchlog_insert(conn, pid, item)
+            n += 1
+        conn.commit()
+        print(f"{n} keresés betöltve — {project['slug']}")
+        return
+
+    rows = _searchlog_rows(conn, pid, args.purpose if args.action == "show" else None)
+    if not rows:
+        L.die(f"nincs rögzített keresés ehhez: {project['slug']} — "
+              f"`sm.py searchlog add {project['slug']} --query ... --hits N`")
+
+    if args.action == "show":
+        print(f"KERESÉSI NAPLÓ — {project['title'][:70]}")
+        print(f"  {len(rows)} keresés · {sum(r['hits'] for r in rows)} találati tétel")
+        cur = None
+        for r in rows:
+            if r["purpose"] != cur:
+                cur = r["purpose"]
+                sub = [x for x in rows if x["purpose"] == cur]
+                print(f"\n  — {cur} ({len(sub)} keresés, {sum(x['hits'] for x in sub)} tétel) —")
+            keep = f" → megtartva {r['kept']}" if r["kept"] else ""
+            when = f"{r['ran_at']} " if r["ran_at"] else ""
+            print(f"  [{r['source']:>10}] {when}{r['hits']:>3} találat{keep}")
+            print(f"       {r['query']}")
+            if r["filters"]:
+                print(f"       szűrők: {r['filters']}")
+        return
+
+    # methods: paste-ready search-strategy paragraph
+    topic = [r for r in rows if r["purpose"] in ("topic", "citation-chase")]
+    verif = [r for r in rows if r["purpose"] == "verification"]
+    other = [r for r in rows if r["purpose"] == "journal-selection"]
+    srcs = sorted({r["source"] for r in topic}) or ["web"]
+    dates = sorted({r["ran_at"] for r in topic if r["ran_at"]})
+    span = f"between {dates[0]} and {dates[-1]}" if len(dates) > 1 else (
+        f"on {dates[0]}" if dates else "")
+    # `kept` is attributed per query, so it is only summed within a purpose —
+    # never across all rows, which would conflate the original sweep with later
+    # verification searches and overstate what the log actually knows.
+    kept_topic = sum(r["kept"] for r in topic)
+    kept_verif = sum(r["kept"] for r in verif)
+
+    print("% --- Search strategy (paste into Materials and Methods) ---")
+    print(f"Literature was identified through {len(topic)} searches "
+          f"({', '.join(srcs)}) {span}, which surfaced {sum(r['hits'] for r in topic)} "
+          f"records in total.", end=" ")
+    if kept_topic:
+        print(f"Screening against the inclusion criteria retained {kept_topic} "
+              f"of these.", end=" ")
+    if verif:
+        print(f"A further {len(verif)} targeted searches were run to verify "
+              f"specific claims"
+              + (f", adding {kept_verif} references" if kept_verif else "")
+              + ".", end=" ")
+    print("\n")
+    print("% Full query list:")
+    for i, r in enumerate(topic + verif, 1):
+        print(f"%  {i:2d}. [{r['source']}] {r['query']}  ({r['hits']} hits)")
+    if other:
+        print(f"% ({len(other)} further searches were run for journal selection "
+              f"and are not part of the evidence base.)")
 
 
 def main():

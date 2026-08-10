@@ -6,9 +6,9 @@ nincs még megválaszolva.
 
 Két dolgot old meg, ami eddig fejben volt:
 
-- **`/sm:context SLUG`** — egy kézirat teljes munkakontextusát behívja a
+- **`/science-monitor:context SLUG`** — egy kézirat teljes munkakontextusát behívja a
   sessionbe, egy lépésben, mérethatárral (nem önti be a 98 fájlt).
-- **`/sm:review SLUG levél.txt`** — a beérkező bírálatot pontokra bontja,
+- **`/science-monitor:review SLUG levél.txt`** — a beérkező bírálatot pontokra bontja,
   eltárolja, és onnantól követhető, melyikre van válasz.
 
 Az adat lokális SQLite: `~/.science-monitor/monitor.db`. Semmi nem megy sehova.
@@ -17,17 +17,17 @@ Az adat lokális SQLite: `~/.science-monitor/monitor.db`. Semmi nem megy sehova.
 
 | Parancs | Mit csinál |
 |---|---|
-| `/sm:status` | Áttekintés: hol tart mi, mi sürgős |
-| `/sm:scan [MAPPA]` | Kézirat-projektek keresése a lemezen, felvétele |
-| `/sm:import MANIFEST` | Claude Science munkaegység-export beolvasása |
-| `/sm:context SLUG` | Kontextus behívása a sessionbe |
-| `/sm:submit SLUG` | Beadás rögzítése: folyóirat, cover letter, beküldve-e |
-| `/sm:review SLUG [levél]` | Bírálat felvétele és pontokra bontása |
-| `/sm:respond REVIEW_ID` | Response-to-reviewers összeállítása |
-| `/sm:inbox` | Outlook/O365 (és Gmail) átnézése szerkesztői döntésekért (csak olvas) |
-| `/sm:dashboard` | Dashboard — hiánylisták, checklistek, kattintható gombok |
-| `/sm:journal SLUG` | Célújság választás — folyóirat-illesztés bizonyítékból |
-| `/sm:repo pull\|push` | Szinkron a szerzőtársakkal egy közös git repón át |
+| `/science-monitor:status` | Áttekintés: hol tart mi, mi sürgős |
+| `/science-monitor:scan [MAPPA]` | Kézirat-projektek keresése a lemezen, felvétele |
+| `/science-monitor:import MANIFEST` | Claude Science munkaegység-export beolvasása |
+| `/science-monitor:context SLUG` | Kontextus behívása a sessionbe |
+| `/science-monitor:submit SLUG` | Beadás rögzítése: folyóirat, cover letter, beküldve-e |
+| `/science-monitor:review SLUG [levél]` | Bírálat felvétele és pontokra bontása |
+| `/science-monitor:respond REVIEW_ID` | Response-to-reviewers összeállítása |
+| `/science-monitor:inbox` | Outlook/O365 (és Gmail) átnézése szerkesztői döntésekért (csak olvas) |
+| `/science-monitor:dashboard` | Dashboard — hiánylisták, checklistek, kattintható gombok |
+| `/science-monitor:journal SLUG` | Célújság választás — folyóirat-illesztés bizonyítékból |
+| `/science-monitor:repo pull\|push` | Szinkron a szerzőtársakkal egy közös git repón át |
 
 ### A dashboard két módja
 
@@ -45,14 +45,25 @@ tetején), **archiválás** és visszaállítás, a szerkesztői **verdikt** rö
 elutasítva — dátummal együtt), checklist-tétel pipálása vagy `n/a`-ra tétele,
 bírálói pont lezárása, cover letter állapotának léptetése, beküldve-jelölés.
 
+**A „Beadva" elindítja a folyamatot.** Amíg nincs beküldve, csak egy indítógomb
+látszik. Utána a kártyán a beadási sáv:
+
+> Beadva → Desk review → Peer review → Revízió → Döntés
+
+Minden állomás kattintható, az aktuális kiemelve, a mögöttesek zölddel. A
+folyamaton belüli bármely státusz beállítása magától jelzi, hogy a csomag
+kiment — a sáv és a `submitted` mező nem mondhat ellent egymásnak. A Döntés
+állomás nem kattintható egyetlen értékre, mert három valódi kimenete van; azok
+a verdikt-soron maradnak.
+
 **Elutasítás után** a kártyán megjelenik egy „Tovább innen" doboz a három valódi
-lehetőséggel: **célújság választás** (`/sm:journal`), **újraírás**, **korrekció**
+lehetőséggel: **célújság választás** (`/science-monitor:journal`), **újraírás**, **korrekció**
 — plusz új beadási kör nyitása. Desk rejectionnél a célújság-váltás az
 alapértelmezés, bírálat utáni elutasításnál az újraírás.
 
 A checklistek alapból **összecsukva** vannak, nyíló szakaszként.
 Amit nem — kontextus behívása, bírálat pontokra bontása, válaszlevél — az a
-Claude Code dolga, azokra a gomb a `/sm:` parancsot másolja.
+Claude Code dolga, azokra a gomb a `/science-monitor:` parancsot másolja.
 
 Mind egy-egy `scripts/sm.py` alparancs, tehát terminálból is megy:
 
@@ -92,7 +103,7 @@ folyóirat = új `seq`, a régi megmarad a történetben). Itt van külön mező
 
 **files** — a projekt fájljai szerep szerint (`manuscript`, `cover_letter`,
 `response`, `supplement`, `figure`, `table`, `refs`, `data`, `code`, `other`).
-A `/sm:context` ebből építi az olvasási tervet.
+A `/science-monitor:context` ebből építi az olvasási tervet.
 
 **reviews** + **review_points** — a beérkezett levél és a belőle kibontott
 pontok. Pontonként: bíráló, sorszám, súlyosság, mit érint, a válasz, a
@@ -119,7 +130,7 @@ sm.py submit endo-ai-framework --journal "Frontiers in Reproductive Health" \
 sm.py submit endo-ai-framework --sent          # tényleg elment
 sm.py review add endo-ai-framework --file letter.txt \
      --decision major_revision --due 2026-09-15
-sm.py review points 1 --json points.json       # a /sm:review bontja ki
+sm.py review points 1 --json points.json       # a /science-monitor:review bontja ki
 sm.py respond 1                                # válaszlevél váza
 ```
 
@@ -128,7 +139,7 @@ sm.py respond 1                                # válaszlevél váza
 - A `scan` heurisztikus. Előbb szárazon fut, és csak `--apply` esetén ír — a
   javaslatot nézd át (egy kódmappa is bekerülhet, ha van benne `.docx`).
   Egyetlen kész beadási csomagra: `sm.py scan MAPPA --single --apply`.
-- A `/sm:inbox` **csak olvassa** a postafiókot — elsődlegesen az Outlook/O365
+- A `/science-monitor:inbox` **csak olvassa** a postafiókot — elsődlegesen az Outlook/O365
   fiókot (a `config mail_address` / `mail_provider` szerint — általában a
   levelező szerzői cím, ami gyakran nem az, amivel be vagy jelentkezve). Nem küld, nem válaszol, nem címkéz, nem törli. Portálra semmit nem
   tölt fel, és a kiadói „transfer recommendation" ajánlatokra nem lép.
@@ -181,5 +192,5 @@ sm.py config sync_roles manuscript,cover_letter,response,supplement,refs
 
 ## Telepítés
 
-A `szk-plugins` marketplace része. Bekapcsolás után a `/sm:` parancsok
+A `szk-plugins` marketplace része. Bekapcsolás után a `/science-monitor:` parancsok
 elérhetők. Külső függőség nincs, csak a rendszer Python 3-a.

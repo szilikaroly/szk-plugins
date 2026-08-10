@@ -148,16 +148,19 @@ class Handler(BaseHTTPRequestHandler):
             if not sub:
                 raise ValueError("nincs ilyen beadás")
             conn.execute(f"UPDATE submissions SET {field} = ? WHERE id = ?", (value, sid))
+            # Any status inside the submission process implies the package went
+            # out — that is what "beadva" means, and it is what starts the track.
+            if field == "status" and L.stage_index(value) >= 0 and not sub["submitted"]:
+                conn.execute(
+                    "UPDATE submissions SET submitted = 1, "
+                    "submitted_at = COALESCE(NULLIF(submitted_at, ''), ?) WHERE id = ?",
+                    (L.today(), sid))
             # An editorial verdict is a dated fact, not just a status word.
             if field == "status" and value in (
                     L.REJECTED | L.NEEDS_ACTION | {"accepted"}):
                 conn.execute(
                     "UPDATE submissions SET decision = ?, decision_at = ? WHERE id = ?",
                     (value, sub["decision_at"] or L.today(), sid))
-                if not sub["submitted"]:
-                    conn.execute("UPDATE submissions SET submitted = 1, "
-                                 "submitted_at = COALESCE(NULLIF(submitted_at, ''), ?) "
-                                 "WHERE id = ?", (L.today(), sid))
             # Marking it sent without a date would leave the record half-built.
             if field == "submitted" and value == 1:
                 if not sub["submitted_at"]:
@@ -223,7 +226,7 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError("nincs ilyen beadás")
             p = conn.execute("SELECT * FROM projects WHERE id = ?",
                              (sub["project_id"],)).fetchone()
-            L.seed_checklist(conn, sid, p["kind"])
+            L.seed_checklist(conn, sid, p["kind"], p["category"])
             conn.commit()
             return {"ok": True, "reload": True}
 

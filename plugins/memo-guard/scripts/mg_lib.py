@@ -39,6 +39,48 @@ def data_dir() -> Path:
     return p
 
 
+# --------------------------------------------------------------------------- platform
+
+def machine_name() -> str:
+    """This machine's name. `os.uname()` does not exist on Windows at all —
+    not a wrong value, an AttributeError — so it must not appear anywhere that
+    a Windows user can reach, which is everywhere."""
+    import platform
+    return platform.node() or "unknown"
+
+
+def secure_file(path: Path) -> bool:
+    """Restrict a file to its owner. Returns whether that actually happened.
+
+    `chmod(0o600)` is what protects memory.db, claims.db and keys files, and it
+    does nothing useful on Windows — os.chmod there only toggles the read-only
+    attribute, so the file stays readable by every account on the machine. The
+    call is kept because it is correct on POSIX, but the return value is honest
+    so the docs can be, too. Windows needs an ACL (icacls) to get the same
+    guarantee, which is not something this should do behind the user's back.
+    """
+    try:
+        path.chmod(0o600)
+    except OSError:
+        return False
+    return os.name != "nt"
+
+
+def detached_kwargs() -> dict:
+    """Keyword arguments that detach a child process, per platform.
+
+    `start_new_session=True` is POSIX-only and raises ValueError on Windows,
+    so a background worker spawned this way would not merely fail to detach —
+    it would not start.
+    """
+    if os.name == "nt":
+        flags = 0
+        for name in ("CREATE_NEW_PROCESS_GROUP", "DETACHED_PROCESS"):
+            flags |= getattr(subprocess, name, 0)
+        return {"creationflags": flags} if flags else {}
+    return {"start_new_session": True}
+
+
 def sessions_dir() -> Path:
     p = data_dir() / "sessions"
     p.mkdir(parents=True, exist_ok=True)
@@ -86,14 +128,18 @@ DEFAULTS = {
     # fires unconditionally so a session can never end up with nothing.
     "adaptive": False,
     "hard_floor": 90,
-    # Long-term memory (memory.py). Promotion is explicit by default: a memory
-    # that fills itself is a memory you cannot trust. Turning this on takes only
-    # claims at or above auto_promote_utility, and only from the local-model
-    # pipeline where a utility score actually exists.
     # Core memory blocks (blocks.py) injected on every SessionStart. These cost
     # tokens every turn, which is the price of not having to know to ask.
     "core_memory": True,
     "core_memory_max_chars": 2000,
+    # Push the knowledge base to the private data repo after every write.
+    # Off until sync.py --setup has run; the worker coalesces a burst of
+    # writes into one commit so "after every write" never blocks a write.
+    "sync": False,
+    # Long-term memory (memory.py). Promotion is explicit by default: a memory
+    # that fills itself is a memory you cannot trust. Turning this on takes only
+    # claims at or above auto_promote_utility, and only from the local-model
+    # pipeline where a utility score actually exists.
     "auto_promote": False,
     "auto_promote_utility": 0.75,
     "auto_promote_max": 5,
@@ -326,7 +372,7 @@ def spawn_background(script: Path, args: list[str]) -> None:
     with (logd / "compressor.log").open("ab") as lf:
         subprocess.Popen([sys.executable, str(script), *args],
                          stdout=lf, stderr=lf,
-                         start_new_session=True, env=dict(os.environ))
+                         env=dict(os.environ), **detached_kwargs())
 
 
 def est_tokens(text_or_bytes) -> int:

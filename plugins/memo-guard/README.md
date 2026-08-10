@@ -239,6 +239,14 @@ metrics.jsonl                                every run, auditable
   only a safe length — `SAFE_CHARS`, with chunking above it. Re-run
   `embed.py --truncation-test` after any model change; the cut depends on
   Ollama's context defaults, not just the model.
+- **On Windows the `0600` file mode does not protect anything.** `os.chmod`
+  there only toggles the read-only attribute, so `memory.db` — which holds
+  material from every project — stays readable by every account on the machine.
+  The call is still made because it is correct on macOS and Linux, and
+  `mg_lib.secure_file()` returns whether it really applied. Getting the same
+  guarantee on Windows needs an ACL (`icacls`), which this does not set behind
+  your back. If you sync a knowledge base to a shared Windows box, set it
+  yourself.
 - **The retrieval floor is calibrated, not universal.** `SEMANTIC_FLOOR = 0.48`
   sits in a measured gap (relevant queries scored 0.562–0.724, nonsense queries
   0.320–0.408) — but that was a handful of facts. Re-check it against your own
@@ -291,6 +299,49 @@ cognify.py --run [--all] [--no-model]
 memify.py  --run [--hard]        # --hard actually deletes; default reports
 broker.py  --route               # which model each task gets, from measured VRAM
 ```
+
+## Syncing across machines
+
+`sync.py` keeps the knowledge base in a **private** git repo, separate from this
+public one. Nothing about this is optional: `memory.db` holds facts from every
+project the plugin has ever seen, so the data repo must not be the code repo.
+
+```bash
+sync.py --setup <user>/<private-repo>    # clone or create, private
+sync.py --push / --pull / --status
+```
+
+Then set `"sync": true` in `config.json`. Writes call `--request`, which marks
+the store dirty and returns immediately; a detached worker pushes after an
+8-second coalescing window, so a burst of ten promotions becomes one commit and
+no write ever waits on the network.
+
+**The database itself is never committed.** SQLite is binary and does not merge —
+two machines editing it produces silent loss, not a conflict you can see. It is
+exported to deterministic JSON, one file per project, which is the same strategy
+science-monitor's `repo.py` uses and for the same reason: two machines working
+on different projects never touch the same file.
+
+Three things this got wrong first, all of them now fixed and all worth knowing
+if you extend it:
+
+- **Row ids are not portable.** `fact.id` is a local AUTOINCREMENT, so machine
+  A's fact 5 is not machine B's. Edges exported by id would attach to whatever
+  held that number elsewhere — worse than not syncing, because it looks like it
+  worked. Everything is keyed by content fingerprint and resolved locally.
+- **Union merge alone makes deletion impossible.** Anything removed came back on
+  the next pull from any machine that still had it, so `--forget` and
+  `memify --hard` were silently undone. Deletions now leave a tombstone, which
+  travels with the data. Tombstones store the fingerprint only — never the text,
+  which would re-leak what was removed.
+- **A brand-new remote has no `main` to pull from,** and treating that as an
+  error meant the very first push could never happen. Setup deadlocked
+  permanently until the remote was checked before pulling.
+
+Order matters in `push()`: pull → import → export → commit. The file git commits
+is regenerated from the already-merged database, so concurrent edits to the same
+project produce a union rather than a conflict. Verified with two machines
+editing one project: both ended with the same four facts, nothing lost.
 
 ## The broker
 

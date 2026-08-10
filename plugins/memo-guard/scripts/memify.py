@@ -110,13 +110,12 @@ def prune(db: sqlite3.Connection, hard: bool = False) -> dict:
     removed = 0
     if hard:
         for c in cands:
-            db.execute("DELETE FROM fact_vec WHERE fact_id=?", (c["id"],))
             db.execute("DELETE FROM fact_entity WHERE fact_id=?", (c["id"],))
-            db.execute("DELETE FROM edge WHERE src=? OR dst=?", (c["id"], c["id"]))
             db.execute("DELETE FROM coaccess WHERE a=? OR b=?", (c["id"], c["id"]))
-            db.execute("DELETE FROM fact_fts WHERE rowid=?", (c["id"],))
-            db.execute("DELETE FROM fact WHERE id=?", (c["id"],))
-            removed += 1
+            # forget() also writes the tombstone, so a hard prune on one machine
+            # is not undone by the next sync from another.
+            if mem.forget(db, c["id"]):
+                removed += 1
     # Dangling structure goes regardless: an edge to a fact that no longer
     # exists is not a link, it is a lie the graph tells during expansion.
     orphan_edges = db.execute(

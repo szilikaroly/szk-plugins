@@ -149,6 +149,27 @@ button.act.ghost:hover { color:var(--bad); border-color:var(--bad); }
   color:var(--ink); }
 .addbox input[name=title] { flex:1; min-width:260px; }
 .archived a { color:var(--muted); }
+.track { border:1px solid var(--line); border-radius:10px; padding:10px 12px;
+  margin-bottom:12px; }
+.track.notstarted { display:flex; gap:10px; align-items:center; flex-wrap:wrap;
+  border-style:dashed; }
+.track.notstarted .meta { margin:0; }
+.trackhead { font-size:.68rem; text-transform:uppercase; letter-spacing:.08em;
+  color:var(--muted); margin-bottom:8px; }
+.stages { display:flex; align-items:stretch; gap:0; flex-wrap:wrap; }
+.stage { flex:1; min-width:104px; text-align:center; padding:6px 4px;
+  border-top:3px solid var(--line); position:relative; }
+.stage + .stage { margin-left:4px; }
+.stage.past { border-top-color:var(--ok); }
+.stage.past button.act { color:var(--ok); border-color:transparent;
+  background:transparent; }
+.stage.now { border-top-color:var(--accent); }
+.stage.now button.act, .stage.now .lbl { color:var(--accent); font-weight:600;
+  border-color:var(--accent); }
+.stage.todo button.act, .stage.todo .lbl { color:var(--muted);
+  border-color:transparent; background:transparent; }
+.stage .lbl { display:block; font-size:.72rem; padding:3px 10px; }
+.stage .sub { display:block; font-size:.65rem; color:var(--muted); margin-top:2px; }
 """
 
 JS = """
@@ -336,6 +357,56 @@ def verdict_controls(p, sub):
         for status, label in VERDICT_BUTTONS)
 
 
+# Clicking a stage sets the status that stage represents. The decision stage has
+# three real outcomes, so it stays on the verdict row rather than guessing one.
+STAGE_CLICK = {"beadva": "submitted", "desk": "desk_review",
+               "peer": "under_review", "revizio": "major_revision"}
+
+
+def stage_track(p, sub):
+    """The submission process, from 'beadva' onwards.
+
+    Before submission there is no process to show — only a button that starts
+    it. That is the point: 'beadva' is what turns a manuscript into a live
+    submission with an editor on the other end.
+    """
+    if sub is None:
+        return ""
+    if not sub["submitted"]:
+        return ('<div class="track notstarted">'
+                '<span class="meta">A beadási folyamat még nem indult el.</span>'
+                + button("▶ Beadva — folyamat indítása",
+                         cmd=f"sm.py submit {p['slug']} --sent",
+                         api={"path": "/api/submission",
+                              "body": {"id": sub["id"], "field": "submitted",
+                                       "value": 1}},
+                         cls="primary") + "</div>")
+
+    here = L.stage_index(sub["status"])
+    cells = []
+    for i, (key, label, _) in enumerate(L.STAGES):
+        cls = "now" if i == here else ("past" if i < here else "todo")
+        inner = esc(label)
+        if key == "dontes":
+            # The outcome is a real choice; do not let one click invent it.
+            body = (f'<span class="lbl">{inner}</span>'
+                    f'<span class="sub">{esc(L.STATUS_LABEL.get(sub["status"], ""))}</span>'
+                    if i == here else f'<span class="lbl">{inner}</span>')
+            cells.append(f'<div class="stage {cls}">{body}</div>')
+        else:
+            target = STAGE_CLICK[key]
+            cells.append(
+                f'<div class="stage {cls}">'
+                + button(inner, cmd=f"sm.py submit {p['slug']} --status {target}",
+                         api={"path": "/api/submission",
+                              "body": {"id": sub["id"], "field": "status",
+                                       "value": target}})
+                + "</div>")
+    when = f" · beadva {esc(sub['submitted_at'])}" if sub["submitted_at"] else ""
+    return (f'<div class="track"><div class="trackhead">Beadási folyamat{when}</div>'
+            f'<div class="stages">{"".join(cells)}</div></div>')
+
+
 def next_steps(p, sub):
     """After a rejection the question is only ever: rewrite, correct, or move.
 
@@ -354,9 +425,9 @@ def next_steps(p, sub):
     return (
         '<div class="nextsteps"><b>Tovább innen</b>'
         f'<p class="meta">{esc(why)}</p><div class="chips">'
-        + button("Célújság választás", cmd=f"/sm:journal {p['slug']}",
+        + button("Célújság választás", cmd=f"{L.CMD_PREFIX}journal {p['slug']}",
                  cls="primary" if desk else "")
-        + button("Újraírás", cmd=f"/sm:context {p['slug']}",
+        + button("Újraírás", cmd=f"{L.CMD_PREFIX}context {p['slug']}",
                  cls="" if desk else "primary")
         + button("Korrekció",
                  cmd=f"sm.py state {p['slug']} korrekcio",
@@ -476,7 +547,7 @@ def reviews_html(conn, p, sub, live):
         meter = f"m-rev-{rv['id']}"
         if not pts:
             body = ('<p class="meta">Nincs pontokra bontva.</p>'
-                    + button("Bontsd pontokra", cmd=f"/sm:review {p['slug']}",
+                    + button("Bontsd pontokra", cmd=f"{L.CMD_PREFIX}review {p['slug']}",
                              cls="primary"))
         else:
             items = []
@@ -495,7 +566,7 @@ def reviews_html(conn, p, sub, live):
                     f'{esc(pt["comment"][:220])}</span></li>')
             body = (f'<ul class="check">{"".join(items)}</ul>'
                     + button("Válaszlevél összeállítása",
-                             cmd=f"/sm:respond {rv['id']}", cls="primary"))
+                             cmd=f"{L.CMD_PREFIX}respond {rv['id']}", cls="primary"))
         blocks.append(
             f'<details open><summary>Bírálat #{rv["id"]} — '
             f'{esc(rv["decision"] or "n/a")} {bar_html(done, total, meter)}'
@@ -551,11 +622,12 @@ def build(conn, api_token=None):
                           "body": {"id": p["id"], "field": "archived", "value": 1}},
                      cls="ghost")
             + "</div>"
+            + stage_track(p, sub)
             + (f'<div class="chips">{verdict_controls(p, sub)}</div>' if sub else "")
             + f'<div class="chips">{submission_controls(p, sub, live)}'
-            + button("Kontextus behívása", cmd=f"/sm:context {p['slug']}")
-            + button("Bírálat felvétele", cmd=f"/sm:review {p['slug']}")
-            + button("Célújság", cmd=f"/sm:journal {p['slug']}")
+            + button("Kontextus behívása", cmd=f"{L.CMD_PREFIX}context {p['slug']}")
+            + button("Bírálat felvétele", cmd=f"{L.CMD_PREFIX}review {p['slug']}")
+            + button("Célújság", cmd=f"{L.CMD_PREFIX}journal {p['slug']}")
             + "</div>"
             + next_steps(p, sub)
             + gaps_html(items)
