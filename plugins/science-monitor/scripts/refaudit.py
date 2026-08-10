@@ -152,6 +152,17 @@ def reg_year(meta):
     return None
 
 
+def crossref_dates(meta):
+    """The dates a year disagreement actually turns on, spelled out."""
+    out = {}
+    for key in ("published-print", "published-online", "issued"):
+        parts = meta.get(key, {}).get("date-parts", [[None]])
+        if parts and parts[0] and parts[0][0]:
+            out[key] = "-".join(f"{x:02d}" if i else str(x)
+                                for i, x in enumerate(parts[0]))
+    return out
+
+
 def check(ref):
     cr = crossref(ref["doi"])
     if "__error__" in cr:
@@ -159,14 +170,33 @@ def check(ref):
 
     problems = []
     severity = "error"
+    epmc = None  # fetched at most once, lazily
+
     year = reg_year(cr)
-    if ref["year"] and year and abs(ref["year"] - year) > 1:
-        problems.append(f"év {ref['year']} vs {year}")
-    elif ref["year"] and year and ref["year"] != year:
-        # One year apart is usually online-first vs print, not an error.
-        problems.append(f"EGY ÉV ELTÉRÉS: kéziratban {ref['year']}, regiszterben "
-                        f"{year} — rendszerint online-first vs nyomtatott; kérdezz rá")
-        severity = "ask"
+    if ref["year"] and year and ref["year"] != year:
+        epmc = europepmc(ref["doi"])
+        med = epmc.get("pubYear")
+        med = int(med) if str(med).isdigit() else None
+        dates = crossref_dates(cr)
+        shown = ", ".join(f"{k.replace('published-', '')}: {v}"
+                          for k, v in dates.items() if k != "issued")
+        if med and med == ref["year"]:
+            # Frontiers and friends assign an article to a volume year and put
+            # it online in January of the next one. MEDLINE indexes the volume
+            # year, and a Vancouver list follows the journal's own year.
+            problems.append(
+                f"évszám: kéziratban {ref['year']} (= Europe PMC/MEDLINE pubYear), "
+                f"Crossref {year} — {shown}. A kötet éve és a tényleges megjelenés "
+                f"tér el, nem hiba; a MEDLINE-évet tartsd meg")
+            severity = "note"
+        elif abs(ref["year"] - year) > 1:
+            problems.append(f"év {ref['year']} vs {year} ({shown})")
+        else:
+            problems.append(
+                f"EGY ÉV ELTÉRÉS: kéziratban {ref['year']}, Crossref {year}"
+                + (f", MEDLINE {med}" if med else ", MEDLINE nem ismeri")
+                + f" — {shown}. Leadás/kötet vs tényleges megjelenés; kérdezz rá")
+            severity = "ask"
 
     authors = cr.get("author") or []
     family = (authors[0].get("family", "") if authors else "").strip()
@@ -175,7 +205,8 @@ def check(ref):
     if family and not surname_matches(written, family):
         # Crossref may hold a partial or differently-spelled author list;
         # Europe PMC (MEDLINE) is the authority a Vancouver list is checked on.
-        epmc = europepmc(ref["doi"])
+        if epmc is None:
+            epmc = europepmc(ref["doi"])
         astr = (epmc.get("authorString") or "").strip()
         if astr:
             first = astr.split(",")[0].strip()

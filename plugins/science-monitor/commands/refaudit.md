@@ -20,6 +20,13 @@ the text file with `--file`.
   the first author is a different person from the one MEDLINE lists. Report
   these with the exact replacement text.
 - **? döntést kér** — see below. **Never resolve these yourself.**
+
+  A year that differs by one is *not* automatically a question. The tool first
+  asks Europe PMC: if the manuscript's year equals MEDLINE's `pubYear` while
+  Crossref reports the next year, that is a volume-year vs actual-publication
+  gap — Frontiers and others assign an article to a volume and put it online in
+  January of the following year — and it becomes a note, not a question. It
+  stays a question only when MEDLINE does not settle it.
 - **· megjegyzés** — Crossref and Europe PMC disagree while the manuscript
   matches MEDLINE, and the two names are clearly different people or forms.
   Crossref carries the publisher's deposit, which is sometimes partial (one
