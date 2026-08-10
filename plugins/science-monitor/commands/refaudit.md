@@ -1,6 +1,6 @@
 ---
 description: Hivatkozásjegyzék ellenőrzése Crossref és Europe PMC ellen
-allowed-tools: Bash, Read
+allowed-tools: Bash, Read, AskUserQuestion
 ---
 Resolve every DOI in a manuscript's reference list and compare the first author
 and year against the registries.
@@ -14,20 +14,51 @@ It reads Vancouver-style numbered entries ending in `doi: 10.…`, so a `.docx`
 has to be converted first — use the **doc-tools** skill (`doctotext`) and pass
 the text file with `--file`.
 
-## Hogyan olvasd az eredményt
+## A kimenet három szintje
 
-The output separates two things, and the difference matters:
+- **✗ hiba** — the DOI does not resolve, the year is off by more than a year, or
+  the first author is a different person from the one MEDLINE lists. Report
+  these with the exact replacement text.
+- **? döntést kér** — see below. **Never resolve these yourself.**
+- **· megjegyzés** — Crossref and Europe PMC disagree while the manuscript
+  matches MEDLINE, and the two names are clearly different people or forms.
+  Crossref carries the publisher's deposit, which is sometimes partial (one
+  journal deposits only the last author). A Vancouver list is checked against
+  MEDLINE, so the manuscript is right. Mention it; change nothing.
 
-- **✗ hiba** — the DOI does not resolve, or the year is wrong, or the first
-  author disagrees with **Europe PMC/MEDLINE**. Fix these.
-- **· megjegyzés** — Crossref and Europe PMC disagree with each other while the
-  manuscript matches MEDLINE. **Do not "fix" these.** Crossref carries the
-  publisher's deposit, which is sometimes partial (one journal deposits only
-  the last author) or differently spelled. A Vancouver list is checked against
-  MEDLINE, so the manuscript is right and the registry is not.
+## ? A one- or two-character difference is ALWAYS a question, never a decision
 
-That distinction exists because acting on Crossref alone once turned a correct
-name into an incorrect one here.
+When the tool marks a reference `?`, you **must** put it to the user before any
+edit. This is not a preference — it is a hard rule, and it exists because
+acting on one alone here turned a correct author name into an incorrect one:
+`Sachedina` looked exactly like a typo for the registered `Sachedin`, and was
+in fact the MEDLINE spelling, i.e. the correct one.
 
-Report the errors with their reference numbers and the exact replacement text.
-Never edit the manuscript without showing the user what changes first.
+A difference of one or two characters — a doubled letter, a missing vowel, an
+accent, a year off by one — is exactly the case where "obviously a typo" and
+"genuine registry variance" are indistinguishable from the outside. The cost of
+guessing wrong is a wrong name in a published reference list.
+
+So, per flagged item:
+
+1. Show both spellings side by side, with the source of each (manuscript vs
+   Crossref vs Europe PMC/MEDLINE) and the DOI or PMID.
+2. Ask with **AskUserQuestion** — one question per item, or one question with
+   the items as options when there are several. Offer at least: keep the
+   manuscript's form, take the registry's form, and check the publisher's PDF.
+3. Only then edit, and only what was chosen.
+
+Do not batch these into a summary and proceed. Do not pick "the more likely
+one". Do not treat a Hungarian accent difference (`Szilagyi` / `Szilágyi`) as
+obviously the accented one — MEDLINE strips accents, the manuscript may not,
+and which belongs in the reference list depends on the journal's style.
+
+If the user is away and cannot answer, leave every `?` item untouched, say
+explicitly which references are unresolved, and stop. An unanswered question is
+a better outcome than a silent wrong edit.
+
+## Jelentés
+
+Errors first with their reference numbers and exact replacement text, then the
+questions, then the notes. Never edit the manuscript without showing the user
+the change first.

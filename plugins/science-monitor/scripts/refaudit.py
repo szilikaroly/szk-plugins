@@ -101,6 +101,35 @@ def parse_refs(text):
     return out
 
 
+def edit_distance(a, b, cap=3):
+    """Levenshtein, cheap and capped — we only care about 'nearly the same'."""
+    a, b = a.lower(), b.lower()
+    if abs(len(a) - len(b)) > cap:
+        return cap + 1
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        if min(cur) > cap:
+            return cap + 1
+        prev = cur
+    return prev[-1]
+
+
+def near_identical(a, b, cap=2):
+    """A one- or two-character difference — a typo, or a legitimate variant.
+
+    These are the cases nobody may decide alone. `Sachedina` vs `Sachedin` reads
+    like an obvious typo and is not one: MEDLINE and the publisher's deposit
+    genuinely disagree. Correcting it on a hunch turned a right name wrong.
+    """
+    a, b = a.strip(), b.strip()
+    if not a or not b or a.lower() == b.lower():
+        return False
+    return edit_distance(a, b, cap) <= cap
+
+
 def surname_matches(written, family):
     """Does `written` ("Sachedin A") carry exactly the surname `family`?
 
@@ -129,11 +158,16 @@ def check(ref):
         return ref, "DOI nem oldható fel", cr["__error__"], "error"
 
     problems = []
+    severity = "error"
     year = reg_year(cr)
     if ref["year"] and year and abs(ref["year"] - year) > 1:
         problems.append(f"év {ref['year']} vs {year}")
+    elif ref["year"] and year and ref["year"] != year:
+        # One year apart is usually online-first vs print, not an error.
+        problems.append(f"EGY ÉV ELTÉRÉS: kéziratban {ref['year']}, regiszterben "
+                        f"{year} — rendszerint online-first vs nyomtatott; kérdezz rá")
+        severity = "ask"
 
-    severity = "error"
     authors = cr.get("author") or []
     family = (authors[0].get("family", "") if authors else "").strip()
     # The manuscript's first author is whatever precedes the first comma.
@@ -147,16 +181,32 @@ def check(ref):
             first = astr.split(",")[0].strip()
             # Europe PMC gives "Surname AB"; compare on everything but initials.
             fam = " ".join(first.split()[:-1]) or first
+            written_fam = " ".join(written.split()[:-1]) or written
             if not surname_matches(written, fam):
-                problems.append(f"első szerző '{written}' vs '{first}' (Europe PMC)")
+                if near_identical(written_fam, fam):
+                    problems.append(
+                        f"EGY-KÉT KARAKTER ELTÉRÉS: kéziratban '{written_fam}', "
+                        f"Europe PMC/MEDLINE '{fam}' — el kell dönteni, "
+                        f"magadtól ne írd át")
+                    severity = "ask"
+                else:
+                    problems.append(f"első szerző '{written}' vs '{first}' (Europe PMC)")
             else:
                 # The manuscript agrees with MEDLINE and Crossref differs — that
                 # is a registry disagreement, not a manuscript error. Worth
                 # seeing, never worth "fixing" against MEDLINE.
-                problems.append(
-                    f"regiszter-eltérés: Crossref '{family}' vs Europe PMC/MEDLINE "
-                    f"'{fam}' — a kézirat a MEDLINE-nal egyezik, NE írd át")
-                severity = "note"
+                if near_identical(family, fam):
+                    problems.append(
+                        f"EGY-KÉT KARAKTER ELTÉRÉS a regiszterek közt: Crossref "
+                        f"'{family}' vs Europe PMC/MEDLINE '{fam}'. A kézirat a "
+                        f"MEDLINE-nal egyezik. Elgépelésnek látszik, de nem az — "
+                        f"kérdezz rá, magadtól ne írd át")
+                    severity = "ask"
+                else:
+                    problems.append(
+                        f"regiszter-eltérés: Crossref '{family}' vs Europe PMC/MEDLINE "
+                        f"'{fam}' — a kézirat a MEDLINE-nal egyezik, NE írd át")
+                    severity = "note"
         else:
             problems.append(f"első szerző '{written}' vs '{family}' (csak Crossref, "
                             "Europe PMC nem ismeri — ellenőrizd kézzel)")
@@ -193,13 +243,20 @@ def run(conn, ref_arg, path=None, limit=None):
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
             results = [r for r in ex.map(check, refs) if r]
         errs = [r for r in results if r[3] == "error"]
+        asks = [r for r in results if r[3] == "ask"]
         notes = [r for r in results if r[3] == "note"]
         print(f"  ✓ rendben: {len(refs) - len(results)}   ✗ hiba: {len(errs)}"
-              f"   · megjegyzés: {len(notes)}")
-        for ref, why, extra, sev in errs + notes:
-            print(f"\n  {'✗' if sev == 'error' else '·'} [{ref['n']:>3}] {why}")
+              f"   ? döntést kér: {len(asks)}   · megjegyzés: {len(notes)}")
+        icon = {"error": "✗", "ask": "?", "note": "·"}
+        for ref, why, extra, sev in errs + asks + notes:
+            print(f"\n  {icon[sev]} [{ref['n']:>3}] {why}")
             print(f"        kéziratban: {ref['raw'][:100]}")
             if extra:
                 print(f"        regiszter : {extra}")
-        if not errs:
+        if not errs and not asks:
             print("\n  Hiba nincs: minden DOI feloldódik, első szerző és évszám egyezik.")
+        if asks:
+            print(f"\n  ⚠ {len(asks)} tétel EGY-KÉT KARAKTERBEN tér el. Ezeket nem "
+                  "szabad magadtól átírni — egy elgépelésnek látszó eltérés lehet a\n"
+                  "    regiszterek közti valódi különbség. Kérdezd meg a szerzőt, "
+                  "tételenként, a két változatot egymás mellé téve.")
