@@ -39,4 +39,4 @@ actually support:
 
 Do not restate the whole manuscript. Do not invent submission facts that the
 store does not contain — if a field is empty, say it is not recorded and offer
-to fill it with `/sm:submit`.
+to fill it with `/science-monitor:submit`.

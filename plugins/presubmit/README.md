@@ -26,11 +26,11 @@ never false-positives on medical terminology.
 
 | command | scope |
 |---------|-------|
-| `/ps:check` | full scan (all categories) |
-| `/ps:refs` | references + in-text citation cross-check |
-| `/ps:ethics` | disclosure / ethics statements |
-| `/ps:format` | language & typography |
-| `/ps:journals` | list built-in journal profiles |
+| `/presubmit:check` | full scan (all categories) |
+| `/presubmit:refs` | references + in-text citation cross-check |
+| `/presubmit:ethics` | disclosure / ethics statements |
+| `/presubmit:format` | language & typography |
+| `/presubmit:journals` | list built-in journal profiles |
 
 The bundled **presubmit skill** auto-triggers on "check my paper before
 submission", "find mistakes", "check my references", and similar (English and

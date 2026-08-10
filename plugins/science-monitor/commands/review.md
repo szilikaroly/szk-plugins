@@ -19,7 +19,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/sm.py" review add SLUG \
 
 `--decision` must be one of `major_revision`, `minor_revision`, `accepted`,
 `rejected` — it also updates the submission's status and deadline. Use
-`--source gmail` when the letter came from `/sm:inbox`. Note the review id it
+`--source gmail` when the letter came from `/science-monitor:inbox`. Note the review id it
 prints.
 
 For `.docx`/`.pdf` letters use the **doc-tools** skill to extract the text

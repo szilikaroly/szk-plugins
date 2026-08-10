@@ -19,6 +19,46 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
 
+      - name: Slash commands must use the real, namespaced names
+        run: |
+          # A command is invoked as /<plugin-dir>:<file>, so a short alias like
+          # "/sm:context" is a command that does not exist. Emitting one costs a
+          # silent no-op at the user's keyboard, which is why this is a hard fail.
+          for d in plugins/*/; do
+            name="$(basename "$d")"
+            if grep -rn --include='*.md' --include='*.py' --include='*.json' \
+                 -oE '/[a-z][a-z0-9-]*:[a-z][a-z0-9-]*' "$d" \
+               | grep -vE "/(${name}):" \
+               | grep -vE 'https?:|/(api|Users|usr|tmp|etc|bin|svg|xml|xlink|w|a|r):' > /tmp/bad.txt; then
+              echo "Unknown slash-command namespace in $name (expected /${name}:):"
+              cat /tmp/bad.txt
+              exit 1
+            fi
+          done
+
+      - name: Frontmatter of every command must parse
+        run: |
+          python3 - <<'EOF'
+          import pathlib, sys, re
+          bad = []
+          for p in pathlib.Path('plugins').rglob('commands/*.md'):
+              t = p.read_text(encoding='utf-8')
+              if not t.startswith('---'):
+                  bad.append(f"{p}: no frontmatter"); continue
+              fm = t.split('---', 2)[1]
+              for line in fm.strip().splitlines():
+                  if ':' not in line:
+                      continue
+                  k, v = line.split(':', 1)
+                  v = v.strip()
+                  # A value that opens with a quote must also close the whole value.
+                  if v[:1] in '"\'' and not (v[-1:] == v[0] and len(v) > 1):
+                      bad.append(f"{p}: unquoted continuation in '{k.strip()}'")
+          if bad:
+              print("\n".join(bad)); sys.exit(1)
+          print("frontmatter OK")
+          EOF
+
       - name: Validate JSON manifests
         run: |
           python3 -c "import json;json.load(open('.claude-plugin/marketplace.json'))"

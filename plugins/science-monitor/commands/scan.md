@@ -34,4 +34,4 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/sm.py" set SLUG --title "..." --kind arti
 
 **Step 4 — report.** List what was added, then tell the user that submission
 data (journal, cover letter, submitted-or-not) is not on disk and has to come
-from them — offer `/sm:submit SLUG` for the first one.
+from them — offer `/science-monitor:submit SLUG` for the first one.

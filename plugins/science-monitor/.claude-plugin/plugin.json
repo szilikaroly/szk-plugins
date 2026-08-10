@@ -1,9 +1,9 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "science-monitor",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "displayName": "Science Monitor",
-  "description": "Tracks finished manuscripts by submission: which journal, whether the cover letter exists and whether the package was actually sent, what decision came back, and every reviewer point still unanswered. `/sm:context` pulls a manuscript's full working context into the session in one step; `/sm:review` turns an incoming reviewer letter into tracked, answerable points; `/sm:inbox` reads the connected mailbox for editorial decisions. Local SQLite store plus a self-contained HTML dashboard — nothing leaves the machine.",
+  "description": "Tracks finished manuscripts by submission: which journal, whether the cover letter exists and whether the package was actually sent, what decision came back, and every reviewer point still unanswered. `/science-monitor:context` pulls a manuscript's full working context into the session in one step; `/science-monitor:review` turns an incoming reviewer letter into tracked, answerable points; `/science-monitor:inbox` reads the connected mailbox for editorial decisions. Local SQLite store plus a self-contained HTML dashboard — nothing leaves the machine.",
   "author": {
     "name": "Dr. Szili Károly"
   },

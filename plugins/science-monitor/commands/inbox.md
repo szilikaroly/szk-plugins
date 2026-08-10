@@ -68,7 +68,7 @@ If `hasAttachments` is true, the letter itself is often the attachment (the
 reviewer report as `.pdf`/`.docx`). `read_resource` on a mail URI returns the
 body and an `attachments` array; if you cannot get the attachment's content
 through the connector, say so plainly and ask the user to save it from Outlook,
-then continue with `/sm:review SLUG <path>`. Do not guess the contents.
+then continue with `/science-monitor:review SLUG <path>`. Do not guess the contents.
 
 ## Step 4 — reconcile, do not act
 
@@ -88,7 +88,7 @@ Record the submission-ID from the letter (`Ref: Submission ID …`) as `--ms-id`
 it is how the next letter about the same manuscript gets matched.
 
 For a letter carrying real reviewer comments, save the body to a file in the
-scratchpad and hand off to `/sm:review SLUG <path> --source gmail` (use
+scratchpad and hand off to `/science-monitor:review SLUG <path> --source gmail` (use
 `--source gmail` for any mail origin).
 
 ## Boundaries

@@ -12,6 +12,6 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/ff.py" advise "$ARGUMENTS"
 
 Relay the recommended chart type(s) and the Nature-style checklist to the user.
 Then add your own judgement in at most four sentences: which single comparison
-the reader must make, whether a panel should be split, and which `/ff:` command
+the reader must make, whether a panel should be split, and which `/figure-forge:` command
 builds it. If the data file is known, offer the exact command line to generate
-the figure next (e.g. `/ff:forest --data ... --label ...`). Do not invent data.
+the figure next (e.g. `/figure-forge:forest --data ... --label ...`). Do not invent data.

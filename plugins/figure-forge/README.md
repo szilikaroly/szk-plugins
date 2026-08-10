@@ -33,13 +33,13 @@ spiral-search for free space → report if still impossible (box too small).
 
 | command | what it does |
 |---------|--------------|
-| `/ff:advise "<goal>"` | recommend a chart type + Nature checklist before you plot |
-| `/ff:boxplot` | grouped box plot with jittered raw points |
-| `/ff:plot` | line / scatter plot with direct end-of-line labels (no legend clutter) |
-| `/ff:forest` | forest / meta-analysis plot; labels kept off every CI line |
-| `/ff:flowchart` | node/edge flowchart (CONSORT-friendly); labels kept inside boxes |
-| `/ff:assemble` | combine panel PNGs into a multi-panel figure with bold a, b, c |
-| `/ff:fixsvg` | heuristic label check of an existing external SVG |
+| `/figure-forge:advise "<goal>"` | recommend a chart type + Nature checklist before you plot |
+| `/figure-forge:boxplot` | grouped box plot with jittered raw points |
+| `/figure-forge:plot` | line / scatter plot with direct end-of-line labels (no legend clutter) |
+| `/figure-forge:forest` | forest / meta-analysis plot; labels kept off every CI line |
+| `/figure-forge:flowchart` | node/edge flowchart (CONSORT-friendly); labels kept inside boxes |
+| `/figure-forge:assemble` | combine panel PNGs into a multi-panel figure with bold a, b, c |
+| `/figure-forge:fixsvg` | heuristic label check of an existing external SVG |
 
 Natural-language requests ("make me a Nature-style forest plot of these ORs")
 trigger the bundled **figure-forge skill**, which drives the same CLI.
@@ -67,7 +67,7 @@ fig1.qc.json      the audit (rules, residual violations, iteration log)
 
 Python 3 with `matplotlib`, `numpy`, `pandas`, `lxml`, `python-pptx`, `Pillow`
 (all standard in Anaconda). `cairosvg` is optional and only used to rasterise
-external SVGs in `/ff:fixsvg`.
+external SVGs in `/figure-forge:fixsvg`.
 
 ## Self-test
 

@@ -17,5 +17,5 @@ a label extending outside its box, or overlapping another region — and writes 
 
 Report each issue with its suggested move in pixels. Be explicit that this is a
 best-effort external check: for a guaranteed-clean result, offer to rebuild the
-figure natively with `/ff:boxplot`, `/ff:forest` or `/ff:flowchart`, where the
+figure natively with `/figure-forge:boxplot`, `/figure-forge:forest` or `/figure-forge:flowchart`, where the
 QC loop measures the real renderer and corrects labels automatically.

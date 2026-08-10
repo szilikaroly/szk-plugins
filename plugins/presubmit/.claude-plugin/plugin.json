@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "presubmit",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "displayName": "Presubmit",
   "description": "Catches the common manuscript submission mistakes before a journal does — missing sections, incomplete author/affiliation/email info, over-long abstracts and bad keyword counts, reference problems (duplicates by DOI or text, missing years, malformed DOIs, in-text citations with no matching reference, references never cited), and missing ethics/disclosure statements (conflict of interest, funding, human subjects, informed consent), plus deterministic language/typography errors. Reads .docx/.pdf/.tex/.txt, applies a journal profile (Cureus built in), and prints a severity-ranked readiness report with fix hints. Offline and deterministic — no language model, no spell dictionary, so no false positives on medical terms.",
   "author": {

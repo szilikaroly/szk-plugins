@@ -80,7 +80,7 @@ def format_advice(description: str) -> str:
         out.append(f"     why: {r['why']}")
         cmd = r["command"]
         out.append(f"     -> {cmd}" if cmd.startswith(("custom", "advise"))
-                   else f"     -> /ff:{cmd}")
+                   else f"     -> /figure-forge:{cmd}")
     out.append("")
     out.append("Nature-style checklist:")
     for c in a["nature_checklist"]:

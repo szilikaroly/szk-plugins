@@ -18,5 +18,5 @@ sentences of interpretation, prioritising in this order:
 3. revision decisions with no reviewer letter loaded yet.
 
 If a manuscript needs work, name the single command that starts it — e.g.
-`/sm:context SLUG` to load it, or `/sm:review SLUG` to ingest a letter. Do not
+`/science-monitor:context SLUG` to load it, or `/science-monitor:review SLUG` to ingest a letter. Do not
 read any manuscript files while producing this summary.
