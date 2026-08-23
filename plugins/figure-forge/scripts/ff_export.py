@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import ff_editable as ED
+
 PAD_IN = 0.03  # padding around the tight bbox, inches
 
 
@@ -25,14 +27,23 @@ def _tight_bbox(fig):
     return bb.padded(PAD_IN)
 
 
-def save_figure(fig, paths: dict, dpi=600, label_boxes=None):
-    """paths: {fmt: Path}. label_boxes: optional list for pptx editable text."""
-    bbox = _tight_bbox(fig)
+def save_figure(fig, paths: dict, dpi=600, label_boxes=None, tight=True):
+    """paths: {fmt: Path}. label_boxes: optional list for pptx editable text.
+
+    tight=False exports the canvas exactly as sized, which is what a figure
+    built to a fixed physical width (e.g. a 170 mm journal page) needs - a
+    tight bbox would silently change that width.
+    """
+    bbox = _tight_bbox(fig) if tight else None
     written = {}
     for fmt, p in paths.items():
         p = Path(p)
         if fmt == "svg":
             fig.savefig(p, format="svg", bbox_inches=bbox)   # editable text
+            # matplotlib names exactly one font and calls its groups `text_7`.
+            # Neither survives being opened on another machine as anything a
+            # human can edit, so the file is hardened before anyone sees it.
+            ED.harden_svg(p)
         elif fmt == "pdf":
             fig.savefig(p, format="pdf", bbox_inches=bbox)
         elif fmt == "png":
@@ -47,6 +58,26 @@ def save_figure(fig, paths: dict, dpi=600, label_boxes=None):
             raise ValueError(f"unknown format: {fmt}")
         written[fmt] = str(p)
     return written
+
+
+def audit_outputs(written: dict) -> dict:
+    """Check the files that exist, not the rcParams that were meant to make them.
+
+    `svg.fonttype: none` can be set and the SVG can still come out with outlined
+    text — a stale rcParam, a backend that ignored it, a figure element that
+    forced a path. The raster proof looks identical either way, so the only
+    honest check is to read the vector file back.
+    """
+    out = {}
+    for fmt, path in written.items():
+        try:
+            if fmt == "svg":
+                out["svg"] = ED.audit_svg(path)
+            elif fmt == "pdf":
+                out["pdf"] = ED.audit_pdf(path)
+        except Exception as exc:                     # never fatal
+            out[fmt] = {"error": str(exc)}
+    return out
 
 
 def _save_tiff(fig, path, dpi, bbox):

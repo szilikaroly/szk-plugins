@@ -93,8 +93,112 @@ def run():
     passed &= _ok("advisor recommends forest plot",
                   any("forest" in r["chart"] for r in rec["recommendations"]))
 
+    # 7) sign vs punctuation --------------------------------------------------
+    # One glyph doing three jobs is the failure this replaces. Each case below
+    # is a string that was rendered wrongly before ff_typography existed, or an
+    # identifier a careless rule would have corrupted.
+    import ff_typography as T
+    T.ENABLED = True
+    convert = [
+        ("Follow-up 12-24 months", "Follow-up 12\u201324 months", "range -> en dash"),
+        ("Effect -0.42 (-0.71, -0.13)", "Effect \u22120.42 (\u22120.71, \u22120.13)",
+         "sign -> minus, and a list comma is not a range"),
+        ("Years 2019-2021", "Years 2019\u20132021", "year span -> en dash"),
+        ("Mean +/- SD", "Mean \u00b1 SD", "+/- -> plus-minus"),
+        ("p >= 0.05", "p \u2265 0.05", ">= -> greater-equal"),
+        ("Size 10 x 10 mm", "Size 10 \u00d7 10 mm", "x -> times"),
+        ("Volume (mm3)", "Volume (mm\u00b3)", "unit exponent"),
+        ("p<0.05", "p < 0.05", "operator spacing"),
+    ]
+    for src, want, why in convert:
+        got = T.tx(src)
+        passed &= _ok(f"{why}: {src!r} -> {got!r}", got == want)
+
+    # The rules must not touch an identifier. Every one of these has a hyphen
+    # that means "hyphen", and a rule that reached for it would corrupt data.
+    for keep in ("IL-6", "HLA-B27", "COVID-19", "2-fold increase", "p-value",
+                 "Kruskal-Wallis test", "NCT01032434", "CD4-CD8 ratio",
+                 "Pooled (random-effects)"):
+        passed &= _ok(f"identifier preserved: {keep!r}", T.tx(keep) == keep)
+
+    passed &= _ok("mathtext passed through untouched",
+                  T.tx(r"$\Delta$ = $-1.5$") == r"$\Delta$ = $-1.5$")
+    passed &= _ok("--no-typography leaves the string alone",
+                  (lambda: (setattr(T, "ENABLED", False),
+                            T.tx("Follow-up 12-24 months") == "Follow-up 12-24 months",
+                            setattr(T, "ENABLED", True))[1])())
+
+    # 8) glyph coverage -------------------------------------------------------
+    # With svg.fonttype:none the SVG names a font instead of embedding outlines,
+    # so a substitution the font cannot draw becomes a hollow box in the vector
+    # master while the raster proof still looks right.
+    probe = "".join(sorted(T.INTRODUCED))
+    S.apply_style()
+    missing = T.missing_glyphs(probe)
+    passed &= _ok(f"resolved font draws every character the rules introduce "
+                  f"(missing: {''.join(sorted(missing)) or 'none'})", not missing)
+    passed &= _ok("a font without them is detected, not assumed",
+                  T.missing_glyphs("\u2212\u00d7\u2264",
+                                   _limited_font()) != set() or _limited_font() is None)
+    passed &= _ok("ascii_fallback undoes every introduced glyph",
+                  all(ord(c) < 128 for c in T.ascii_fallback(probe)))
+
+    # 9) the exported SVG is editable, and says so from the file ---------------
+    import ff_editable as ED
+    fig, v = R.forest_plot(_meta_df(), label="study", effect="est",
+                           low="lo", high="hi",
+                           xlabel="Mean difference (95% CI), 12-24 months",
+                           ref=0)
+    v.autofix()
+    out = tmp / "typo"
+    written = E.save_figure(fig, {"svg": out.with_suffix(".svg"),
+                                  "pdf": out.with_suffix(".pdf")}, dpi=150)
+    audit = ED.audit_svg(written["svg"])
+    passed &= _ok(f"SVG labels are real <text>, none outlined "
+                  f"({audit['text_elements']} text, "
+                  f"{audit['outlined_text_groups']} outlined)", audit["editable"])
+    passed &= _ok("SVG carries a font fallback stack, not one family",
+                  audit["font_fallback_stack"])
+    passed &= _ok(f"SVG groups are named for a human ({audit['named_layers']})",
+                  audit["named_layers"] > 0)
+    passed &= _ok("the minus sign reached the file",
+                  any("\u2212" in lab for lab in audit["labels"]))
+    passed &= _ok("the en dash reached the file",
+                  any("\u2013" in lab for lab in audit["labels"]))
+    pdf_audit = ED.audit_pdf(written["pdf"])
+    passed &= _ok(f"PDF text is text, not Type 3 outlines "
+                  f"({pdf_audit['truetype_embedded']} embedded TrueType)",
+                  pdf_audit["editable"])
+    # Hardening must survive being run again: exports are re-run constantly.
+    before = ED.audit_svg(written["svg"])
+    ED.harden_svg(written["svg"])
+    after = ED.audit_svg(written["svg"])
+    passed &= _ok("harden_svg is idempotent",
+                  before["named_layers"] == after["named_layers"]
+                  and before["font_families"] == after["font_families"])
+    plt.close(fig)
+
     print(f"\n{'ALL PASSED' if passed else 'FAILURES PRESENT'}  (artifacts: {tmp})")
     return passed
+
+
+def _meta_df():
+    import pandas as pd
+    return pd.DataFrame({
+        "study": ["Anderson 2019", "Becker 2020", "Chen 2021"],
+        "est": [-0.42, -0.15, 0.31],
+        "lo": [-0.71, -0.44, -0.02],
+        "hi": [-0.13, 0.14, 0.64],
+    })
+
+
+def _limited_font():
+    """A font known to lack the introduced glyphs, or None if none is installed."""
+    from matplotlib import font_manager
+    for f in font_manager.fontManager.ttflist:
+        if f.name in ("cmr10", "cmss10", "cmtt10", "STIXNonUnicode"):
+            return f.fname
+    return None
 
 
 if __name__ == "__main__":

@@ -75,6 +75,14 @@ def apply_style(palette: str = DEFAULT_PALETTE, dpi: int = DEFAULT_DPI):
     plt.rcParams.update({
         # editable-text SVG: keep <text> as text, never outline to paths
         "svg.fonttype": "none",
+        # A negative tick label gets U+2212 MINUS SIGN, not a hyphen. Left at
+        # the default this is already True, but it is set explicitly because it
+        # is a typographic decision the figure depends on: the minus is the
+        # width of a digit and sits on the maths axis, so a column of negative
+        # values lines up. A hyphen-minus is narrower and lower and visibly
+        # does not. ff_typography applies the same distinction to every string
+        # the caller supplies, which matplotlib never sees.
+        "axes.unicode_minus": True,
         "pdf.fonttype": 42,
         "ps.fonttype": 42,
         "figure.dpi": dpi,
@@ -116,7 +124,14 @@ def figsize(width: str | float = "single", height_mm: float | None = None,
             ratio: float = 0.75):
     """Return (w_in, h_in). `width` is a keyword or an explicit mm value."""
     if isinstance(width, str):
-        w_mm = WIDTHS_MM.get(width.lower(), WIDTHS_MM["single"])
+        key = width.lower()
+        if key in WIDTHS_MM:
+            w_mm = WIDTHS_MM[key]
+        else:
+            try:                      # documented "<mm>" form, e.g. --width 170
+                w_mm = float(width)
+            except ValueError:
+                w_mm = WIDTHS_MM["single"]
     else:
         w_mm = float(width)
     if height_mm is None:

@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 
 import ff_style as S
+from ff_typography import tx
 from ff_verify import Verifier
 
 
@@ -40,10 +41,10 @@ def box_plot(df, value, group, *, width="single", ylabel=None, palette=None,
                    linewidth=0.3, zorder=3)
 
     ax.set_xticks(range(len(groups)))
-    ax.set_xticklabels([str(g) for g in groups])
-    ax.set_ylabel(ylabel or value)
+    ax.set_xticklabels([tx(str(g)) for g in groups])
+    ax.set_ylabel(tx(ylabel or value))
     if title:
-        ax.set_title(title, loc="left", fontweight="bold")
+        ax.set_title(tx(title), loc="left", fontweight="bold")
 
     v = Verifier(fig)
     v.auto_obstacles_from_axes(ax)      # boxes, whiskers, points are obstacles
@@ -71,17 +72,17 @@ def xy_plot(df, x, y, *, series=None, kind="line", width="single",
         c = colors[i % len(colors)]
         if kind == "scatter":
             ax.scatter(sub[x], sub[y], s=10, color=c, edgecolor="white",
-                       linewidth=0.3, zorder=3, label=str(g))
+                       linewidth=0.3, zorder=3, label=tx(str(g)))
         else:
             ax.plot(sub[x], sub[y], color=c, lw=1.2, marker="o", ms=3,
-                    zorder=3, label=str(g))
+                    zorder=3, label=tx(str(g)))
         if g is not None and len(sub):
-            ends.append((sub[x].iloc[-1], sub[y].iloc[-1], str(g), c))
+            ends.append((sub[x].iloc[-1], sub[y].iloc[-1], tx(str(g)), c))
 
-    ax.set_xlabel(xlabel or x)
-    ax.set_ylabel(ylabel or y)
+    ax.set_xlabel(tx(xlabel or x))
+    ax.set_ylabel(tx(ylabel or y))
     if title:
-        ax.set_title(title, loc="left", fontweight="bold")
+        ax.set_title(tx(title), loc="left", fontweight="bold")
 
     v = Verifier(fig)
     v.auto_obstacles_from_axes(ax)
@@ -122,7 +123,7 @@ def forest_plot(df, *, label, effect, low, high, width="double",
     if logx:
         ax.set_xscale("log")
     ax.set_yticks([])
-    ax.set_xlabel(xlabel)
+    ax.set_xlabel(tx(xlabel))
     ax.spines["left"].set_visible(False)
 
     # register obstacles (CI lines + markers) BEFORE placing labels
@@ -133,13 +134,14 @@ def forest_plot(df, *, label, effect, low, high, width="double",
     xspan = max(r[high] for r in rows) - xmin
     lx = xmin - 0.04 * xspan
     for y, r in zip(ys, rows):
-        t = ax.text(lx, y, str(r[label]), va="center", ha="right",
+        name = tx(str(r[label]))
+        t = ax.text(lx, y, name, va="center", ha="right",
                     fontsize=S.FONT_TICK, clip_on=False)
-        v.add_label(t, ax, name=str(r[label]))
+        v.add_label(t, ax, name=name)
     ax.set_xlim(lx - 0.02 * xspan, max(r[high] for r in rows) + 0.05 * xspan)
     ax.set_ylim(-1, n)
     if title:
-        ax.set_title(title, loc="left", fontweight="bold")
+        ax.set_title(tx(title), loc="left", fontweight="bold")
     return fig, v
 
 
@@ -194,11 +196,11 @@ def flowchart(spec, *, width="single", title=None):
 
     # node text, bound to its box (R1 containment enforced)
     for nid, nd in nodes.items():
-        t = ax.text(nd["x"], nd["y"], nd["text"], ha="center", va="center",
+        t = ax.text(nd["x"], nd["y"], tx(nd["text"]), ha="center", va="center",
                     fontsize=S.FONT_BASE, wrap=True, zorder=3)
         v.add_label(t, ax, parent=patches[nid], name=nid)
     if title:
-        ax.set_title(title, loc="left", fontweight="bold")
+        ax.set_title(tx(title), loc="left", fontweight="bold")
     return fig, v
 
 

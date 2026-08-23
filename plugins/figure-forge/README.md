@@ -39,7 +39,9 @@ spiral-search for free space → report if still impossible (box too small).
 | `/figure-forge:forest` | forest / meta-analysis plot; labels kept off every CI line |
 | `/figure-forge:flowchart` | node/edge flowchart (CONSORT-friendly); labels kept inside boxes |
 | `/figure-forge:assemble` | combine panel PNGs into a multi-panel figure with bold a, b, c |
+| `/figure-forge:panelflow` | staged pipeline / architecture figure from a column-and-box spec |
 | `/figure-forge:fixsvg` | heuristic label check of an existing external SVG |
+| `/figure-forge:audit` | is this SVG/PDF really editable, and are its signs and dashes right? |
 
 Natural-language requests ("make me a Nature-style forest plot of these ORs")
 trigger the bundled **figure-forge skill**, which drives the same CLI.
@@ -68,6 +70,55 @@ fig1.qc.json      the audit (rules, residual violations, iteration log)
 Python 3 with `matplotlib`, `numpy`, `pandas`, `lxml`, `python-pptx`, `Pillow`
 (all standard in Anaconda). `cairosvg` is optional and only used to rasterise
 external SVGs in `/figure-forge:fixsvg`.
+
+## Sign is not punctuation
+
+`-` joins words (follow-up, IL-6). `−` signs a number (−0.42). `–` spans a range
+(12–24 months). Using one glyph for all three is the most common typographic
+fault in scientific figures, and in a forest plot it is visible: the hyphen is
+narrower and sits lower than the digits, so a column of negative estimates fails
+to line up.
+
+Every caller-supplied string is converted before it is drawn — axis titles, study
+names, node text, legend entries — and the rules also produce `±`, `×`, `≤`, `≥`,
+`µm`, `°C` and unit exponents, and space relational operators (`p<0.05` →
+`p < 0.05`).
+
+Identifiers are never touched: `IL-6`, `HLA-B27`, `COVID-19`, `2-fold`,
+`p-value`, `NCT01032434`. Every rule that could reach them needs digits on *both*
+sides of the separator with no adjacent letter. `$…$` mathtext passes through
+untouched. Every substitution is listed in the QC audit and tallied on the
+console — a rule that quietly edits data is worse than no rule. `--no-typography`
+turns the whole thing off.
+
+**The glyph check.** With `svg.fonttype: none` the SVG names a font instead of
+embedding outlines, so a substitution the font cannot draw is a hollow box in the
+vector master while the raster proof looks fine. Every run tests the resolved
+font against the characters it introduced. 243 of the 320 font families on a
+typical macOS install fail that test.
+
+## Is it really editable?
+
+```bash
+scripts/ff.py audit figure.svg          # or figure.pdf
+scripts/ff.py audit figure.svg --fix
+```
+
+Exports are verified by reading the file back, not by trusting the rcParam that
+was supposed to produce it:
+
+- **text is still text** — a `text_7` group with no `<text>` inside means the
+  glyphs were outlined: visually identical, completely uneditable, invisible in
+  a raster proof, unrecoverable;
+- **a font fallback stack**, not one family. Matplotlib writes
+  `font-family: 'Arial'`. Opened where Arial is absent, the renderer substitutes
+  different metrics and the label-QC guarantee — no label outside its box, none
+  over a curve — silently stops holding, because it was computed against Arial;
+- **human-readable layers** — `inkscape:label` carrying the actual label text,
+  so an editor's Layers panel shows `text: −0.42` instead of `text_7`.
+
+`--fix` hardens those three on a figure made elsewhere and **never rewrites label
+text**: it lists the typography that should change and leaves it alone.
 
 ## Self-test
 

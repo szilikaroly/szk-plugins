@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8" standalone="no"?>
 <!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
   "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
-<svg xmlns:xlink="http://www.w3.org/1999/xlink" width="439.764953pt" height="144.304567pt" viewBox="0 0 439.764953 144.304567" xmlns="http://www.w3.org/2000/svg" version="1.1">
+<svg xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" xmlns:xlink="http://www.w3.org/1999/xlink" width="439.764953pt" height="144.304567pt" viewBox="0 0 439.764953 144.304567" xmlns="http://www.w3.org/2000/svg" version="1.1">
  <metadata>
   <rdf:RDF xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
    <cc:Work>
@@ -19,8 +19,8 @@
  <defs>
   <style type="text/css">*{stroke-linejoin: round; stroke-linecap: butt}</style>
  </defs>
- <g id="figure_1">
-  <g id="patch_1">
+ <g id="figure_1" inkscape:label="figure 1">
+  <g id="patch_1" inkscape:label="shape 1">
    <path d="M 0 144.304567 
 L 439.764953 144.304567 
 L 439.764953 0 
@@ -28,8 +28,8 @@ L 0 0
 z
 " style="fill: #ffffff"/>
   </g>
-  <g id="axes_1">
-   <g id="patch_2">
+  <g id="axes_1" inkscape:label="axes 1">
+   <g id="patch_2" inkscape:label="shape 2">
     <path d="M 35.581331 120.024567 
 L 437.604953 120.024567 
 L 437.604953 2.16 
@@ -37,14 +37,14 @@ L 35.581331 2.16
 z
 " style="fill: #ffffff"/>
    </g>
-   <g id="line2d_1">
+   <g id="line2d_1" inkscape:label="line 1">
     <path d="M 185.898176 120.024567 
 L 185.898176 2.16 
 " clip-path="url(#pd41b03a31f)" style="fill: none; stroke-dasharray: 1.85,0.8; stroke-dashoffset: 0; stroke: #444444; stroke-width: 0.5"/>
    </g>
-   <g id="matplotlib.axis_1">
-    <g id="xtick_1">
-     <g id="line2d_2">
+   <g id="matplotlib.axis_1" inkscape:label="axis 1">
+    <g id="xtick_1" inkscape:label="x-axis tick 1">
+     <g id="line2d_2" inkscape:label="line 2">
       <defs>
        <path id="m652c4185c8" d="M 0 0 
 L 0 2.5 
@@ -54,111 +54,111 @@ L 0 2.5
        <use xlink:href="#m652c4185c8" x="78.743311" y="120.024567" style="fill: #444444; stroke: #444444; stroke-width: 0.5"/>
       </g>
      </g>
-     <g id="text_1">
-      <text style="font-size: 6px; font-family: 'Arial'; text-anchor: middle; fill: #444444" x="78.743311" y="130.319254" transform="rotate(-0 78.743311 130.319254)">0.50</text>
+     <g id="text_1" inkscape:label="text: 0.50">
+      <text xml:space="preserve" style="font-size: 6px; font-family: Arial, Helvetica, 'Helvetica Neue', 'Liberation Sans', 'Nimbus Sans', 'DejaVu Sans', sans-serif; text-anchor: middle; fill: #444444" x="78.743311" y="130.319254" transform="rotate(-0 78.743311 130.319254)">0.50</text>
      </g>
     </g>
-    <g id="xtick_2">
-     <g id="line2d_3">
+    <g id="xtick_2" inkscape:label="x-axis tick 2">
+     <g id="line2d_3" inkscape:label="line 3">
       <g>
        <use xlink:href="#m652c4185c8" x="132.320743" y="120.024567" style="fill: #444444; stroke: #444444; stroke-width: 0.5"/>
       </g>
      </g>
-     <g id="text_2">
-      <text style="font-size: 6px; font-family: 'Arial'; text-anchor: middle; fill: #444444" x="132.320743" y="130.319254" transform="rotate(-0 132.320743 130.319254)">0.75</text>
+     <g id="text_2" inkscape:label="text: 0.75">
+      <text xml:space="preserve" style="font-size: 6px; font-family: Arial, Helvetica, 'Helvetica Neue', 'Liberation Sans', 'Nimbus Sans', 'DejaVu Sans', sans-serif; text-anchor: middle; fill: #444444" x="132.320743" y="130.319254" transform="rotate(-0 132.320743 130.319254)">0.75</text>
      </g>
     </g>
-    <g id="xtick_3">
-     <g id="line2d_4">
+    <g id="xtick_3" inkscape:label="x-axis tick 3">
+     <g id="line2d_4" inkscape:label="line 4">
       <g>
        <use xlink:href="#m652c4185c8" x="185.898176" y="120.024567" style="fill: #444444; stroke: #444444; stroke-width: 0.5"/>
       </g>
      </g>
-     <g id="text_3">
-      <text style="font-size: 6px; font-family: 'Arial'; text-anchor: middle; fill: #444444" x="185.898176" y="130.319254" transform="rotate(-0 185.898176 130.319254)">1.00</text>
+     <g id="text_3" inkscape:label="text: 1.00">
+      <text xml:space="preserve" style="font-size: 6px; font-family: Arial, Helvetica, 'Helvetica Neue', 'Liberation Sans', 'Nimbus Sans', 'DejaVu Sans', sans-serif; text-anchor: middle; fill: #444444" x="185.898176" y="130.319254" transform="rotate(-0 185.898176 130.319254)">1.00</text>
      </g>
     </g>
-    <g id="xtick_4">
-     <g id="line2d_5">
+    <g id="xtick_4" inkscape:label="x-axis tick 4">
+     <g id="line2d_5" inkscape:label="line 5">
       <g>
        <use xlink:href="#m652c4185c8" x="239.475608" y="120.024567" style="fill: #444444; stroke: #444444; stroke-width: 0.5"/>
       </g>
      </g>
-     <g id="text_4">
-      <text style="font-size: 6px; font-family: 'Arial'; text-anchor: middle; fill: #444444" x="239.475608" y="130.319254" transform="rotate(-0 239.475608 130.319254)">1.25</text>
+     <g id="text_4" inkscape:label="text: 1.25">
+      <text xml:space="preserve" style="font-size: 6px; font-family: Arial, Helvetica, 'Helvetica Neue', 'Liberation Sans', 'Nimbus Sans', 'DejaVu Sans', sans-serif; text-anchor: middle; fill: #444444" x="239.475608" y="130.319254" transform="rotate(-0 239.475608 130.319254)">1.25</text>
      </g>
     </g>
-    <g id="xtick_5">
-     <g id="line2d_6">
+    <g id="xtick_5" inkscape:label="x-axis tick 5">
+     <g id="line2d_6" inkscape:label="line 6">
       <g>
        <use xlink:href="#m652c4185c8" x="293.05304" y="120.024567" style="fill: #444444; stroke: #444444; stroke-width: 0.5"/>
       </g>
      </g>
-     <g id="text_5">
-      <text style="font-size: 6px; font-family: 'Arial'; text-anchor: middle; fill: #444444" x="293.05304" y="130.319254" transform="rotate(-0 293.05304 130.319254)">1.50</text>
+     <g id="text_5" inkscape:label="text: 1.50">
+      <text xml:space="preserve" style="font-size: 6px; font-family: Arial, Helvetica, 'Helvetica Neue', 'Liberation Sans', 'Nimbus Sans', 'DejaVu Sans', sans-serif; text-anchor: middle; fill: #444444" x="293.05304" y="130.319254" transform="rotate(-0 293.05304 130.319254)">1.50</text>
      </g>
     </g>
-    <g id="xtick_6">
-     <g id="line2d_7">
+    <g id="xtick_6" inkscape:label="x-axis tick 6">
+     <g id="line2d_7" inkscape:label="line 7">
       <g>
        <use xlink:href="#m652c4185c8" x="346.630473" y="120.024567" style="fill: #444444; stroke: #444444; stroke-width: 0.5"/>
       </g>
      </g>
-     <g id="text_6">
-      <text style="font-size: 6px; font-family: 'Arial'; text-anchor: middle; fill: #444444" x="346.630473" y="130.319254" transform="rotate(-0 346.630473 130.319254)">1.75</text>
+     <g id="text_6" inkscape:label="text: 1.75">
+      <text xml:space="preserve" style="font-size: 6px; font-family: Arial, Helvetica, 'Helvetica Neue', 'Liberation Sans', 'Nimbus Sans', 'DejaVu Sans', sans-serif; text-anchor: middle; fill: #444444" x="346.630473" y="130.319254" transform="rotate(-0 346.630473 130.319254)">1.75</text>
      </g>
     </g>
-    <g id="xtick_7">
-     <g id="line2d_8">
+    <g id="xtick_7" inkscape:label="x-axis tick 7">
+     <g id="line2d_8" inkscape:label="line 8">
       <g>
        <use xlink:href="#m652c4185c8" x="400.207905" y="120.024567" style="fill: #444444; stroke: #444444; stroke-width: 0.5"/>
       </g>
      </g>
-     <g id="text_7">
-      <text style="font-size: 6px; font-family: 'Arial'; text-anchor: middle; fill: #444444" x="400.207905" y="130.319254" transform="rotate(-0 400.207905 130.319254)">2.00</text>
+     <g id="text_7" inkscape:label="text: 2.00">
+      <text xml:space="preserve" style="font-size: 6px; font-family: Arial, Helvetica, 'Helvetica Neue', 'Liberation Sans', 'Nimbus Sans', 'DejaVu Sans', sans-serif; text-anchor: middle; fill: #444444" x="400.207905" y="130.319254" transform="rotate(-0 400.207905 130.319254)">2.00</text>
      </g>
     </g>
-    <g id="text_8">
-     <text style="font-size: 7px; font-family: 'Arial'; text-anchor: middle; fill: #222222" x="236.593142" y="140.611911" transform="rotate(-0 236.593142 140.611911)">Odds ratio (95% CI)</text>
+    <g id="text_8" inkscape:label="text: Odds ratio (95% CI)">
+     <text xml:space="preserve" style="font-size: 7px; font-family: Arial, Helvetica, 'Helvetica Neue', 'Liberation Sans', 'Nimbus Sans', 'DejaVu Sans', sans-serif; text-anchor: middle; fill: #222222" x="236.593142" y="140.611911" transform="rotate(-0 236.593142 140.611911)">Odds ratio (95% CI)</text>
     </g>
    </g>
-   <g id="matplotlib.axis_2"/>
-   <g id="line2d_9">
+   <g id="matplotlib.axis_2" inkscape:label="axis 2"/>
+   <g id="line2d_9" inkscape:label="line 9">
     <path d="M 89.458797 18.997795 
 L 233.046316 18.997795 
 " clip-path="url(#pd41b03a31f)" style="fill: none; stroke: #222222; stroke-width: 0.9; stroke-linecap: round"/>
    </g>
-   <g id="line2d_10">
+   <g id="line2d_10" inkscape:label="line 10">
     <path d="M 181.611981 35.835591 
 L 370.204543 35.835591 
 " clip-path="url(#pd41b03a31f)" style="fill: none; stroke: #222222; stroke-width: 0.9; stroke-linecap: round"/>
    </g>
-   <g id="line2d_11">
+   <g id="line2d_11" inkscape:label="line 11">
     <path d="M 57.312338 52.673386 
 L 170.896495 52.673386 
 " clip-path="url(#pd41b03a31f)" style="fill: none; stroke: #222222; stroke-width: 0.9; stroke-linecap: round"/>
    </g>
-   <g id="line2d_12">
+   <g id="line2d_12" inkscape:label="line 12">
     <path d="M 196.613662 69.511181 
 L 419.495781 69.511181 
 " clip-path="url(#pd41b03a31f)" style="fill: none; stroke: #222222; stroke-width: 0.9; stroke-linecap: round"/>
    </g>
-   <g id="line2d_13">
+   <g id="line2d_13" inkscape:label="line 13">
     <path d="M 125.891451 86.348976 
 L 235.189413 86.348976 
 " clip-path="url(#pd41b03a31f)" style="fill: none; stroke: #222222; stroke-width: 0.9; stroke-linecap: round"/>
    </g>
-   <g id="line2d_14">
+   <g id="line2d_14" inkscape:label="line 14">
     <path d="M 78.743311 103.186772 
 L 228.760122 103.186772 
 " clip-path="url(#pd41b03a31f)" style="fill: none; stroke: #222222; stroke-width: 0.9; stroke-linecap: round"/>
    </g>
-   <g id="patch_3">
+   <g id="patch_3" inkscape:label="shape 3">
     <path d="M 35.581331 120.024567 
 L 437.604953 120.024567 
 " style="fill: none; stroke: #444444; stroke-width: 0.5; stroke-linejoin: miter; stroke-linecap: square"/>
    </g>
-   <g id="PathCollection_1">
+   <g id="PathCollection_1" inkscape:label="markers 1">
     <defs>
      <path id="m1285a30e54" d="M -2.692582 2.692582 
 L 2.692582 2.692582 
@@ -171,7 +171,7 @@ z
      <use xlink:href="#m1285a30e54" x="147.322424" y="18.997795" style="fill: #0072b2; stroke: #ffffff; stroke-width: 0.3"/>
     </g>
    </g>
-   <g id="PathCollection_2">
+   <g id="PathCollection_2" inkscape:label="markers 2">
     <defs>
      <path id="m67af273daf" d="M -3.142451 3.142451 
 L 3.142451 3.142451 
@@ -184,7 +184,7 @@ z
      <use xlink:href="#m67af273daf" x="260.906581" y="35.835591" style="fill: #0072b2; stroke: #ffffff; stroke-width: 0.3"/>
     </g>
    </g>
-   <g id="PathCollection_3">
+   <g id="PathCollection_3" inkscape:label="markers 3">
     <defs>
      <path id="m8664b7eb31" d="M -3 3 
 L 3 3 
@@ -197,7 +197,7 @@ z
      <use xlink:href="#m8664b7eb31" x="102.317381" y="52.673386" style="fill: #0072b2; stroke: #ffffff; stroke-width: 0.3"/>
     </g>
    </g>
-   <g id="PathCollection_4">
+   <g id="PathCollection_4" inkscape:label="markers 4">
     <defs>
      <path id="m64b49034e3" d="M -3.278719 3.278719 
 L 3.278719 3.278719 
@@ -210,7 +210,7 @@ z
      <use xlink:href="#m64b49034e3" x="288.766846" y="69.511181" style="fill: #0072b2; stroke: #ffffff; stroke-width: 0.3"/>
     </g>
    </g>
-   <g id="PathCollection_5">
+   <g id="PathCollection_5" inkscape:label="markers 5">
     <defs>
      <path id="m0c563067e1" d="M -3.535534 3.535534 
 L 3.535534 3.535534 
@@ -223,7 +223,7 @@ z
      <use xlink:href="#m0c563067e1" x="173.039592" y="86.348976" style="fill: #0072b2; stroke: #ffffff; stroke-width: 0.3"/>
     </g>
    </g>
-   <g id="PathCollection_6">
+   <g id="PathCollection_6" inkscape:label="markers 6">
     <defs>
      <path id="mb08972992d" d="M -2.524876 2.524876 
 L 2.524876 2.524876 
@@ -236,23 +236,23 @@ z
      <use xlink:href="#mb08972992d" x="138.750035" y="103.186772" style="fill: #0072b2; stroke: #ffffff; stroke-width: 0.3"/>
     </g>
    </g>
-   <g id="text_9">
-    <text style="font-size: 6px; font-family: 'Arial'; text-anchor: end; fill: #222222" x="42.825" y="20.548889" transform="rotate(-0 42.825 20.548889)">Anderson 2019</text>
+   <g id="text_9" inkscape:label="text: Anderson 2019">
+    <text xml:space="preserve" style="font-size: 6px; font-family: Arial, Helvetica, 'Helvetica Neue', 'Liberation Sans', 'Nimbus Sans', 'DejaVu Sans', sans-serif; text-anchor: end; fill: #222222" x="42.825" y="20.548889" transform="rotate(-0 42.825 20.548889)">Anderson 2019</text>
    </g>
-   <g id="text_10">
-    <text style="font-size: 6px; font-family: 'Arial'; text-anchor: end; fill: #222222" x="42.825" y="37.386684" transform="rotate(-0 42.825 37.386684)">Becker 2020</text>
+   <g id="text_10" inkscape:label="text: Becker 2020">
+    <text xml:space="preserve" style="font-size: 6px; font-family: Arial, Helvetica, 'Helvetica Neue', 'Liberation Sans', 'Nimbus Sans', 'DejaVu Sans', sans-serif; text-anchor: end; fill: #222222" x="42.825" y="37.386684" transform="rotate(-0 42.825 37.386684)">Becker 2020</text>
    </g>
-   <g id="text_11">
-    <text style="font-size: 6px; font-family: 'Arial'; text-anchor: end; fill: #222222" x="42.825" y="54.22448" transform="rotate(-0 42.825 54.22448)">Chen 2021</text>
+   <g id="text_11" inkscape:label="text: Chen 2021">
+    <text xml:space="preserve" style="font-size: 6px; font-family: Arial, Helvetica, 'Helvetica Neue', 'Liberation Sans', 'Nimbus Sans', 'DejaVu Sans', sans-serif; text-anchor: end; fill: #222222" x="42.825" y="54.22448" transform="rotate(-0 42.825 54.22448)">Chen 2021</text>
    </g>
-   <g id="text_12">
-    <text style="font-size: 6px; font-family: 'Arial'; text-anchor: end; fill: #222222" x="42.825" y="71.062275" transform="rotate(-0 42.825 71.062275)">Duarte 2022</text>
+   <g id="text_12" inkscape:label="text: Duarte 2022">
+    <text xml:space="preserve" style="font-size: 6px; font-family: Arial, Helvetica, 'Helvetica Neue', 'Liberation Sans', 'Nimbus Sans', 'DejaVu Sans', sans-serif; text-anchor: end; fill: #222222" x="42.825" y="71.062275" transform="rotate(-0 42.825 71.062275)">Duarte 2022</text>
    </g>
-   <g id="text_13">
-    <text style="font-size: 6px; font-family: 'Arial'; text-anchor: end; fill: #222222" x="42.825" y="87.90007" transform="rotate(-0 42.825 87.90007)">Everett 2023</text>
+   <g id="text_13" inkscape:label="text: Everett 2023">
+    <text xml:space="preserve" style="font-size: 6px; font-family: Arial, Helvetica, 'Helvetica Neue', 'Liberation Sans', 'Nimbus Sans', 'DejaVu Sans', sans-serif; text-anchor: end; fill: #222222" x="42.825" y="87.90007" transform="rotate(-0 42.825 87.90007)">Everett 2023</text>
    </g>
-   <g id="text_14">
-    <text style="font-size: 6px; font-family: 'Arial'; text-anchor: end; fill: #222222" x="42.825" y="104.737865" transform="rotate(-0 42.825 104.737865)">Farid 2024</text>
+   <g id="text_14" inkscape:label="text: Farid 2024">
+    <text xml:space="preserve" style="font-size: 6px; font-family: Arial, Helvetica, 'Helvetica Neue', 'Liberation Sans', 'Nimbus Sans', 'DejaVu Sans', sans-serif; text-anchor: end; fill: #222222" x="42.825" y="104.737865" transform="rotate(-0 42.825 104.737865)">Farid 2024</text>
    </g>
   </g>
  </g>
