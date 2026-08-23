@@ -30,22 +30,52 @@ def newest_resume_for(cwd: str, sid: str, max_age_h: float):
     exact = mg.sessions_dir() / sid / "RESUME.md"
     if exact.exists():
         return exact
-    best, best_m = None, 0.0
+    # A finished memo always wins. But a session can also end at "stub" — the
+    # fast pre-compaction pass ran out of time and left only a pointer to the
+    # archive — and requiring "done" made that session invisible to every later
+    # one. Invisible is the worst outcome available here: the stub exists
+    # precisely because a large transcript was archived, so dropping it loses
+    # the only breadcrumb to the biggest thing on disk. It is a fallback, never
+    # a competitor: a real memo from last week beats a stub from an hour ago.
+    tiers: dict[str, tuple[Path | None, float]] = {"done": (None, 0.0),
+                                                   "stub": (None, 0.0)}
     for st in mg.sessions_dir().glob("*/STATE.json"):
         try:
             d = json.loads(st.read_text())
         except Exception:
             continue
-        if d.get("phase") != "done":
+        phase = d.get("phase")
+        if phase not in tiers:
             continue
         if cwd and d.get("cwd") and d["cwd"] != cwd:
             continue
         r = st.parent / "RESUME.md"
-        if r.exists() and r.stat().st_mtime > best_m:
-            best, best_m = r, r.stat().st_mtime
-    if best and (time.time() - best_m) <= max_age_h * 3600:
-        return best
+        if r.exists() and r.stat().st_mtime > tiers[phase][1]:
+            tiers[phase] = (r, r.stat().st_mtime)
+    for phase in ("done", "stub"):
+        best, best_m = tiers[phase]
+        if best and (time.time() - best_m) <= max_age_h * 3600:
+            return best
     return None
+
+
+def _maintenance_if_due() -> None:
+    """Second chance at the daily maintenance, at session START.
+
+    It already runs at SessionEnd, which is the right moment — the machine is
+    idle and the store is complete. But SessionEnd only fires when a session
+    ends cleanly, and the ones that matter often do not: a crash, a closed
+    laptop, a killed terminal. On this machine the doctor reported "memory
+    maintenance has never run" while the SessionEnd hook was correctly wired.
+
+    `--maintain-if-due` checks its own interval before doing any work, so
+    calling it on every start costs a process that exits immediately.
+    """
+    try:
+        mg.spawn_background(Path(__file__).parent / "doctor.py",
+                            ["--maintain-if-due"])
+    except Exception:
+        pass
 
 
 def main() -> int:
@@ -91,6 +121,7 @@ def main() -> int:
               f"~{st.get('raw_tokens_est', '?')} tok original): {resume}")
         print("Read it ONLY if the user resumes that work; otherwise ignore "
               "it. Do not re-read the archived originals.")
+    _maintenance_if_due()
     return 0
 
 

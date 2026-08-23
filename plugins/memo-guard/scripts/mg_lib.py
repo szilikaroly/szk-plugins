@@ -109,6 +109,33 @@ DEFAULTS = {
     "resume_max_chars": 6000,
     # archives kept per project before pruning oldest
     "keep_archives": 40,
+    # recall.py: put matching long-term memory in front of every prompt.
+    # On by default because the alternative is a memory you have to remember to
+    # ask — but the budget is deliberately small: this is paid every turn.
+    "recall": True,
+    "recall_max_tokens": 400,
+    "recall_max_facts": 3,
+    "recall_min_chars": 25,
+    "recall_deadline_s": 1.5,
+    # Swept against the bundled corpus (recall_eval.py --sweep), not chosen by
+    # taste. Lexical-only, with the coverage damping in place: recall stays at
+    # 70%, precision 74% -> 93%, false injections 12% -> 0%, 24 -> 19 tok per
+    # prompt. 0.35 and 0.40 perform identically; 0.45 is a cliff where recall
+    # drops to 65%, so the margin above 0.35 is one step, not three.
+    "recall_min_relevance": 0.35,
+    # Earns nothing once the relevance floor is in (measured: identical rows for
+    # every value at 0.35). Kept because it is the knob that helps a corpus full
+    # of near-duplicates, where the second-best answer is a copy of the best.
+    "recall_relative_floor": 0.0,
+    # autopilot.py: the context % at which compaction should fire on its own.
+    # This is a target, not a setting Claude Code understands — autopilot
+    # translates it into CLAUDE_AUTOCOMPACT_PCT_OVERRIDE and then corrects that
+    # number from where compaction actually landed.
+    "auto_compact_at": 70,
+    # How long the synchronous PreCompact pass waits for the model slot before
+    # giving up and leaving a stub. Bounded by the 60 s hook timeout, so this
+    # cannot be generous.
+    "fast_wait_s": 20,
     # inject a 3-line pointer on plain session startup if a recent RESUME exists
     "inject_on_startup": True,
     "startup_max_age_h": 48,
@@ -119,6 +146,13 @@ DEFAULTS = {
     # fell back anyway. A weaker memo on time beats a better one that never
     # arrives, so these are deliberately impatient.
     "model_step_timeout_s": 240,
+    # Wall clock for the whole map phase. Per-source budgets alone cannot bound
+    # a transcript with forty sources in it; this is what stops the model path
+    # before the session-level wait does, and whatever did not fit is named in
+    # PARTIAL.json and in the RESUME rather than silently dropped.
+    "model_total_s": 900,
+    # doctor.py --maintain-if-due, spawned at session end.
+    "maintain_every_h": 24,
     "model_wait_s": 300,
     "session_wait_s": 900,
     # enforce cross-session claim verdicts (claims.py) during compression
@@ -380,7 +414,82 @@ def est_tokens(text_or_bytes) -> int:
     return max(1, n // 4)
 
 
-def append_metrics(row: dict) -> None:
-    row = dict(row, ts=time.strftime("%Y-%m-%dT%H:%M:%S"))
+#: metrics.jsonl holds more than one kind of row. Rows written before the
+#: recall hook existed carry no `event` key at all, so a reader that trusts
+#: position instead of type gets whichever row happened to be appended last —
+#: which is how the self test came to print a live session's compression figures
+#: as its own result, and then to crash outright once a recall row landed last.
+COMPRESS = "compress"
+
+#: The one directory that must never receive test data.
+PRODUCTION_HOME = Path("~/.claude/memo-guard").expanduser()
+
+
+def is_production(path=None) -> bool:
+    try:
+        return Path(path or data_dir()).resolve() == PRODUCTION_HOME.resolve()
+    except OSError:
+        return False
+
+
+def assert_not_production(what: str = "this") -> None:
+    """Refuse to write fixtures into the user's real stores.
+
+    The self test used to select its sandbox from MEMO_GUARD_HOME — the variable
+    this plugin's own installer PINS to the production directory. So on every
+    machine where memo-guard was installed, the "sandbox" was the live store,
+    and the test wrote an invented PROSPERO number, an invented rejection
+    reason and a REFUTED claim about a cohort's sample size into long-term
+    memory, where recall then served them to real sessions as established fact.
+
+    An environment variable is not a safety boundary. Anything that writes
+    fixtures calls this first, and it fails loudly rather than degrading.
+    """
+    if is_production():
+        raise SystemExit(
+            f"refusing to run {what} against the production store "
+            f"({PRODUCTION_HOME}).\n"
+            "  It writes fixtures into the memory and claim stores, and recall\n"
+            "  would serve them to real sessions as fact.\n"
+            "  Set MEMO_GUARD_SELFTEST_HOME to a scratch directory, or unset it\n"
+            "  entirely to get a fresh temporary one.")
+
+
+def append_metrics(row: dict, event: str = COMPRESS) -> None:
+    row = dict(row)
+    row.setdefault("event", event)
+    row["ts"] = time.strftime("%Y-%m-%dT%H:%M:%S")
     with (data_dir() / "metrics.jsonl").open("a") as f:
         f.write(json.dumps(row) + "\n")
+
+
+def read_metrics(event: str | None = None, session: str | None = None,
+                 path=None) -> list[dict]:
+    """Every metrics row, filtered by type and session. The only reader.
+
+    Legacy rows have no `event`; they are all compression rows, so they are
+    labelled as such on the way out rather than migrated on disk — the file is
+    append-only evidence and rewriting it would destroy the record it exists to
+    be.
+    """
+    mf = Path(path) if path else (data_dir() / "metrics.jsonl")
+    out: list[dict] = []
+    if not mf.exists():
+        return out
+    for ln in mf.read_text(errors="replace").splitlines():
+        ln = ln.strip()
+        if not ln:
+            continue
+        try:
+            row = json.loads(ln)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(row, dict):
+            continue
+        row.setdefault("event", COMPRESS)
+        if event is not None and row["event"] != event:
+            continue
+        if session is not None and row.get("session") != session:
+            continue
+        out.append(row)
+    return out

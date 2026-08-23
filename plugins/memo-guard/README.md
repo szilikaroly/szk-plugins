@@ -53,7 +53,8 @@ the concrete cache path it prints.)
 |---|---|---|
 | every tool call | `PostToolUse` | measure context %; at 70% / 80% archive + compress |
 | every prompt | `UserPromptSubmit` | same, plus at 85% nudge Claude to recommend `/compact` |
-| before compaction | `PreCompact` | archive first — nothing is ever lost to a summary |
+| every prompt | `UserPromptSubmit` | recall matching long-term memory into the prompt (`recall.py`) |
+| before compaction | `PreCompact` | archive, then build a memo **synchronously** — the window is seconds from being replaced |
 | session ends | `SessionEnd` | archive, so tomorrow resumes for a few hundred tokens |
 | session starts | `SessionStart` | after `compact`/`clear`/`resume`, inject `RESUME.md` |
 
@@ -108,6 +109,87 @@ The ratio also improves with session size — the resume is a near-constant
 - `/memo-guard:remember` — edit core memory (always-in-context blocks)
 - `/memo-guard:memory` — long-term memory: recall through a goal, or promote a fact
 - `/memo-guard:claim` — refute, supersede or pin a claim so it stays judged
+- `/memo-guard:autopilot` — let compaction fire on its own at a chosen context %
+- `/memo-guard:doctor` — what is misconfigured, overlapping, or quietly broken
+
+## Autopilot — archive, compress, compact, without you asking
+
+```
+/memo-guard:autopilot            # status
+autopilot.py --enable --at 70    # compaction fires at 70% of the measured window
+autopilot.py --disable
+```
+
+The plugin's oldest limitation was that it could prepare perfectly for a
+compaction it had no way to cause. It still cannot cause one — but it does not
+have to, because Claude Code compacts on its own, and where that trigger sits is
+readable from the environment:
+
+```
+threshold = min(floor(effective_window * CLAUDE_AUTOCOMPACT_PCT_OVERRIDE / 100),
+                effective_window - 13000)
+```
+
+Verified against the shipped binaries (2.1.211 and 2.1.237). Autopilot writes
+that variable into `settings.json`; the `PreCompact` hook does the rest. The
+compaction fires **between turns, never inside one** — which is the "when the
+current step has finished" that no percentage watcher of ours could have
+achieved, because ours only ever runs *during* a step.
+
+Three things about it that are easy to get wrong:
+
+**The two percentages are not the same percentage.** memo-guard measures against
+the model's real window. Claude Code measures against an *effective* window: the
+real one minus a reserve (capped at 20,000 tokens), and shrunk further by an
+`autoCompactWindow` setting if you have one. Writing `70` therefore does not
+produce compaction at the 70% this plugin reports:
+
+| real window | `autoCompactWindow` | override 70 fires at | = of the real window |
+|---|---|---:|---:|
+| 1M | 800,000 | 546,000 tok | **54.6%** |
+| 1M | — | 686,000 tok | 68.6% |
+| 200k | — | 126,000 tok | 63.0% |
+
+Rather than reimplement the product's arithmetic, which would break the first
+time it changed, autopilot **measures where compaction actually landed** and
+corrects the override toward the target — one proportional step, because both
+sides are a fraction of a fixed window. Verified against a transcription of that
+formula in `selftest.py`: all three rows above reach 70.0% in **at most one
+correction**. `--status` shows every sample. Only *automatic* compactions are
+samples — a manual `/compact` is you choosing a moment, and calibrating on it
+would teach autopilot your habits instead of the product's arithmetic.
+
+**It takes effect in the next session.** The environment is read when the process
+starts, so writing `settings.json` cannot move the running session's threshold.
+
+**Only automatic compactions can be raised into.** The trigger compares against
+`min(floor(effWin * pct/100), effWin - 13000)`, so the correction has headroom up
+to ~98% of the effective window; the clamp at 95 is well inside it. (The separate
+`precomputeBufferFraction` floor at 80% applies to *precomputing* the summary,
+not to firing.)
+
+**The override is undocumented.** It is read straight from `process.env` by both
+builds checked here, but nothing promises it will survive a release. If it
+disappears, autopilot stops aiming and everything else keeps working exactly as
+before — the archive, the memo and the resume never depended on it.
+
+### The fast pass
+
+Auto-compaction turns a rare race into a routine one. `PreCompact` used to
+archive and spawn the compressor in the background; compaction then finished in
+seconds and `SessionStart` injected a `RESUME.md` that was stale, or absent.
+
+So `PreCompact` now: writes a stub immediately (the archive path and how to grep
+it — 790 bytes, never overwriting a real memo), then runs
+`compressor.py --fast` **synchronously** — deterministic only, no local model,
+bounded to 40 s of the hook's 60 s budget — and only then spawns the full
+background run that will upgrade the memo for next time.
+
+"Wait, never skip" is right for a checkpoint and wrong here. A checkpoint is not
+about to lose anything, so it can afford four minutes and the local model. The
+fast pass is describing a context that disappears in seconds; a lossier memo that
+exists beats a better one that arrives too late. Measured: 8.4 s on a 716 KB
+transcript, RESUME present the moment the hook returns.
 
 ## Memory tiers
 
@@ -151,6 +233,134 @@ participants were enrolled"* against a recorded *"the sample size was n=412"*
 scores the same as an unrelated sentence. With embeddings available it is caught
 at 0.82.
 
+## Recall — memory that shows up without being asked
+
+The three stores above were reachable only through `/memo-guard:memory` and
+`/memo-guard:claim`, which makes them useless in the case they exist for: **you
+cannot ask for a fact you have forgotten you recorded.** A memory that only
+answers when addressed by name is a filing cabinet.
+
+`recall.py` runs on `UserPromptSubmit` and injects what matches the prompt.
+Everything about it is a constraint, because this cost is paid on *every turn*:
+
+| rule | why |
+|---|---|
+| ≤ 400 tok, ≤ 3 facts | the question is never "is this relevant" but "is it worth more than the tokens it displaces" |
+| once per fact per session | a fact injected on turn 1 is still in context on turn 2; injecting it again fills the window with repeats — the exact failure this plugin exists to prevent |
+| silent below 25 chars, and on any `/command` | "yes", "go on", `/status` — instructions about the work in flight, not questions memory can answer |
+| lexical by default | the semantic path is a round trip to a local model server |
+| marked as data | facts were written by earlier sessions; text from an earlier session is not an instruction from the user |
+
+A matching **refuted or superseded claim** is flagged before the work starts
+rather than after it has been redone.
+
+```bash
+recall.py --test "what PROSPERO number did we register the PMOS review under"
+# semantic path : off (lexical only)
+# scope         : current project only   candidates: 1
+#   INJECT [0.980] The PROSPERO registration number for the PMOS review is CRD…
+# would inject  : ~31 tok of a 400 tok budget
+```
+
+### Measuring it — `recall_eval.py`
+
+Two things here used to be assertions: that `SEMANTIC_FLOOR = 0.48` "sits in a
+measured gap" (measured once, by hand, on a handful of facts), and that
+injecting memory into every prompt is worth its tokens. Neither can be settled
+by looking at what the retriever returned — you need the scores of the facts it
+did *not* return, and the behaviour on prompts where the correct answer is
+silence.
+
+`eval/recall_corpus.json` is 20 labelled facts across four projects and 28
+queries in four kinds:
+
+| kind | what it tests |
+|---|---|
+| lexical | the query shares words with its fact — the easy case |
+| paraphrase | it shares almost none; the only case embeddings can justify their latency |
+| gated | the one relevant fact is in **another** project, so with no goal stated the correct answer is nothing. A hit here is a privacy failure, not a success |
+| noise | nothing in the store answers it; anything returned is pure cost |
+
+```bash
+recall_eval.py                    # measure (both modes if an embedder is up)
+recall_eval.py --sweep            # pick the injection floors from data
+recall_eval.py --calibrate        # SEMANTIC_FLOOR: show the two distributions
+recall_eval.py --no-embed --json  # fast, deterministic; what selftest runs
+```
+
+**The headline number is not recall — it is the false-injection rate.** Recall is
+paid once per useful answer; noise is paid on every turn forever, and a block
+that is usually noise is a block you learn to skip.
+
+Measured on the bundled corpus, lexical path only:
+
+| | before | after |
+|---|---:|---:|
+| recall | 70% | **70%** |
+| precision | 67% | **93%** |
+| false injection | 25% | **0%** |
+| cross-project leaks | 0 | **0** |
+| cost | 26 tok/prompt | **19 tok/prompt** |
+
+#### What the harness found
+
+**A single weak match scored a perfect 1.0.** The lexical signal was bm25
+normalised to the best hit — so the best hit is 1.0 *even when it is terrible*.
+A query about trains from Budapest to Debrecen matched one fact on the word
+"goes" and was injected with full confidence, because nothing else matched
+anything. Relative rank cannot say "the best answer here is still bad". It is
+now damped by coverage — the share of query terms the fact actually contains —
+floored at 0.25 so a paraphrase, which shares few words by definition, is damped
+rather than deleted. One extra `IN (...)` query, no extra round trips.
+
+**The floor belongs on relevance, not on the composite score.** The obvious knob
+was "don't inject anything below score X". The composite carries a recency term,
+so a floor on it is an age limit wearing a relevance costume — and the oldest
+facts are the ones a memory exists for. `recall()` now returns `relevance`
+separately (query signal only, no recency or same-project constant) and
+`recall_min_relevance` gates on that. Graph neighbours are exempt: they were
+pulled in by an edge, not by matching the query, so they have no relevance of
+their own and the edge type is the evidence.
+
+**The floors were swept, not chosen.** 0.35 and 0.40 perform identically; 0.45
+is a cliff where recall drops to 65%. The default is 0.35, so the margin above
+it is one step, not three. `recall_relative_floor` earns nothing once the
+relevance floor is in place (identical rows at every value) and defaults to 0 —
+it is kept for corpora full of near-duplicates, where the second-best answer is
+a copy of the best.
+
+#### What this does not prove
+
+- **The corpus is small and synthetic.** 20 facts, written to make the four
+  query kinds separable. Your own store will not behave identically —
+  `--corpus mine.json` takes the same format.
+- **Every fact in it is new.** Recency is therefore constant across the corpus,
+  so nothing here exercises how ranking ages. The move of the floor onto
+  relevance makes that structurally irrelevant for injection, but not for
+  ranking order.
+- **The semantic path is unmeasured.** The local embedder was stalled
+  (`broker.py --diagnose` = SLOW) throughout, so every number above is the
+  lexical floor of this system, not its ceiling. `paraphrase recall 54%` is the
+  number embeddings have to beat, and `--calibrate` refuses to run without a
+  responding embedder rather than print a threshold derived from nothing.
+
+### The health check that had to be strict
+
+Whether to embed is decided by `broker.healthy(strict=True)`, and the `strict`
+existed for a reason found while building this. The non-strict check falls back
+to `/api/tags` when `/api/embed` fails — so a **wedged server is reported
+healthy**, and the hook would then block on an embed call in front of the user's
+keystroke. Measured on this machine at the time: `/api/tags` answered in 1 ms,
+`/api/embed` had still not answered after 60 s. The verdict is cached for a
+minute, because paying a probe timeout per keystroke turns one broken component
+into a tax on typing, and `embed.set_timeout()` bounds the call itself — 20 s is
+right when a human asked for a recall and wrong in front of every prompt.
+
+Measured (`selftest.py`): **74 ms warm**, 672 ms on the first prompt of a session
+(interpreter start plus the one health probe). Silence is the correct output for
+most prompts; every miss is written to `metrics.jsonl` so the hit rate is
+measurable rather than anecdotal.
+
 ## Retrieval order (cheapest first)
 
 1. `memo_query.py` against the claims index — ~60 tok/answer (local-model mode)
@@ -176,6 +386,17 @@ just spent CPU compressing.
 
   "adaptive": false,
   "hard_floor": 90,
+  "auto_compact_at": 70,
+  "fast_wait_s": 20,
+  "recall": true,
+  "recall_max_tokens": 400,
+  "recall_max_facts": 3,
+  "recall_min_chars": 25,
+  "recall_deadline_s": 1.5,
+  "recall_min_relevance": 0.35,
+  "recall_relative_floor": 0.0,
+  "model_total_s": 900,
+  "maintain_every_h": 24,
   "core_memory": true,
   "core_memory_max_chars": 2000,
   "enforce_verdicts": true,
@@ -218,8 +439,10 @@ metrics.jsonl                                every run, auditable
 ## Honest limits
 
 - **No script can open a new context.** `/compact` and `/clear` are yours to
-  run. memo-guard cannot, and does not pretend to. What it does is make the
-  next context cheap and ensure nothing is lost when you do run them.
+  run; a hook cannot execute a slash command. What autopilot does instead is
+  *aim* the automatic compaction Claude Code already has (see below) — it never
+  triggers one itself, and if auto-compaction is disabled it can do nothing at
+  all.
 - **The archive is the ground truth; the memo is lossy.** Before *editing*
   anything, read the real file — never work from a distilled copy.
 - **Deterministic mode drops things.** It keeps heads, tails, and signal
@@ -255,11 +478,12 @@ metrics.jsonl                                every run, auditable
   cannot tell meaning from coincidence, and no threshold separates them. With
   Ollama unavailable, semantic matching degrades to lexical and some
   resurrections get through.
-- **The local-model path does not finish on large transcripts.** On a 14 MB
-  transcript it exceeds its budget and falls back to deterministic mode. Since
-  `broker.py` this fails in ~4 minutes instead of 30 and still produces a
-  ~1,030-token RESUME. The deterministic path is the reliable one; the model
-  path is an upgrade, not a dependency.
+- **On a large transcript the model reaches some sources and not others.** It
+  is no longer all-or-nothing (see *The model path, per source* below), but a
+  transcript big enough to exhaust the budget still ends with part of the
+  session covered only by the deterministic distillation. The RESUME names
+  which parts. The deterministic path remains the reliable one; the model path
+  is an upgrade, not a dependency.
 
 ## cognify / memify
 
@@ -299,6 +523,105 @@ cognify.py --run [--all] [--no-model]
 memify.py  --run [--hard]        # --hard actually deletes; default reports
 broker.py  --route               # which model each task gets, from measured VRAM
 ```
+
+## The model path, per source
+
+The old shape ran memo-index's `memo_gen` once over every source with a single
+timeout. On a 14 MB transcript it ran past the budget, was killed, and the
+non-zero exit was read as total failure — so the run fell back to deterministic
+mode and **threw away every memo it had already finished**. `memo_gen` writes
+each memo as it completes and skips files whose hash already matches, so that
+work was sitting on disk the whole time. Nothing was missing except a caller
+willing to keep it.
+
+It is now a map/reduce:
+
+- **map** — one `memo_gen` call per source, each with its own budget. A source
+  that fails or times out costs that source, not the run.
+- **reduce** — `verify_anchors` → `memo_db` → `index_build` once, over whatever
+  the map phase produced. Zero memos is the only total failure left.
+
+Order is deliberate: `conversation.md` first, because decisions live in the
+dialogue and nothing else reconstructs them, then smallest-first, which
+maximises how many sources are covered before the deadline.
+
+**Partial coverage has to be visible.** A memo labelled `local-model` that
+quietly modelled two thirds of the session reads, to the next context, exactly
+like one that modelled all of it. So the mode becomes
+`local-model (partial: 9 of 14 sources modelled)`, `PARTIAL.json` records both
+lists, and the RESUME carries a line naming the sources the model never
+reached — those keep only their deterministic distillation, and the reader
+should grep them rather than assume the memo covers them.
+
+`model_total_s` (default 900) bounds the whole map phase; `model_step_timeout_s`
+(240) bounds one source.
+
+Tested without a model at all: `selftest.py` drives `map_sources` with a stub
+generator that fails and stalls on command, checking that ordering holds, that
+one bad source skips one file rather than the run, that the total deadline stops
+it and names what was dropped, and that every source ends up in exactly one of
+the two lists.
+
+## Doctor — the overlap, and everything else nobody checks
+
+```
+/memo-guard:doctor
+doctor.py --fix              # settings.json only, the two keys it names
+doctor.py --clean-handoffs   # unfilled templates only
+doctor.py --maintain
+```
+
+### Two tools, one job
+
+memo-index's `ctx_watch` and memo-guard's `ctx_monitor` measure the same number,
+the same way, from the same transcript, and both fire at 70%. Both then write a
+handoff and tell the model to wind down. The visible cost is litter: `ctx_watch`
+writes `.memo/HANDOFF.md` into whatever directory the session happened to be
+standing in, on every tool call. This repository had accumulated **six** of them,
+in six directories, every one still holding the unfilled template — the section
+only a person can write, unwritten.
+
+They are not redundant in every part, which is why doctor does not tell you to
+delete them. `hook_gate.sh` does two jobs and only the first duplicates:
+
+| `hook_gate.sh` job | verdict |
+|---|---|
+| context ceiling + `HANDOFF.md` | duplicated — memo-guard archives *and* compresses at the same point |
+| "this project has an index, query it" | keep — that is about the project's corpus, not the session |
+
+So the prescription is narrowing, not removal: drop the PostToolUse `ctx_watch`
+entry, and set `MEMO_CTX_THRESHOLD=101` — a percentage that cannot be reached,
+using the skill's own documented knob — so `hook_gate.sh` keeps only the job
+memo-guard does not do. `--fix` does exactly those two things and nothing else;
+an unrelated hook sharing the same group survives, and running it twice is a
+no-op.
+
+### The rest
+
+- **A model server that answers but does not work.** `/api/tags` in a
+  millisecond, `/api/embed` never. Every semantic path degrades to lexical and
+  nothing says so.
+- **An installed copy older than the source.** Installing *copies* into the
+  plugin cache, so the hooks running in your sessions are the installed ones —
+  an easy way to spend an afternoon testing a fix that is not running.
+- **Autopilot's state and `settings.json` disagreeing.** These are two files
+  that have to agree and nothing kept them agreeing; they drifted during
+  development — state written under one `CLAUDE_CONFIG_DIR`, settings under
+  another — leaving autopilot reporting ON while nothing would fire at all.
+  Silent, total failure, one comparison to catch.
+- **`blockers()` no longer lists `autoCompactWindow`.** It changes *where*
+  compaction fires, it does not prevent it, and calibration already corrects
+  for it. A handled caveat listed as a blocker teaches the reader to skim the
+  list, which is how the real entries stop being read. It is a caveat now.
+
+### Maintenance
+
+`cognify` and `memify` existed and nothing ran them. Session end is the only
+moment the machine is reliably idle and the store reliably complete, so
+`archive_now.py` spawns `doctor.py --maintain-if-due` there. It rate-limits
+itself to once a day (`maintain_every_h`) and **reports rather than deletes** —
+a scheduled job that removes things is the one component nobody is watching.
+`--hard` stays an explicit act.
 
 ## Syncing across machines
 

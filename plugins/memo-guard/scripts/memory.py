@@ -307,11 +307,21 @@ def _cosine_all(qv: list[float], vecs: list, E) -> dict[int, float]:
         return {fid: E.cosine(qv, E.unpack(blob)) for fid, blob in vecs}
 
 
-def _refuted(text: str) -> bool:
-    """A fact the claim store has since judged must never be recalled."""
+def _refuted(text: str, allow_semantic: bool = True) -> bool:
+    """A fact the claim store has since judged must never be recalled.
+
+    `allow_semantic` is the caller's decision about the model server, and it has
+    to reach this far down. It did not: recall() honoured the flag for its own
+    vector pass and then called this with the default, so every candidate fact
+    it was about to return took one embed round trip anyway. On a store with
+    verdict vectors in it and an embed model that does not answer, that is two
+    timeouts per prompt on the hook that runs before every keystroke — measured
+    2.3 s with recall.py's shortened timeout, 40 s with the default one. The
+    claims.match() lexical pass answers this question on its own.
+    """
     try:
         import claims as cl
-        v = cl.match(cl.connect(), text)
+        v = cl.match(cl.connect(), text, allow_semantic=allow_semantic)
         return bool(v and v["status"] == "REFUTED")
     except Exception:
         return False
@@ -368,7 +378,9 @@ def promote(db: sqlite3.Connection, text: str, cwd: str, kind: str = "finding",
 # --------------------------------------------------------------------------- reads
 
 def recall(db: sqlite3.Connection, query: str, cwd: str, goal: str | None,
-           budget_tokens: int = 700, limit: int = 40) -> dict:
+           budget_tokens: int = 700, limit: int = 40,
+           allow_semantic: bool = True, exclude: set | None = None,
+           debug: dict | None = None) -> dict:
     """The gate. No goal -> this project only. Goal -> the whole store.
 
     Cross-project facts are ranked below same-project ones even when the goal is
@@ -411,6 +423,26 @@ def recall(db: sqlite3.Connection, query: str, cwd: str, goal: str | None,
             if hits_:
                 best = min(r for _, r in hits_) or -1e-9
                 lex_rank = {rid: max(0.0, min(1.0, r / best)) for rid, r in hits_}
+                # Normalising to the best hit makes the best hit 1.0 — even when
+                # it is terrible. A query about trains to Debrecen matched one
+                # fact on the word "goes" and scored a perfect 1.0, because it
+                # was the only thing that matched anything. Relative rank cannot
+                # say "the best answer here is still bad"; coverage can, and it
+                # costs one set intersection. Bounded below so a paraphrase,
+                # which shares few words by definition, is damped rather than
+                # deleted — the semantic path is what rescues those.
+                tset = set(terms)
+                # One query, not one per hit: this runs inside a hook, and 200
+                # round trips to buy a damping factor would spend more than the
+                # damping saves.
+                ids_ = list(lex_rank)
+                qmarks = ",".join("?" * len(ids_))
+                norms = dict(db.execute(
+                    f"SELECT id,norm FROM fact WHERE id IN ({qmarks})", ids_))
+                for rid in ids_:
+                    words = set(re.findall(r"[a-z0-9]{3,}", norms.get(rid, "")))
+                    cov = len(tset & words) / max(1, len(tset))
+                    lex_rank[rid] *= max(0.25, min(1.0, cov * 2.0))
         except sqlite3.OperationalError:
             lex_rank = {}
 
@@ -422,8 +454,14 @@ def recall(db: sqlite3.Connection, query: str, cwd: str, goal: str | None,
     # the query. For a store whose purpose is recalling things from months ago,
     # that is the one failure that matters. numpy is used when present purely
     # for speed; the pure-Python path is the same computation.
+    # The embedding call talks to a local model server. That is fine when a
+    # human is waiting for a recall they asked for, and not fine on a hook that
+    # runs before every prompt — which is why the caller, not this function,
+    # decides whether the round trip is affordable right now.
     semantic: dict[int, float] = {}
     try:
+        if not allow_semantic:
+            raise RuntimeError("semantic path disabled by caller")
         import embed as E
         qr = E.embed(query or goal or "", profile="recall")
         if qr:
@@ -435,6 +473,16 @@ def recall(db: sqlite3.Connection, query: str, cwd: str, goal: str | None,
             semantic = _cosine_all(qv, vecs, E)
     except Exception:
         semantic = {}
+
+    # Pass a dict as `debug` to get the raw per-fact signals back. The floor
+    # that decides what surfaces cannot be calibrated from the facts that
+    # surfaced — you need the scores of the ones that did not, and of the
+    # queries that should return nothing at all.
+    if debug is not None:
+        debug["lexical"] = dict(lex_rank)
+        debug["semantic"] = dict(semantic)
+        debug["candidates"] = len(rows)
+        debug["semantic_used"] = bool(semantic)
 
     now = time.time()
     scored = []
@@ -472,7 +520,8 @@ def recall(db: sqlite3.Connection, query: str, cwd: str, goal: str | None,
                 continue
         elif relevance < 0.15:
             continue        # no embedder; fall back to a lexical floor
-        scored.append((score, fid, text, kind, anchor, slug, same, created))
+        scored.append((score, fid, text, kind, anchor, slug, same, created,
+                       relevance))
     scored.sort(reverse=True, key=lambda r: r[0])
 
     # Graph expansion. A fact that contradicts or supersedes a strong hit is
@@ -498,13 +547,21 @@ def recall(db: sqlite3.Connection, query: str, cwd: str, goal: str | None,
             boost = 1.0 if rel in ("contradicts", "supersedes") else 0.6
             neighbours.append((score * 0.8 * boost * w, row[0], row[1], row[2],
                                row[3], row[4], row[5] == pid, row[6], rel))
-    scored = [(s, i, t, k, a, sl, sa, c, None) for s, i, t, k, a, sl, sa, c in scored]
+            # A neighbour was pulled in by the graph, not by matching the query,
+            # so it has no relevance of its own. Inheriting the hit's relevance
+            # would let a floor on relevance wave it through; scoring it zero
+            # would let the same floor delete graph expansion entirely. It is
+            # exempt instead — the edge type is the evidence, not the words.
+            rel_of[row[0]] = None
+    rel_of = {r[1]: r[8] for r in scored}
+    scored = [(s, i, t, k, a, sl, sa, c, None) for s, i, t, k, a, sl, sa, c, _ in scored]
     scored.extend(neighbours)
     scored.sort(reverse=True, key=lambda r: r[0])
 
     out, spent = [], 0
+    exclude = exclude or set()
     for score, fid, text, kind, anchor, slug, same, created, via in scored:
-        if _refuted(text):
+        if _refuted(text, allow_semantic) or fid in exclude:
             continue
         cost = len(text) // 4 + 12
         if spent + cost > budget_tokens:
@@ -512,6 +569,10 @@ def recall(db: sqlite3.Connection, query: str, cwd: str, goal: str | None,
         spent += cost
         out.append({"id": fid, "text": text, "kind": kind, "anchor": anchor,
                     "project": slug, "same_project": same, "via": via,
+                    # The part of the score that is about the QUERY, with no
+                    # recency or same-project constant folded in. A floor set on
+                    # the composite quietly becomes an age limit; this does not.
+                    "relevance": rel_of.get(fid),
                     "when": time.strftime("%Y-%m-%d", time.localtime(created or now)),
                     "score": round(score, 3)})
         db.execute("UPDATE fact SET hits=hits+1, last_hit=? WHERE id=?", (now, fid))

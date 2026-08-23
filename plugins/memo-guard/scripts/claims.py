@@ -170,7 +170,8 @@ def similarity(a: str, b: str) -> float:
     return 0.5 * jac + 0.5 * ovl
 
 
-def match(db: sqlite3.Connection, text: str, threshold: float = 0.55) -> dict | None:
+def match(db: sqlite3.Connection, text: str, threshold: float = 0.55,
+          allow_semantic: bool = True) -> dict | None:
     """Exact fingerprint first, then nearest rephrasing above the threshold.
 
     0.55 was calibrated on rephrasings of real claims: it catches 6 of 7 with no
@@ -202,6 +203,11 @@ def match(db: sqlite3.Connection, text: str, threshold: float = 0.55) -> dict | 
     # list, which is tens of rows, so this stays one embed call plus a tiny
     # dot-product loop. No embedder available means we simply keep the lexical
     # answer rather than failing.
+    # The embed is one round trip to a local server. Cheap when a compression
+    # asks; not cheap on a hook that runs in front of every prompt, where the
+    # caller may know the model slot is already taken.
+    if not allow_semantic:
+        return None
     sem = _semantic_match(db, text)
     if sem:
         return sem

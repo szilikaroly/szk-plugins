@@ -12,16 +12,14 @@ import mg_lib as mg  # noqa: E402
 
 
 def metrics_summary() -> dict:
-    mf = mg.data_dir() / "metrics.jsonl"
-    rows = []
-    if mf.exists():
-        for ln in mf.read_text().splitlines():
-            try:
-                rows.append(json.loads(ln))
-            except json.JSONDecodeError:
-                pass
+    # metrics.jsonl holds compression rows AND recall rows. Counting them all as
+    # "runs" inflated the number, and `rows[-1]` showed a recall event as the
+    # last compression — the same positional read that made the self test print
+    # another session's figures as its own.
+    rows = mg.read_metrics(event=mg.COMPRESS)
+    recalls = mg.read_metrics(event="recall")
     if not rows:
-        return {"runs": 0}
+        return {"runs": 0, "recall_events": len(recalls)}
     res = [r["reduction_resume_pct"] for r in rows
            if "reduction_resume_pct" in r]
     kept = [r["reduction_kept_pct"] for r in rows if "reduction_kept_pct" in r]
@@ -33,6 +31,10 @@ def metrics_summary() -> dict:
         "modes": {m: sum(1 for r in rows if r.get("mode") == m)
                   for m in {r.get("mode") for r in rows}},
         "last": rows[-1],
+        "recall_events": len(recalls),
+        "recall_injected": sum(1 for r in recalls if r.get("injected")),
+        "recall_p50_ms": (sorted(r["ms"] for r in recalls if "ms" in r)
+                          [len(recalls) // 2] if recalls else None),
     }
 
 
@@ -96,6 +98,27 @@ def main() -> int:
           f"advise /compact at {cfg['advise_at']}%")
     print(f"data dir  : {mg.data_dir()}")
 
+    # Autopilot is the one setting that lives outside this plugin's data dir —
+    # it edits settings.json — so status has to read the real thing rather than
+    # report what it once wrote.
+    try:
+        import autopilot
+        ast_ = autopilot.load_state()
+        if ast_.get("enabled"):
+            written = (autopilot.read_settings().get("env") or {}).get(
+                autopilot.ENV_KEY)
+            print(f"autopilot : ON, compaction targeted at "
+                  f"{float(ast_.get('target', 70)):g}% "
+                  f"(override {written or '(missing!)'}, "
+                  f"{'calibrated' if ast_.get('calibrated') else 'still learning'})")
+            for b in autopilot.blockers():
+                print(f"  ! {b}")
+        else:
+            print("autopilot : off  (/memo-guard:autopilot to let compaction "
+                  "fire on its own)")
+    except Exception:
+        pass
+
     print(f"\narchives ({slug}): {len(archives)} total")
     for a in archives[-5:]:
         print(f"  {a.name}  {a.stat().st_size // 1024:>6} KB")
@@ -121,6 +144,24 @@ def main() -> int:
         print(f"  modes: {ms['modes']}")
     else:
         print("  no compression runs yet")
+
+    if ms.get("recall_events"):
+        inj = ms.get("recall_injected", 0)
+        print(f"  recall hook                : {ms['recall_events']} prompts, "
+              f"{inj} injected ({100 * inj // max(1, ms['recall_events'])}%), "
+              f"median {ms.get('recall_p50_ms')} ms")
+
+    # The semantic path failing is invisible from the outside: recall keeps
+    # working on the lexical index and simply stops finding paraphrases. Say so.
+    try:
+        import embed
+        br = embed.breaker_state()
+        if br["open"]:
+            print(f"  embedding                  : SKIPPED for another "
+                  f"{br['seconds_left']}s — {br['reason']}. Recall is lexical "
+                  f"only: exact words still match, paraphrases do not.")
+    except Exception:
+        pass
     return 0
 
 

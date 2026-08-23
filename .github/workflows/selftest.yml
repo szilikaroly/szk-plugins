@@ -59,16 +59,42 @@ jobs:
           print("frontmatter OK")
           EOF
 
-      - name: Validate JSON manifests
+      - name: Validate every JSON manifest, not just one plugin's
         run: |
-          python3 -c "import json;json.load(open('.claude-plugin/marketplace.json'))"
-          python3 -c "import json;json.load(open('plugins/memo-guard/.claude-plugin/plugin.json'))"
-          python3 -c "import json;json.load(open('plugins/memo-guard/hooks/hooks.json'))"
+          python3 - <<'EOF'
+          import json, sys
+          from pathlib import Path
+          bad = 0
+          for p in [Path(".claude-plugin/marketplace.json"),
+                    *Path("plugins").glob("*/.claude-plugin/plugin.json"),
+                    *Path("plugins").glob("*/hooks/hooks.json")]:
+              try:
+                  json.loads(p.read_text())
+                  print(f"  ok   {p}")
+              except Exception as e:
+                  print(f"  FAIL {p}: {e}"); bad += 1
+          sys.exit(1 if bad else 0)
+          EOF
 
-      - name: Compile all scripts
-        run: python3 -m py_compile plugins/memo-guard/scripts/*.py
+      - name: Compile every plugin's scripts
+        run: |
+          for d in plugins/*/scripts; do
+            [ -d "$d" ] || continue
+            echo "== $d"
+            python3 -m py_compile "$d"/*.py
+          done
 
-      - name: End-to-end selftest (measures the >=95% target)
-        env:
-          MEMO_GUARD_HOME: ${{ runner.temp }}/mg-test
-        run: python3 plugins/memo-guard/scripts/selftest.py
+      # Every suite, not only memo-guard's. The one bug this file exists to
+      # catch — a self test reading the wrong row out of a shared metrics file —
+      # passed here for months, because CI leaves MEMO_GUARD_HOME unset and so
+      # got a clean sandbox, while every developer machine had the variable
+      # pinned to the production store by the plugin's own installer. CI that
+      # only ever sees the happy environment is CI that certifies nothing.
+      - name: Dependencies the suites need
+        run: |
+          python3 -m pip install --quiet --upgrade pip
+          python3 -m pip install --quiet matplotlib pandas pillow lxml \
+                                         python-docx python-pptx
+
+      - name: All plugin self tests
+        run: ./bin/selftest-all.sh

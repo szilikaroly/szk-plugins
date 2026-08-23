@@ -169,6 +169,67 @@ def conversation_doc(turns: list[dict], sid: str) -> str:
 
 # ----------------------------------------------------------------- memo-index
 
+def map_sources(workdir: Path, skill: Path, step_budget: float,
+                total_budget: float, log) -> tuple[list[str], list[str]]:
+    """Model each source separately instead of the whole set in one call.
+
+    The old shape was one `memo_gen` over `sources/*.md` with a single timeout.
+    On a 14 MB transcript it ran past the budget and was killed, the non-zero
+    exit was read as total failure, and the run fell back to deterministic —
+    throwing away every memo it had already finished. `memo_gen` writes each
+    memo as it completes and skips files whose hash already matches, so that
+    work was on disk the whole time. Nothing was missing except a caller willing
+    to keep it.
+
+    So: one call per source, each with its own budget, a failure skips one file
+    instead of the run, and a total deadline stops the whole thing before the
+    session-level wait does. The model path becomes an upgrade applied per
+    source rather than a bet on the whole transcript.
+
+    Order is deliberate. `conversation.md` goes first because decisions live in
+    the dialogue and nothing else can reconstruct them; the rest follow smallest
+    first, which maximises how many are covered before the deadline. Whatever
+    does not fit is named in the log and in PARTIAL.json — a coverage cap that
+    is not reported reads exactly like full coverage.
+    """
+    import broker
+    src = workdir / "sources"
+    files = sorted(src.glob("*.md"), key=lambda f: f.stat().st_size)
+    conv = [f for f in files if f.name == "conversation.md"]
+    files = conv + [f for f in files if f.name != "conversation.md"]
+
+    deadline = time.time() + total_budget
+    done: list[str] = []
+    failed: list[str] = []
+    for f in files:
+        left = deadline - time.time()
+        if left <= 5:
+            failed.extend(g.name for g in files[files.index(f):])
+            log(f"total model budget spent; {len(failed)} source(s) keep only "
+                f"their deterministic distillation: {', '.join(failed[:6])}"
+                + (" ..." if len(failed) > 6 else ""))
+            break
+        broker.beat("model")
+        cmd = [sys.executable, str(skill / "memo_gen.py"),
+               "--root", str(workdir), "--include", f"sources/{f.name}",
+               "--profile", "prose", "--memo-dir", str(workdir / ".memo")]
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True,
+                               timeout=min(step_budget, left))
+        except subprocess.TimeoutExpired:
+            failed.append(f.name)
+            log(f"memo_gen timed out on {f.name} ({f.stat().st_size:,} B) — "
+                f"skipped, the run continues")
+            continue
+        if r.returncode != 0:
+            failed.append(f.name)
+            log(f"memo_gen rc={r.returncode} on {f.name}: {r.stderr[-300:]}")
+            continue
+        done.append(f.name)
+    log(f"map phase: {len(done)} modelled, {len(failed)} left deterministic")
+    return done, failed
+
+
 def run_memo_pipeline(workdir: Path, cfg: dict, log) -> bool:
     skill = Path(cfg["memo_index_path"]) / "scripts"
     if not (skill / "memo_gen.py").exists():
@@ -189,10 +250,7 @@ def run_memo_pipeline(workdir: Path, cfg: dict, log) -> bool:
             log("local model unavailable (route.py --check failed) -> "
                 "deterministic mode")
             return False
-        steps = [
-            [str(skill / "memo_gen.py"), "--root", str(workdir),
-             "--include", "sources/*.md", "--profile", "prose",
-             "--memo-dir", str(workdir / ".memo")],
+        reduce_steps = [
             [str(skill / "verify_anchors.py"),
              "--memo-dir", str(workdir / ".memo"), "--root", str(workdir)],
             [str(skill / "memo_db.py"),
@@ -204,6 +262,7 @@ def run_memo_pipeline(workdir: Path, cfg: dict, log) -> bool:
         # correct; the old per-session lock let a second Claude Code window run
         # a competing pipeline, and the two starved each other on one Ollama.
         step_budget = float(cfg.get("model_step_timeout_s", 240))
+        total_budget = float(cfg.get("model_total_s", 900))
         # Naming the model lets the broker evict what is in the way before the
         # load, rather than letting it land half on the CPU and run the next
         # several minutes at a twentieth of the speed with nothing reporting it.
@@ -215,7 +274,12 @@ def run_memo_pipeline(workdir: Path, cfg: dict, log) -> bool:
             if not got:
                 log("no model slot within deadline -> deterministic mode")
                 return False
-            for cmd in steps:
+            done, failed = map_sources(workdir, skill, step_budget,
+                                       total_budget, log)
+            if not done:
+                log("no source produced a memo -> deterministic mode")
+                return False
+            for cmd in reduce_steps:
                 log("run: " + " ".join(cmd))
                 broker.beat("model")
                 r = subprocess.run([sys.executable, *cmd], capture_output=True,
@@ -223,6 +287,12 @@ def run_memo_pipeline(workdir: Path, cfg: dict, log) -> bool:
                 if r.returncode != 0:
                     log(f"step failed rc={r.returncode}: {r.stderr[-800:]}")
                     return False
+        if failed:
+            (workdir / "PARTIAL.json").write_text(json.dumps(
+                {"modelled": sorted(done), "not_modelled": sorted(failed)},
+                indent=2))
+        else:
+            (workdir / "PARTIAL.json").unlink(missing_ok=True)
         return True
     except Exception as e:  # noqa: BLE001 — background job must not die loudly
         log(f"memo pipeline error: {e} -> deterministic mode")
@@ -290,8 +360,22 @@ def build_resume(workdir: Path, sid: str, archive: Path, mode: str,
          f"Compressed working set on disk: ~{kept_tok:,} tok "
          f"({100 - 100 * kept_tok / max(1, raw_tok):.1f}% smaller). "
          f"Mode: **{mode}**.",
-         "",
-         "## What was in flight (auto-extracted — verify before relying on it)"]
+         ""]
+    # Name the sources the model never reached. They still have a deterministic
+    # distillation, so nothing is missing — but it is lossier there, and the
+    # reader needs to know which ones to grep rather than trust.
+    try:
+        pj = json.loads((workdir / "PARTIAL.json").read_text())
+        if pj.get("not_modelled"):
+            L += ["> **Thinner than the rest:** the model did not reach "
+                  + ", ".join(f"`{n}`" for n in pj["not_modelled"][:6])
+                  + (f" and {len(pj['not_modelled']) - 6} more"
+                     if len(pj["not_modelled"]) > 6 else "")
+                  + ". Those keep only their deterministic distillation — grep "
+                    "them rather than assuming the memo covers them.", ""]
+    except Exception:
+        pass
+    L += ["## What was in flight (auto-extracted — verify before relying on it)"]
     L += [f"- user asked: {a}" for a in user_asks] or ["- (no user turns found)"]
     if last_assist:
         L.append(f"- last assistant status: {last_assist}")
@@ -331,11 +415,40 @@ def build_resume(workdir: Path, sid: str, archive: Path, mode: str,
 
 # ----------------------------------------------------------------- main
 
+def write_stub(workdir: Path, sid: str, archive: Path, cwd: str) -> None:
+    """The smallest honest RESUME: where the original is, and that this is not
+    the memo yet. Only ever written when there is no better file already —
+    overwriting a real memo with a placeholder would be a regression, and the
+    situation that produces a stub (a background run in progress) is exactly
+    the situation where a real memo may already exist from an earlier
+    checkpoint."""
+    workdir.mkdir(parents=True, exist_ok=True)
+    resume = workdir / "RESUME.md"
+    if resume.exists() and len(resume.read_text()) > 400:
+        return
+    resume.write_text(
+        f"# memo-guard \u25b8 resume of session {sid[:8]} "
+        f"({time.strftime('%Y-%m-%d %H:%M')})\n\n"
+        f"Compaction happened before the memo finished building. The original "
+        f"context window is archived losslessly at:\n\n`{archive}`\n\n"
+        f"A compressed memo is being built right now and will be in place for "
+        f"the next injection. Until then, if you need a detail from before the "
+        f"compaction, do NOT re-read the archive whole \u2014 run:\n\n"
+        f"```bash\ngunzip -c '{archive}' | grep -n '<term>' | head\n```\n\n"
+        f"Working directory: {cwd or '(unknown)'}\n")
+    (workdir / "STATE.json").write_text(json.dumps(
+        {"phase": "stub", "archive": str(archive), "cwd": cwd}))
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--archive", required=True)
     ap.add_argument("--session", required=True)
     ap.add_argument("--cwd", default="")
+    ap.add_argument("--fast", action="store_true",
+                    help="deterministic only, bounded wait — for the "
+                         "PreCompact hook, which has to finish before the "
+                         "context it is describing disappears")
     args = ap.parse_args()
 
     t0 = time.time()
@@ -360,11 +473,24 @@ def main() -> int:
     # the one with more of the session in it, was the one thrown away. Waiting
     # costs time; skipping costs the memo.
     import broker
+    # "Wait, never skip" is right for the background run and wrong for the fast
+    # one: the fast pass exists because compaction is about to happen, and a
+    # perfect memo that arrives after the context is gone is not a memo. So the
+    # fast pass waits briefly, and if it cannot have the slot it leaves a stub
+    # rather than nothing — a background run already holds the slot, which means
+    # a real memo is on its way; the stub only has to survive the next few
+    # seconds until it does.
+    wait_s = (float(cfg.get("fast_wait_s", 20)) if args.fast
+              else float(cfg.get("session_wait_s", 900)))
     sess_lock = broker.slot(f"session-{workdir.name[:12]}",
-                            deadline_s=float(cfg.get("session_wait_s", 900)),
+                            deadline_s=wait_s,
                             owner=f"compressor/{archive.name[:24]}")
     sess_held = sess_lock.__enter__()
     if not sess_held:
+        if args.fast:
+            log("fast pass could not take the session slot; leaving a stub")
+            write_stub(workdir, sid, archive, args.cwd)
+            return 0
         log("another compressor run for this session did not finish in time; "
             "skipping to avoid piling up")
         return 0
@@ -397,9 +523,22 @@ def main() -> int:
             kept_chars += len(d)
 
         mode = "deterministic"
-        if cfg.get("use_local_model", True):
+        if args.fast:
+            mode = "deterministic (fast pre-compaction pass)"
+        elif cfg.get("use_local_model", True):
             if run_memo_pipeline(workdir, cfg, log):
                 mode = "local-model"
+                # Partial coverage has to reach the name. A memo labelled
+                # "local-model" that silently modelled two thirds of the
+                # session reads, to the next context, exactly like one that
+                # modelled all of it.
+                try:
+                    pj = json.loads((workdir / "PARTIAL.json").read_text())
+                    n_ok, n_no = len(pj["modelled"]), len(pj["not_modelled"])
+                    mode = (f"local-model (partial: {n_ok} of {n_ok + n_no} "
+                            f"sources modelled)")
+                except Exception:
+                    pass
 
         raw_tok = mg.est_tokens(gzip.open(archive, "rb").read()
                                 if archive.suffix == ".gz"
@@ -410,6 +549,9 @@ def main() -> int:
         (workdir / "RESUME.md").write_text(resume)
         resume_tok = mg.est_tokens(resume)
 
+        # Tagged mg.COMPRESS by append_metrics: metrics.jsonl is a mixed log
+        # now — recall.py appends a row in front of every prompt — so readers
+        # ask for a row type instead of taking the last line.
         mg.append_metrics({
             "session": sid, "archive": archive.name, "mode": mode,
             "raw_tokens_est": raw_tok, "kept_tokens_est": kept_tok,

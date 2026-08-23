@@ -17,6 +17,14 @@ for suite in plugins/*/scripts/selftest.py; do
     if out=$(cd "$(dirname "$suite")" && python3 selftest.py 2>&1); then
         echo "$out" | tail -1
         PASSED+=("$name")
+    elif echo "$out" | grep -q "ModuleNotFoundError"; then
+        # A missing third-party package is not a failing assertion. Reporting it
+        # as one trains people to ignore a red run; reporting it as a pass hides
+        # that the suite never executed. It gets its own category, and the
+        # missing module is named.
+        mod=$(echo "$out" | grep -o "No module named '[^']*'" | head -1)
+        echo "  SKIPPED — $mod"
+        SKIPPED+=("$name")
     else
         echo "$out" | grep -E '^\s+FAIL|FAILURES|Traceback|Error' | head -20
         FAILED+=("$name")

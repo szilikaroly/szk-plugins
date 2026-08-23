@@ -73,6 +73,64 @@ SAFE_CHARS = 2400           # below mxbai's observed cut (3040 ch was still fine
 _PROFILE = {"timeout_s": 20}
 
 
+def set_timeout(seconds: float) -> float:
+    """Change how long an embed call may take, returning the previous value.
+
+    20 s is right for background work: a model that has to be loaded first is
+    worth waiting for. It is badly wrong in front of a user's keystroke, where
+    the honest answer after 800 ms is "no vector this time" — the caller already
+    has a lexical path. Process-wide on purpose; the callers that need this are
+    short-lived single-purpose hooks.
+    """
+    prev = _PROFILE["timeout_s"]
+    _PROFILE["timeout_s"] = float(seconds)
+    return prev
+
+
+#: A wedged model server costs the full timeout to detect, and nothing about it
+#: changes between two calls one millisecond apart. Without a shared verdict
+#: every caller in a process pays that timeout again: a single recall hook was
+#: measured at 2× the budget (2.2 s at a 1.1 s timeout) because the query
+#: embedding and the claim-check embedding each waited it out in turn.
+_BREAKER = {"until": 0.0, "reason": ""}
+BREAKER_S = 60.0
+
+
+def breaker_state() -> dict:
+    """How long embedding is being skipped, and why. For doctor/status."""
+    left = _BREAKER["until"] - time.time()
+    return {"open": left > 0, "seconds_left": round(max(0.0, left), 1),
+            "reason": _BREAKER["reason"]}
+
+
+def _trip(reason: str) -> None:
+    _BREAKER["until"] = time.time() + BREAKER_S
+    _BREAKER["reason"] = reason
+    try:
+        (_state_path()).write_text(json.dumps(
+            {"until": _BREAKER["until"], "reason": reason}))
+    except OSError:
+        pass
+
+
+def _state_path():
+    import mg_lib as mg
+    return mg.data_dir() / "embed_breaker.json"
+
+
+def _breaker_open() -> bool:
+    if _BREAKER["until"] > time.time():
+        return True
+    try:
+        d = json.loads(_state_path().read_text())
+        if float(d.get("until", 0)) > time.time():
+            _BREAKER.update(until=float(d["until"]), reason=d.get("reason", ""))
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def _post(path: str, payload: dict, timeout: float) -> dict:
     req = urllib.request.Request(
         f"{OLLAMA}{path}", data=json.dumps(payload).encode(),
@@ -155,10 +213,13 @@ def embed(text: str, profile: str = "bulk", model: str | None = None
         return None
     if len(text) > SAFE_CHARS * 4:
         return None          # far past any model's cut; caller must chunk
+    if _breaker_open():
+        return None          # already known not to answer; do not pay again
     try:
         d = _post("/api/embed", {"model": m, "input": text},
                   _PROFILE["timeout_s"])
-    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
+    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as e:
+        _trip(f"{type(e).__name__} after {_PROFILE['timeout_s']}s")
         return None
     vecs = d.get("embeddings") or ([d["embedding"]] if "embedding" in d else [])
     if not vecs or not vecs[0]:

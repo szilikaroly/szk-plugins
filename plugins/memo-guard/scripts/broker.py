@@ -212,9 +212,20 @@ def route(profile: str, hw: dict | None = None) -> str:
     return tight if tight.split(":")[0] in have else pref
 
 
-def healthy(timeout: float = 3.0) -> bool:
+def healthy(timeout: float = 3.0, strict: bool = False) -> bool:
     """Cheap liveness check. A wedged server answers /api/tags but not /api/embed,
-    so probe the path that actually does work."""
+    so probe the path that actually does work.
+
+    `strict=False` keeps the old behaviour: if /api/embed fails, fall back to
+    /api/tags and report whether the server is *up*. That is the right answer
+    for "should I bother trying at all".
+
+    `strict=True` refuses that fallback, because for a caller deciding whether
+    to embed *right now* the fallback inverts the verdict: a wedged server —
+    tags answering, embed hanging — is exactly the case that must return False,
+    and it is the case the fallback calls healthy. Observed here: /api/tags in
+    1 ms, /api/embed still unanswered after 60 s.
+    """
     try:
         req = urllib.request.Request(
             f"{OLLAMA}/api/embed",
@@ -223,6 +234,8 @@ def healthy(timeout: float = 3.0) -> bool:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return bool(json.loads(r.read()).get("embeddings"))
     except Exception:
+        if strict:
+            return False
         try:
             with urllib.request.urlopen(f"{OLLAMA}/api/tags", timeout=timeout) as r:
                 return bool(json.loads(r.read()).get("models"))
