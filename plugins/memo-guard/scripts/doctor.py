@@ -151,13 +151,39 @@ def check_model_server() -> list[Finding]:
         verdict, why = d.get("verdict", "?"), d.get("why", "")
     except Exception:
         verdict, why = "UNREACHABLE", "no answer at all"
+    # Distinguish a busy server from a wedged one. Both report SLOW, and the
+    # fixes are not the same: evicting models helps the first and does nothing
+    # for the second. Measured here — /api/tags in 8 ms while /api/generate and
+    # both embedding models never returned at all, through a 60 s timeout.
+    wedged = False
+    try:
+        import urllib.request
+        req = urllib.request.Request(
+            f"{broker.OLLAMA}/api/generate",
+            data=b'{"model":"llama3.2:3b","prompt":"hi","stream":false}',
+            headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=8).read()
+    except Exception:
+        wedged = True
+
+    common = (f"{why}\n"
+              "Every semantic path degrades to lexical while this holds: claim\n"
+              "matching misses paraphrases, recall loses the queries that share\n"
+              "no words with their answer, and recall_eval --calibrate refuses\n"
+              "to run. Nothing breaks; it just quietly gets worse.")
+    if wedged:
+        return [Finding(
+            "warn", "the model server accepts connections but never finishes one",
+            common + "\n"
+            "This one is not a loaded-model problem: /api/tags answers in\n"
+            "milliseconds while inference never returns, so evicting models\n"
+            "(levels 1 and 2) will not help. Only a restart will, and that\n"
+            "kills a process you may be using for something else — so it is\n"
+            "left to you rather than done automatically.",
+            "broker.py --recover --level 3   (restarts the model server)")]
     return [Finding(
         "warn", f"embeddings are not working ({verdict})",
-        f"{why}\n"
-        "Every semantic path degrades to lexical while this holds: claim\n"
-        "matching misses paraphrases, recall loses the queries that share no\n"
-        "words with their answer, and recall_eval --calibrate refuses to run.\n"
-        "Nothing breaks; it just quietly gets worse.",
+        common,
         "broker.py --diagnose, then --recover --level 1 or 2")]
 
 
