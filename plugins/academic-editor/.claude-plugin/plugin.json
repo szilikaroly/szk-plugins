@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "academic-editor",
+  "version": "1.0.0",
+  "displayName": "Academic Editor",
+  "description": "Line-edits scientific manuscripts into native academic English at professional editing-service standard, and delivers the result the way an editing service does: a .docx carrying real Word tracked changes plus anchored editor queries, and a clean accepted version alongside it. The rules are derived from a real AJE Senior Editor's Premium edit — 61 changed paragraphs, 979 insertions, 896 deletions, 11 queries — and every rule cites the operation that produced it. Before editing, it measures the TARGET JOURNAL's current house style from that journal's own recent Open Access papers (sentence length, hedging, first person, passive density, p/P, citation form, heading case) so the edit matches the journal's practice rather than a generic idea of good English. Never edits science: numbers, statistics, citations and claims are invariant, and a genuine ambiguity gets a query, not a guess.",
+  "author": { "name": "Dr. Szili Károly" },
+  "license": "MIT",
+  "keywords": ["manuscript", "copyediting", "academic-english", "tracked-changes", "docx", "house-style", "peer-review", "aje"]
+}

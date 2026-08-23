@@ -42,6 +42,33 @@
       "license": "MIT",
       "category": "productivity",
       "keywords": ["manuscript", "submission", "references", "ethics", "cureus", "checklist"]
+    },
+    {
+      "name": "composer",
+      "source": "./plugins/composer",
+      "description": "Builds a literature corpus that can be cited without checking it again. Harvests PubMed, downloads the Open Access full texts through the legitimate PMC OA / Europe PMC routes, and admits a paper only when it has a readable full text AND survives 5-dimension bibliographic validation — DOI, first author, author list, journal, volume — cross-checked against Crossref, PubMed and Europe PMC with a 2-of-3 majority rule. Every search gets its own directory with the exact query, the date, the true hit count and the gate result, logged to PRISMA 2020 / PRISMA-S and tied to a PROSPERO protocol record.",
+      "author": { "name": "Dr. Szili Károly" },
+      "license": "MIT",
+      "category": "productivity",
+      "keywords": ["pubmed", "literature", "prisma", "prospero", "validation", "crossref", "systematic-review"]
+    },
+    {
+      "name": "academic-editor",
+      "source": "./plugins/academic-editor",
+      "description": "Line-edits scientific manuscripts into native academic English at professional editing-service standard and delivers a .docx with real Word tracked changes plus anchored editor queries, alongside a clean accepted copy. Rules derived from a real AJE Senior Editor's Premium edit — 61 changed paragraphs, 979 insertions, 896 deletions, 11 queries — each citing the operation that produced it. Measures the target journal's current house style from that journal's own recent Open Access papers first, so the edit matches its practice rather than a generic idea of good English. Never edits science.",
+      "author": { "name": "Dr. Szili Károly" },
+      "license": "MIT",
+      "category": "productivity",
+      "keywords": ["manuscript", "copyediting", "academic-english", "tracked-changes", "docx", "house-style"]
+    },
+    {
+      "name": "validator",
+      "source": "./plugins/validator",
+      "description": "Critical appraisal with the right instrument, every slot answered, and the domain verdicts computed from the answers instead of asserted. Routes a design to its tool — RoB 2, ROBINS-I, ROBINS-E, QUADAS-2, QUIPS, PROBAST+AI, TRIPOD+AI, AMSTAR 2, ROBIS, Newcastle-Ottawa, JBI, GRADE — prints the full slot list, verifies that none was left blank, and applies each tool's published rating algorithm where one exists. Item lists are parsed from the reference files so the script and the reference cannot drift apart.",
+      "author": { "name": "Dr. Szili Károly" },
+      "license": "MIT",
+      "category": "productivity",
+      "keywords": ["risk-of-bias", "critical-appraisal", "rob2", "robins", "amstar2", "grade", "quadas2", "probast"]
     }
   ]
 }

@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# validator — critical appraisal with the right instrument, from any shell.
+#
+#   validator --list
+#   validator --route "randomised controlled trial of metformin"
+#   validator --skeleton rob2 --scope assignment > appraisal.md
+#   validator --verify appraisal.md --tool rob2 --scope assignment
+#   validator --rollup appraisal.md --tool rob2 --scope assignment
+#   validator probast --skeleton probast --scope both     # PROBAST+AI / TRIPOD+AI engine
+#   validator selftest
+set -euo pipefail
+# The launcher is reached through a symlink in ~/.local/bin, so BASH_SOURCE is
+# that symlink, not this file. Walk the link chain (macOS has no `readlink -f`)
+# to find the real script directory — otherwise the shared resolver is looked up
+# next to the symlink and nothing runs from outside the repo.
+_self="${BASH_SOURCE[0]}"
+while [[ -L "$_self" ]]; do
+  _dir="$(cd -P "$(dirname "$_self")" && pwd)"
+  _self="$(readlink "$_self")"
+  [[ "$_self" != /* ]] && _self="$_dir/$_self"
+done
+_dir="$(cd -P "$(dirname "$_self")" && pwd)"
+source "$_dir/_resolve.sh"
+
+case "${1:-}" in
+  probast|tripod|checklist) shift; szk_run validator scripts/checklist.py "$@" ;;
+  selftest)                 shift; szk_run validator scripts/selftest.py  "$@" ;;
+  ""|-h|--help|help)
+    awk 'NR>1 && /^#/ {sub(/^# ?/,""); print; next} NR>1 {exit}' "$_self"
+    exit 0 ;;
+  *)                               szk_run validator scripts/appraise.py  "$@" ;;
+esac

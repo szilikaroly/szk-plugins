@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# academic-editor — manuscript checking, house-style profiling and tracked-change
+# delivery, from any shell.
+#
+#   academic-editor check      manuscript.docx --json check.json
+#   academic-editor housestyle --journal "Frontiers in Endocrinology" --n 12 --md profile.md
+#   academic-editor compare    --profile profile.json --compare manuscript.docx
+#   academic-editor track      manuscript.docx edits.json -o ms_edited.docx
+#   academic-editor accept     ms_edited.docx -o ms_clean.docx
+#   academic-editor selftest
+set -euo pipefail
+# The launcher is reached through a symlink in ~/.local/bin, so BASH_SOURCE is
+# that symlink, not this file. Walk the link chain (macOS has no `readlink -f`)
+# to find the real script directory — otherwise the shared resolver is looked up
+# next to the symlink and nothing runs from outside the repo.
+_self="${BASH_SOURCE[0]}"
+while [[ -L "$_self" ]]; do
+  _dir="$(cd -P "$(dirname "$_self")" && pwd)"
+  _self="$(readlink "$_self")"
+  [[ "$_self" != /* ]] && _self="$_dir/$_self"
+done
+_dir="$(cd -P "$(dirname "$_self")" && pwd)"
+source "$_dir/_resolve.sh"
+
+cmd="${1:-}"; [[ $# -gt 0 ]] && shift || true
+case "$cmd" in
+  check)               szk_run academic-editor scripts/manuscript_check.py   "$@" ;;
+  housestyle|compare)  szk_run academic-editor scripts/housestyle.py         "$@" ;;
+  track|edit)          szk_run academic-editor scripts/docx_tracked_edit.py  "$@" ;;
+  accept|clean)        szk_run academic-editor scripts/docx_accept_changes.py "$@" ;;
+  selftest)            szk_run academic-editor scripts/selftest.py           "$@" ;;
+  ""|-h|--help|help)
+    awk 'NR>1 && /^#/ {sub(/^# ?/,""); print; next} NR>1 {exit}' "$_self"
+    exit 0 ;;
+  *)
+    echo "academic-editor: unknown subcommand '$cmd'" >&2
+    echo "  check | housestyle | compare | track | accept | selftest" >&2
+    exit 2 ;;
+esac

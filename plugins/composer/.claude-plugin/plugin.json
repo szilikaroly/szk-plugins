@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "composer",
+  "version": "1.0.0",
+  "displayName": "The Composer",
+  "description": "Builds a literature corpus that can be cited without checking it again. Harvests PubMed, downloads the Open Access full texts through the legitimate PMC OA / Europe PMC routes, and admits a paper only when it (a) has a readable full text on disk and (b) survives 5-dimension bibliographic validation — DOI, first author, author list, journal and volume — cross-checked against Crossref, PubMed and Europe PMC, with a 2-of-3 majority rule so one publisher's malformed deposit cannot reject a real paper. Every search gets its own directory with the exact query, the date, the true hit count and the gate result, logged to PRISMA 2020 / PRISMA-S and tied to a PROSPERO protocol record. Deterministic and LLM-free: retrieval and verification are mechanical, screening stays a human judgement.",
+  "author": { "name": "Dr. Szili Károly" },
+  "license": "MIT",
+  "keywords": ["pubmed", "literature", "prisma", "prospero", "validation", "crossref", "systematic-review", "corpus"]
+}

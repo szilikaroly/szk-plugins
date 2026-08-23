@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "validator",
+  "version": "1.0.0",
+  "displayName": "Validator",
+  "description": "Critical appraisal with the right instrument, every slot answered, and the domain verdicts computed from the answers instead of asserted. Routes a study design to its instrument — RoB 2 for randomised trials, ROBINS-I for non-randomised interventions, ROBINS-E for exposures, QUADAS-2 for diagnostic accuracy, QUIPS for prognostic factors, PROBAST+AI and TRIPOD+AI for prediction models, AMSTAR 2 and ROBIS for systematic reviews, the Newcastle-Ottawa stars where a journal insists, JBI for case reports, case series, cross-sectional, prevalence and qualitative designs, and GRADE for the certainty of a body of evidence per outcome. Prints the full slot list, verifies that none was left blank, and applies each tool's published rating algorithm where one exists. Deterministic and offline; item lists are parsed from the reference files so the script and the reference cannot drift apart.",
+  "author": { "name": "Dr. Szili Károly" },
+  "license": "MIT",
+  "keywords": ["risk-of-bias", "critical-appraisal", "rob2", "robins", "amstar2", "grade", "quadas2", "probast", "systematic-review", "quality-assessment"]
+}

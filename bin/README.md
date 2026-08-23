@@ -1,7 +1,19 @@
 # Global CLI launchers
 
-`figure-forge` and `presubmit` as plain terminal commands, usable from **any
-directory or session** — not only inside a Claude Code slash command.
+The szk-plugins engines as plain terminal commands, usable from **any directory
+or session** — not only inside a Claude Code slash command.
+
+| Command | Subcommands |
+|---|---|
+| `figure-forge` | the figure engine |
+| `presubmit` | the pre-submission checker |
+| `science-monitor` | the manuscript/submission register |
+| `composer` | `harvest` · `validate` · `protocol` · `prisma` · `selftest` |
+| `validator` | appraisal flags directly, plus `probast` · `selftest` |
+| `academic-editor` | `check` · `housestyle` · `compare` · `track` · `accept` · `selftest` |
+
+The three multi-script launchers share `bin/_resolve.sh`, which is sourced rather
+than executed.
 
 Each launcher runs the real **source `.py`** engine, resolved in this order:
 
@@ -31,3 +43,13 @@ Python is taken from `python3` on PATH (override with `FIGURE_FORGE_PYTHON` /
 `PRESUBMIT_PYTHON`). It must have the engines' dependencies — matplotlib,
 numpy, pandas, python-pptx, Pillow, lxml (and cairosvg for external-SVG work).
 On this setup that is the Anaconda `python3`.
+
+## Run every self test
+
+```bash
+./bin/selftest-all.sh
+```
+
+Every suite is offline and deterministic — no network, no API key, no clock
+dependence. That is deliberate: a test suite that needs the internet stops being
+run, and a suite that is not run is not a suite.
