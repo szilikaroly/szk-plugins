@@ -406,7 +406,7 @@ def autosave(p, cfg, st, force=False):
 
 def cmd_save(args):
     cfg = config()
-    if cfg["paused"] and not args.force:
+    if cfg["paused"]:
         if not args.quiet:
             print("vault: szunetel (/vault:resume a folytatashoz)")
         return 0
