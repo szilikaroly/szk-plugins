@@ -45,8 +45,11 @@ DEFAULTS = {
     # GitHub warns above 1 GB and serves very large repos badly.
     "max_repo_gb": 4.0,
     "paused": False,
+    # How deep to look for projects. 1 = only the root's own subdirectories;
+    # 2 also looks inside grouping folders such as kutatas/ or eszkoz/.
+    "max_depth": 2,
     # Add a name here to leave a project alone entirely.
-    "exclude": [".claude", ".git", "evals"],
+    "exclude": [".claude", ".git"],
 }
 
 IGNORE_LINES = [
@@ -79,12 +82,27 @@ def log(msg):
         pass
 
 
+# git will happily block forever waiting for a credential it can never be
+# given: the hook runs detached with no stdin, so a terminal prompt never
+# returns and Credential Manager's dialog has nobody to click it. Every one of
+# these turns "no credentials" into an immediate error instead of a hung
+# process holding the repository open.
+GIT_ENV = dict(os.environ)
+GIT_ENV.update({
+    "GIT_TERMINAL_PROMPT": "0",
+    "GCM_INTERACTIVE": "never",
+    "GIT_ASKPASS": "",
+    "SSH_ASKPASS": "",
+    "GIT_OPTIONAL_LOCKS": "0",
+})
+
+
 def run(args, cwd=None, timeout=300):
     """Run a command. Never raises; returns (rc, stdout, stderr)."""
     try:
         p = subprocess.run(
             args, cwd=str(cwd) if cwd else None, capture_output=True,
-            text=True, encoding="utf-8", errors="replace",
+            text=True, encoding="utf-8", errors="replace", env=GIT_ENV,
             timeout=timeout, creationflags=NO_WINDOW)
         return p.returncode, p.stdout.strip(), p.stderr.strip()
     except subprocess.TimeoutExpired:
@@ -125,21 +143,56 @@ def state():
 
 # ---------------------------------------------------------------- discovery
 
+def _classify(d):
+    """project, container or empty — decided by what the directory holds.
+
+    A directory that already has a repo is a project, full stop. Otherwise a
+    directory holding loose files is a project not yet under version control,
+    while one holding nothing but subdirectories is a grouping folder and its
+    children are the real projects. That rule is what lets the root be
+    reorganised into categories without vault turning a category into one
+    enormous repository.
+    """
+    if (d / ".git").exists():
+        return "project"
+    has_dir = False
+    try:
+        for child in d.iterdir():
+            if child.name.startswith("."):
+                continue
+            if child.is_file():
+                return "project"
+            has_dir = True
+    except OSError:
+        return "empty"
+    return "container" if has_dir else "empty"
+
+
 def discover(cfg):
     root = Path(cfg["root"])
     if not root.is_dir():
         return []
+    max_depth = int(cfg.get("max_depth", 2))
     out = []
-    for d in sorted(root.iterdir()):
-        if not d.is_dir() or d.name.startswith("."):
-            continue
-        if d.name in cfg["exclude"]:
-            continue
-        try:
-            next(iter(d.iterdir()))
-        except (StopIteration, OSError):
-            continue  # empty directory - nothing to version
-        out.append(d)
+
+    def walk(d, depth):
+        for child in sorted(d.iterdir()):
+            if not child.is_dir() or child.name.startswith("."):
+                continue
+            if child.name in cfg["exclude"]:
+                continue
+            kind = _classify(child)
+            if kind == "empty":
+                continue
+            if kind == "container" and depth < max_depth:
+                walk(child, depth + 1)
+            elif kind != "empty":
+                out.append(child)
+
+    try:
+        walk(root, 1)
+    except OSError:
+        pass
     return out
 
 

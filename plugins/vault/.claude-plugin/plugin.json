@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "vault",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "displayName": "Vault",
   "description": "Keeps every project under continuous version control and pushes it to a private GitHub repository, without ever asking. Discovers each project under a configured root, gives it a git repo and a sane .gitignore, creates the private remote on first run, and from then on commits and pushes in the background on every session stop — debounced, detached, and incapable of blocking the session. Files GitHub will not accept are excluded and recorded by name, size and checksum, so nothing disappears silently. Cross-platform: identical behaviour on macOS and Windows.",
   "author": {
