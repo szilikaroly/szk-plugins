@@ -1,0 +1,917 @@
+#!/Users/szili/anaconda3/bin/python3
+# -*- coding: utf-8 -*-
+"""Google Scholar harvest for the Composer — discovery only, same admission gate.
+
+    scholar --query '"endometriosis" "health economics"' --query-name endo-econ \
+            --retmax 100 --years 10 --outdir ~/Documents/PubMed_Downloads
+
+What this adds, and what it deliberately does not
+-------------------------------------------------
+Google Scholar indexes what MEDLINE does not: theses, book chapters, conference
+papers, regional and non-indexed journals, working papers. That is the entire
+reason to reach for it — and it is the only reason. Everything downstream of
+discovery stays exactly where it was:
+
+  * metadata is NOT taken from Scholar. A Scholar snippet has no DOI, no volume,
+    no ISSN, an abbreviated venue and author names printed as "JA Smith". Fed to
+    the 5D gate as-is, every single record would come back unverifiable. So each
+    hit is RESOLVED — to a DOI (from its own link, or by a title+year+author
+    match at Crossref), then to a PMID, and the record is rebuilt from PubMed or
+    Crossref. Scholar contributes the citation count, the link, and the fact
+    that the paper exists.
+  * full texts are NOT pulled from Scholar's links. PMC Open Access first,
+    exactly as `collect` does it, then Unpaywall for the DOIs PMC does not hold.
+    Both are documented APIs that hand out the publisher's own OA copy.
+  * the 5D gate, the search folder, the PRISMA-S log and the PROSPERO record are
+    the same code, not a parallel copy.
+
+Honest limits — read these out to the user, do not bury them
+------------------------------------------------------------
+1. **Scholar has no API.** `scholarly` parses the HTML of the public search
+   pages. Google's Terms of Service disallow automated access, and Google
+   enforces it: sustained querying gets the IP a CAPTCHA and then a block. Keep
+   runs small, keep `--pause` generous, and expect failures. If a run dies with
+   MaxTriesExceededException, that IS the block — waiting is the fix, not
+   retrying harder.
+2. **A Scholar search is not reproducible.** Results are personalised and
+   ranked, the "About N results" figure is a rounded estimate that changes
+   between runs, and only ~1000 results are reachable however large N looks.
+   Cochrane and the PRISMA-S authors therefore treat Scholar as a supplementary
+   source, never a primary one. This script logs `count_total` as the number of
+   records actually retrieved and reports Google's estimate separately, flagged
+   as an estimate, because writing a rounded guess into a PRISMA diagram is
+   claiming a precision that does not exist.
+3. **Scholar's index includes non-peer-reviewed and predatory material.** The 5D
+   gate checks that a reference is what it says it is; it cannot check that the
+   journal is real scholarship. Screening still has to be done by a human.
+
+Dependencies: `scholarly` (pip install scholarly), plus everything `collect`
+needs — biopython, requests, optionally pandas.
+"""
+from __future__ import annotations
+
+import argparse
+import csv
+import importlib.util
+import json
+import os
+import re
+import sys
+import time
+from datetime import datetime, timezone
+from importlib.machinery import SourceFileLoader
+from pathlib import Path
+from typing import Any, Iterator, Sequence
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+
+import validate5d  # noqa: E402  (stdlib-only sibling)
+
+UNPAYWALL = "https://api.unpaywall.org/v2/{doi}?email={email}"
+CROSSREF_QUERY = "https://api.crossref.org/works"
+
+#: Below this, a Crossref hit is not the paper Scholar found. Measured, not
+#: guessed: stopword-stripped token Jaccard scores two renderings of the same
+#: title at 1.0 and an unrelated paper in the same field at 0.0-0.2, so the
+#: threshold sits in a genuinely empty band.
+TITLE_MATCH_MIN = 0.80
+
+#: PubMed field tags are meaningless to Google Scholar — it would search for the
+#: literal bracket text and return noise that looks like a result set.
+PUBMED_TAGS = re.compile(r"\[(tiab|ti|ab|mh|majr|pt|dp|la|au|ad|tw|sb|all|mesh[^]]*)\]", re.I)
+
+_DOI_IN_URL = re.compile(r"(10\.\d{4,9}/[^\s\"'<>&?#]+)", re.I)
+#: Trailing junk that publisher URLs bolt onto a DOI path.
+_DOI_TAIL = re.compile(r"(\.pdf|\.full|\.abstract|\.long|/full|/abstract|/pdf|/epdf|[.,;:)\]])+$", re.I)
+
+
+# --------------------------------------------------------------------------
+# Borrowing the collector
+# --------------------------------------------------------------------------
+
+
+def load_collect():
+    """Import the sibling `collect` script as a module.
+
+    It has no .py suffix because it is also a CLI, so a plain import will not
+    find it. Loading it explicitly is worth the four lines: the Article schema,
+    the PMC OA download path, the search-folder writer and the 5D runner all
+    come from there, and a Scholar-flavoured copy of any of them would drift.
+    """
+    path = HERE / "collect"
+    if not path.exists():
+        sys.exit(f"Hiányzik a testvér-script: {path}")
+    loader = SourceFileLoader("composer_collect", str(path))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[loader.name] = module
+    loader.exec_module(module)
+    return module
+
+
+def require_scholarly():
+    try:
+        from scholarly import ProxyGenerator, scholarly  # noqa: F401
+        from scholarly import MaxTriesExceededException
+    except ImportError:
+        sys.exit(
+            "Hiányzó függőség: scholarly.\n"
+            "  pip install scholarly\n"
+            "A Google Scholarnak nincs API-ja; a scholarly a nyilvános találati\n"
+            "oldalakat olvassa. A Google feltételei ezt nem engedik, és blokkol,\n"
+            "ha sokat kérdezel — kis --retmax, nagy --pause."
+        )
+    return scholarly, ProxyGenerator, MaxTriesExceededException
+
+
+# --------------------------------------------------------------------------
+# Query hygiene
+# --------------------------------------------------------------------------
+
+
+def check_query(query: str, force: bool) -> None:
+    """A PubMed query handed to Scholar returns confident nonsense."""
+    tags = PUBMED_TAGS.findall(query or "")
+    if not tags or force:
+        if tags and force:
+            print("  ! PubMed mezőcímkék maradtak a kifejezésben (--force-query): "
+                  f"{', '.join(sorted(set(tags)))}", file=sys.stderr)
+        return
+    sys.exit(
+        "A keresőkifejezés PubMed mezőcímkéket tartalmaz: "
+        f"{', '.join('[' + t + ']' for t in sorted(set(tags)))}\n"
+        "A Google Scholar ezeket nem érti — szó szerint rájuk keresne, és a\n"
+        "találati lista értelmesnek látszana, miközben nem az.\n\n"
+        "Scholar szintaxis:  \"idézőjeles kifejezés\"  AND  OR  -kizart\n"
+        "                    intitle:szo  author:\"Vezeteknev\"  source:\"Folyoirat\"\n"
+        "Ha tényleg így akarod futtatni: --force-query."
+    )
+
+
+# --------------------------------------------------------------------------
+# Scholar -> a resolvable identity
+# --------------------------------------------------------------------------
+
+
+def doi_from_urls(*urls: str) -> str:
+    """Pull a DOI out of the links Scholar prints, when one is in there."""
+    for url in urls:
+        if not url:
+            continue
+        match = _DOI_IN_URL.search(urllib_unquote(url))
+        if not match:
+            continue
+        doi = _DOI_TAIL.sub("", match.group(1))
+        if validate5d._DOI_RE.match(doi):
+            return doi.lower()
+    return ""
+
+
+def urllib_unquote(url: str) -> str:
+    import urllib.parse
+    try:
+        return urllib.parse.unquote(url)
+    except Exception:
+        return url
+
+
+def crossref_by_title(title: str, year: str, author: str,
+                      fetcher: validate5d.Fetcher) -> tuple[str, dict | None, float]:
+    """Find the DOI for a Scholar hit that did not carry one in its link.
+
+    Three independent signals have to agree before a DOI is accepted: the title
+    (token match above the threshold), the year (within one — ahead-of-print and
+    issue year disagree constantly), and the first author's surname when Scholar
+    printed one. A title-only match is how a corpus quietly acquires the wrong
+    paper's DOI, and that is precisely the failure the 5D gate exists to stop —
+    so it must not be introduced one step upstream of the gate.
+    """
+    import urllib.parse
+    if not title:
+        return "", None, 0.0
+    params = {
+        "query.bibliographic": title,
+        "rows": "5",
+        "select": ("DOI,title,author,container-title,short-container-title,volume,"
+                   "issue,page,article-number,ISSN,issued,type"),
+    }
+    url = f"{CROSSREF_QUERY}?{urllib.parse.urlencode(params)}"
+    data = fetcher.get_json(url)
+    if not data or "__error__" in data:
+        return "", None, 0.0
+
+    best_doi, best_msg, best_score = "", None, 0.0
+    for item in (data.get("message", {}) or {}).get("items", []) or []:
+        cand_title = " ".join(item.get("title") or [])
+        score = validate5d.title_similarity(title, cand_title)
+        if score <= best_score:
+            continue
+        best_doi, best_msg, best_score = (item.get("DOI") or "").lower(), item, score
+
+    if best_score < TITLE_MATCH_MIN or not best_doi:
+        return "", None, best_score
+
+    canon = validate5d.from_crossref(best_msg)
+    if year and canon.get("ev"):
+        try:
+            if abs(int(year) - int(canon["ev"])) > 1:
+                return "", None, best_score
+        except ValueError:
+            pass
+    if author and canon.get("elso_szerzo"):
+        if not validate5d.surnames_match(author, canon["elso_szerzo"]):
+            return "", None, best_score
+    return best_doi, best_msg, best_score
+
+
+def scholar_surname(name: str) -> str:
+    """'JA Smith' / 'John A Smith' / 'Smith, JA' -> 'Smith'.
+
+    Scholar prints initials FIRST and unspaced, which no other source does. The
+    surname is the last whitespace-separated token unless the name is already in
+    'Surname, Initials' form.
+    """
+    name = (name or "").strip()
+    if not name:
+        return ""
+    if "," in name:
+        return name.split(",", 1)[0].strip()
+    tokens = name.split()
+    return tokens[-1] if tokens else ""
+
+
+# --------------------------------------------------------------------------
+# Building records
+# --------------------------------------------------------------------------
+
+
+def article_from_scholar(C, hit: dict, topic: str) -> Any:
+    """The floor: what Scholar alone knows. Never enough to pass the gate."""
+    bib = hit.get("bib", {}) or {}
+    authors = [scholar_surname(a) for a in (bib.get("author") or []) if a]
+    authors = [a for a in authors if a]
+    url = hit.get("pub_url") or hit.get("eprint_url") or ""
+    return C.Article(
+        tema=topic,
+        pmid="",
+        cim=(bib.get("title") or "").strip(),
+        folyoirat=(bib.get("venue") or bib.get("journal") or "").strip(),
+        publikacio_datuma=str(bib.get("pub_year") or "").strip(),
+        doi="",
+        pmc_id="",
+        pubmed_url="",
+        absztrakt=(bib.get("abstract") or "").strip(),
+        statusz="Csak metaadat",
+        forras="Google Scholar",
+        forras_url=url,
+        idezetek=str(hit.get("num_citations") or ""),
+        elso_szerzo=authors[0] if authors else "",
+        szerzok="; ".join(authors),
+        ev=str(bib.get("pub_year") or "").strip(),
+    )
+
+
+def apply_crossref(C, row: Any, msg: dict) -> None:
+    """Fill a Scholar row from a Crossref deposit, without overwriting PubMed."""
+    canon = validate5d.from_crossref(msg)
+    titles = [t for t in (canon.get("folyoirat") or []) if t]
+    row.doi = row.doi or canon.get("doi", "")
+    row.elso_szerzo = canon.get("elso_szerzo") or row.elso_szerzo
+    if canon.get("szerzok"):
+        row.szerzok = "; ".join(canon["szerzok"])
+    if titles:
+        row.folyoirat = titles[0]
+        if len(titles) > 1:
+            row.folyoirat_rovid = titles[1]
+    row.kotet = canon.get("kotet") or row.kotet
+    row.oldalak = canon.get("elocator") or row.oldalak
+    row.issn = (canon.get("issn") or [""])[0] or row.issn
+    row.ev = canon.get("ev") or row.ev
+    if canon.get("cim"):
+        row.cim = canon["cim"]
+    if not row.forras_url and row.doi:
+        row.forras_url = f"https://doi.org/{row.doi}"
+
+
+def apply_pubmed(C, row: Any, record: dict, topic: str) -> None:
+    """Replace a Scholar row's bibliography with PubMed's, keep the provenance.
+
+    When a Scholar hit turns out to be indexed in MEDLINE, the honest record is
+    the MEDLINE one: it is what the 5D gate compares against, and it is what a
+    reader will find. What stays from Scholar is what only Scholar had — the
+    citation count and the fact that this search surfaced the paper.
+    """
+    fresh = C.to_article(record, topic)
+    if fresh is None:
+        return
+    citations, source_url = row.idezetek, row.forras_url
+    for field_name, value in vars(fresh).items():
+        setattr(row, field_name, value)
+    row.forras = "Google Scholar"          # discovery source, not the metadata source
+    row.forras_url = row.pubmed_url or source_url
+    row.idezetek = citations
+
+
+# --------------------------------------------------------------------------
+# Full text
+# --------------------------------------------------------------------------
+
+
+def unpaywall_pdf(doi: str, email: str, fetcher: validate5d.Fetcher) -> tuple[str, str]:
+    """(pdf_url, licence) for the best legal OA copy, or ('', '').
+
+    Unpaywall is the documented way to ask 'is there a legal free copy of this
+    DOI, and where'. It answers from publisher and repository deposits, so the
+    file that comes back is the one the rights holder put out — which is what
+    makes it usable here at all, unlike following whatever link Scholar printed.
+    """
+    if not doi:
+        return "", ""
+    import urllib.parse
+    url = UNPAYWALL.format(doi=urllib.parse.quote(doi, safe=""), email=urllib.parse.quote(email))
+    data = fetcher.get_json(url)
+    if not data or "__error__" in data or not data.get("is_oa"):
+        return "", ""
+    for loc in [data.get("best_oa_location")] + list(data.get("oa_locations") or []):
+        if not loc:
+            continue
+        pdf = loc.get("url_for_pdf") or ""
+        if pdf:
+            return pdf, (loc.get("license") or "")
+    return "", ""
+
+
+def fetch_fulltext(C, row: Any, topic_dir: Path, session, limiter,
+                   fetcher: validate5d.Fetcher, email: str,
+                   xml_fallback: bool, use_unpaywall: bool) -> bool:
+    """PMC Open Access first, Unpaywall second. No third route, on purpose."""
+    stem = row.pmid or validate5d.record_key("", row.doi, row.cim).replace(":", "_")
+    pdf_target = topic_dir / f"{stem}.pdf"
+    xml_target = topic_dir / f"{stem}.xml"
+
+    if pdf_target.exists():
+        row.statusz, row.fajl = "Letöltve (PDF)", str(pdf_target)
+        return True
+    if xml_fallback and xml_target.exists():
+        row.statusz, row.fajl = "Letöltve (XML)", str(xml_target)
+        return True
+
+    topic_dir.mkdir(parents=True, exist_ok=True)
+
+    if row.pmc_id:
+        oa = C.check_open_access(row.pmc_id, session, limiter)
+        row.licenc = oa.license or row.licenc
+        if oa.open_access:
+            if C.download_pdf(row.pmc_id, oa, pdf_target, session, limiter):
+                row.statusz, row.fajl = "Letöltve (PDF)", str(pdf_target)
+                return True
+            if xml_fallback and C.download_fulltext_xml(row.pmc_id, xml_target, session, limiter):
+                row.statusz, row.fajl = "Letöltve (XML)", str(xml_target)
+                return True
+
+    if use_unpaywall and row.doi:
+        url, licence = unpaywall_pdf(row.doi, email, fetcher)
+        row.licenc = row.licenc or licence
+        if url and C._download_to_file(url, pdf_target, session, limiter,
+                                       expect="pdf", magic=b"%PDF-"):
+            row.statusz, row.fajl = "Letöltve (PDF, Unpaywall)", str(pdf_target)
+            return True
+
+    row.statusz = "Nem Open Access" if not row.pmc_id else "PDF nem érhető el"
+    return False
+
+
+# --------------------------------------------------------------------------
+# Existing corpus, so a second source does not duplicate the first
+# --------------------------------------------------------------------------
+
+
+def existing_keys(outdir: Path) -> set[str]:
+    path = outdir / "osszesitett_lista.csv"
+    if not path.exists():
+        return set()
+    keys: set[str] = set()
+    with path.open("r", encoding="utf-8-sig", newline="") as fh:
+        for row in csv.DictReader(fh):
+            for key in (
+                validate5d.record_key(row.get("pmid", ""), "", ""),
+                validate5d.record_key("", row.get("doi", ""), ""),
+                validate5d.record_key("", "", row.get("cim", "")),
+            ):
+                if key:
+                    keys.add(key)
+    return keys
+
+
+def stamp_codiscovery(C, outdir: Path, dupes: list[Any]) -> int:
+    """Record that Scholar also found a paper the corpus already had.
+
+    The duplicate row itself is dropped — re-validating and re-counting a record
+    already in the corpus would inflate every number downstream. But "PubMed and
+    Google Scholar both found this" is a fact PRISMA cares about, and the Scholar
+    citation count is data the MEDLINE record simply does not carry. So the
+    existing row is stamped, and nothing else about it is touched.
+    """
+    path = outdir / "osszesitett_lista.csv"
+    if not path.exists() or not dupes:
+        return 0
+    with path.open("r", encoding="utf-8-sig", newline="") as fh:
+        rows = list(csv.DictReader(fh))
+        columns = list(rows[0].keys()) if rows else []
+    if not rows:
+        return 0
+    for column in ("forras", "idezetek"):
+        if column not in columns:
+            columns.append(column)
+
+    wanted: dict[str, Any] = {}
+    for dup in dupes:
+        for key in row_keys(dup):
+            wanted.setdefault(key, dup)
+
+    stamped = 0
+    for row in rows:
+        dup = None
+        for key in (validate5d.record_key(row.get("pmid", ""), "", ""),
+                    validate5d.record_key("", row.get("doi", ""), ""),
+                    validate5d.record_key("", "", row.get("cim", ""))):
+            if key and key in wanted:
+                dup = wanted[key]
+                break
+        if dup is None:
+            continue
+        merged = C._join_sources(row.get("forras", ""), "Google Scholar")
+        if merged != row.get("forras", ""):
+            stamped += 1
+        row["forras"] = merged
+        if dup.idezetek and not row.get("idezetek"):
+            row["idezetek"] = dup.idezetek
+
+    with path.open("w", encoding="utf-8-sig", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=columns)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({c: row.get(c, "") for c in columns})
+    return stamped
+
+
+def row_keys(row: Any) -> list[str]:
+    return [k for k in (
+        validate5d.record_key(row.pmid, "", ""),
+        validate5d.record_key("", row.doi, ""),
+        validate5d.record_key("", "", row.cim),
+    ) if k]
+
+
+# --------------------------------------------------------------------------
+# The harvest
+# --------------------------------------------------------------------------
+
+
+def run_search(scholarly_mod, query: str, retmax: int, args) -> tuple[list[dict], int | None]:
+    """Pull `retmax` snippets off Scholar, politely, and report the estimate."""
+    year_low = None
+    if args.years:
+        year_low = datetime.now(timezone.utc).year - args.years + 1
+    if args.year_from:
+        year_low = args.year_from
+
+    search = scholarly_mod.search_pubs(
+        query,
+        patents=args.patents,
+        citations=args.citations,
+        year_low=year_low,
+        year_high=args.year_to,
+        sort_by=args.sort_by,
+    )
+    estimate = getattr(search, "total_results", None)
+
+    hits: list[dict] = []
+    for hit in search:
+        hits.append(hit)
+        if len(hits) >= retmax:
+            break
+        if args.pause:
+            time.sleep(args.pause)
+    return hits, estimate
+
+
+def resolve(C, hits: Sequence[dict], topic: str, fetcher: validate5d.Fetcher,
+            limiter, no_pubmed: bool) -> tuple[list[Any], dict[str, int]]:
+    """Scholar snippets -> records the 5D gate can actually judge."""
+    rows = [article_from_scholar(C, hit, topic) for hit in hits]
+    stats = {"doi_link": 0, "doi_crossref": 0, "doi_none": 0, "pmid": 0}
+
+    for row, hit in zip(rows, hits):
+        doi = doi_from_urls(hit.get("pub_url", ""), hit.get("eprint_url", ""))
+        if doi:
+            row.doi = doi
+            stats["doi_link"] += 1
+            msg = validate5d.crossref_record(doi, fetcher)
+            if isinstance(msg, dict) and "__error__" not in msg:
+                apply_crossref(C, row, msg)
+        else:
+            doi, msg, score = crossref_by_title(row.cim, row.ev, row.elso_szerzo, fetcher)
+            if doi and msg:
+                row.doi = doi
+                stats["doi_crossref"] += 1
+                apply_crossref(C, row, msg)
+            else:
+                stats["doi_none"] += 1
+
+    if no_pubmed:
+        return rows, stats
+
+    # DOI -> PMID -> the MEDLINE record, in one batched efetch.
+    #
+    # Keyed to a LIST of rows, not one row: Scholar routinely returns the same
+    # paper twice (a preprint cluster, a repository copy, a differently-titled
+    # duplicate), and both hits resolve to the same PMID. Keeping only the last
+    # one left the earlier row half-built — Crossref metadata, no PMC id — and
+    # then the dedup step could just as easily keep that half-built row and
+    # throw away the complete one.
+    wanted: dict[str, list[Any]] = {}
+    for row in rows:
+        if not row.doi:
+            continue
+        pmid = validate5d.pmid_from_doi(row.doi, fetcher)
+        if pmid:
+            row.pmid = pmid
+            wanted.setdefault(pmid, []).append(row)
+    if wanted:
+        stats["pmid"] = sum(len(v) for v in wanted.values())
+        for record in C.fetch_details(list(wanted), limiter):
+            pmid = str(record.get("MedlineCitation", {}).get("PMID", "")).strip()
+            for row in wanted.get(pmid, []):
+                apply_pubmed(C, row, record, topic)
+    return rows, stats
+
+
+# --------------------------------------------------------------------------
+# CLI
+# --------------------------------------------------------------------------
+
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    p = argparse.ArgumentParser(
+        prog="scholar",
+        description="Google Scholar learatás a Composer befogadási kapujával.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        epilog="A Google Scholarnak nincs API-ja. Kiegészítő forrás, nem elsődleges.",
+    )
+    p.add_argument("--query", required=True, help="Google Scholar keresőkifejezés.")
+    p.add_argument("--query-name", default="scholar", help="Mappanév / téma-címke.")
+    p.add_argument("--outdir", type=Path,
+                   default=Path.home() / "Documents" / "PubMed_Downloads",
+                   help="Ugyanaz a munkamappa, amit a collect használ.")
+    p.add_argument("--retmax", type=int, default=50,
+                   help="Hány találatot hozzon be. A Scholar ~1000 fölött nem lapoz.")
+    p.add_argument("--years", type=int, help="Csak az elmúlt N év.")
+    p.add_argument("--year-from", type=int, help="Alsó évhatár (felülírja a --years-t).")
+    p.add_argument("--year-to", type=int, help="Felső évhatár.")
+    p.add_argument("--sort-by", choices=["relevance", "date"], default="relevance")
+    p.add_argument("--patents", action="store_true", help="Szabadalmak is (alap: nem).")
+    p.add_argument("--citations", action="store_true",
+                   help="Dokumentum nélküli hivatkozás-bejegyzések is (alap: nem).")
+    p.add_argument("--min-citations", type=int, default=0,
+                   help="Ennyi Scholar-idézet alatt a találat eldobásra kerül.")
+    p.add_argument("--pause", type=float, default=1.5,
+                   help="Szünet a Scholar-találatok között, másodpercben.")
+    p.add_argument("--proxy", choices=["none", "free", "scraperapi"], default="none",
+                   help="free: ingyenes proxylista (lassú, megbízhatatlan). "
+                        "scraperapi: SCRAPERAPI_KEY környezeti változóból.")
+    p.add_argument("--force-query", action="store_true",
+                   help="PubMed mezőcímkékkel is futtassa a Scholar keresést.")
+    p.add_argument("--dry-run", action="store_true",
+                   help="Csak a kifejezés és a beállítások kiírása, keresés nélkül.")
+    p.add_argument("--no-pubmed-link", action="store_true",
+                   help="Ne keresse meg a PMID-t; a rekordok Crossref-alapúak maradnak.")
+    p.add_argument("--no-unpaywall", action="store_true",
+                   help="Csak a PMC OA útvonal; ne kérdezze az Unpaywallt.")
+    p.add_argument("--no-pdf", action="store_true", help="Csak metaadat.")
+    p.add_argument("--xml-fallback", action="store_true",
+                   help="PDF hiányában JATS teljes szöveg (csak PMC-nél).")
+    p.add_argument("--after", type=Path,
+                   help="Annak az adatbázis-keresésnek a mappája, amelyet ez a "
+                        "Scholar-sweep KIEGÉSZÍT (keresesek/<stamp>_<slug>). "
+                        "A két napló kölcsönösen hivatkozni fogja egymást, és a "
+                        "szülő keresés Scholar-állapota 'lefuttatva' lesz — a "
+                        "PRISMA-S forrásonkénti számonkérése ezt kéri.")
+    p.add_argument("--protocol", type=Path, help="PROSPERO protokoll JSON.")
+    p.add_argument("--no-validate", action="store_true", help="Az 5D kapu kihagyása.")
+    p.add_argument("--no-fulltext-gate", action="store_true",
+                   help="A befogadáshoz elég az 5D egyezés.")
+    p.add_argument("--fresh", action="store_true",
+                   help="A korpusz CSV felülírása a bővítése helyett.")
+    p.add_argument("--email", default="", help="Kapcsolattartó e-mail (NCBI, Crossref, Unpaywall).")
+    p.add_argument("--api-key", default="", help="NCBI API kulcs.")
+    return p.parse_args(argv)
+
+
+def setup_proxy(scholarly_mod, ProxyGenerator, mode: str) -> None:
+    if mode == "none":
+        return
+    pg = ProxyGenerator()
+    if mode == "free":
+        print("  Ingyenes proxyk keresése (lassú, és gyakran nem sikerül) ...")
+        ok = pg.FreeProxies()
+    else:
+        key = os.environ.get("SCRAPERAPI_KEY", "")
+        if not key:
+            sys.exit("--proxy scraperapi: hiányzik a SCRAPERAPI_KEY környezeti változó.")
+        ok = pg.ScraperAPI(key)
+    if not ok:
+        print("  ! A proxy beállítása nem sikerült; a keresés proxy nélkül fut.",
+              file=sys.stderr)
+        return
+    scholarly_mod.use_proxy(pg)
+    print(f"  Proxy aktív: {mode}")
+
+
+def link_to_parent(parent: Path, search_dir: Path, keres_id: str,
+                   state_label: str) -> None:
+    """Tie this supplementary sweep to the database search it supplements.
+
+    PRISMA-S is per-source: the flow diagram has to say which source produced
+    which records, and a reader has to be able to get from one to the other.
+    Writing the back-reference here — at the moment both directories exist —
+    is the only time the link is certainly correct.
+    """
+    if not parent.is_dir():
+        print(f"  ! --after: nincs ilyen keresési mappa: {parent}", file=sys.stderr)
+        return
+
+    meta_path = parent / "kereses.json"
+    if meta_path.exists():
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            print(f"  ! --after: {meta_path} olvashatatlan ({exc})", file=sys.stderr)
+        else:
+            meta["kiegeszito_scholar"] = state_label
+            meta["kiegeszito_scholar_mappa"] = str(search_dir)
+            meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2),
+                                 encoding="utf-8")
+
+    naplo = parent / "NAPLO.md"
+    if naplo.exists():
+        text = naplo.read_text(encoding="utf-8")
+        marker = f"[scholar:{keres_id}]"
+        if marker not in text:
+            naplo.write_text(
+                text.rstrip("\n")
+                + f"\n\n## Kiegészítő Scholar-keresés {marker}\n\n"
+                  f"- **Mappa:** `{search_dir}`\n"
+                  f"- **Keresés azonosító:** `{keres_id}`\n"
+                  "- A Scholar kiegészítő forrás; a fenti adatbázis-keresést nem "
+                  "váltja ki, és önmagában nem reprodukálható.\n",
+                encoding="utf-8")
+
+    print(f"  Kiegészítő forrásként bejegyezve ide: {parent}")
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = parse_args(argv)
+    C = load_collect()
+
+    from_file = C.load_credentials_file()
+    email = args.email or os.environ.get("NCBI_EMAIL", "") or from_file.get("NCBI_EMAIL", "")
+    api_key = args.api_key or os.environ.get("NCBI_API_KEY", "") or from_file.get("NCBI_API_KEY", "")
+    if not email:
+        return C._fail(
+            "Hiányzik az e-mail cím. A PubMed, a Crossref és az Unpaywall is kéri.\n"
+            '  export NCBI_EMAIL="te@pelda.hu"   vagy   --email te@pelda.hu'
+        )
+
+    check_query(args.query, args.force_query)
+
+    topic = C.safe_filename(args.query_name)
+    outdir: Path = args.outdir.expanduser()
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    protocol: dict = {}
+    if args.protocol:
+        try:
+            protocol = json.loads(args.protocol.expanduser().read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            return C._fail(f"A protokoll nem olvasható: {args.protocol} ({exc})")
+    else:
+        print("Figyelem: nincs --protocol. A keresés naplózódik, de protokoll nélkül "
+              "nem PROSPERO-konform.")
+
+    print("\n=== Google Scholar ===")
+    print(f"  Kifejezés: {args.query}")
+    print(f"  Rendezés: {args.sort_by}   retmax: {args.retmax}   "
+          f"szabadalmak: {'igen' if args.patents else 'nem'}   "
+          f"idézet-bejegyzések: {'igen' if args.citations else 'nem'}")
+    print("  ! A Google Scholarnak nincs API-ja: a scholarly a nyilvános találati")
+    print("    oldalakat olvassa, amit a Google feltételei nem engedélyeznek, és")
+    print("    amit tartós lekérdezésnél CAPTCHA-val, majd blokkolással büntet.")
+    print("  ! Egy Scholar-keresés nem reprodukálható, és a találatszám becslés.")
+    print("    Kiegészítő forrásként naplózandó, nem elsődlegesként.")
+    if args.dry_run:
+        print("\n--dry-run: keresés nem futott.")
+        return 0
+
+    scholarly_mod, ProxyGenerator, MaxTries = require_scholarly()
+    setup_proxy(scholarly_mod, ProxyGenerator, args.proxy)
+
+    run_ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    try:
+        hits, estimate = run_search(scholarly_mod, args.query, args.retmax, args)
+    except MaxTries:
+        return C._fail(
+            "\nA Google blokkolta a lekérdezést (MaxTriesExceededException).\n"
+            "Ez a CAPTCHA-fal, nem hálózati hiba: az újrapróbálkozás rontja.\n"
+            "  - várj (órák), és futtasd kisebb --retmax-szal, nagyobb --pause-zal,\n"
+            "  - vagy --proxy scraperapi egy fizetett kulccsal,\n"
+            "  - vagy maradj a PubMed learatásnál, ami engedélyezett úton dolgozik."
+        )
+    except Exception as exc:
+        return C._fail(f"\nScholar keresési hiba: {exc}")
+
+    n_identified = len(hits)
+    print(f"\n  Behozva: {n_identified} találat"
+          + (f"   (a Google becslése: kb. {estimate})" if estimate else ""))
+    if not hits:
+        print("  Nincs találat.")
+        return 0
+
+    dropped_citations = 0
+    if args.min_citations:
+        before = len(hits)
+        hits = [h for h in hits if int(h.get("num_citations") or 0) >= args.min_citations]
+        dropped_citations = before - len(hits)
+        print(f"  --min-citations {args.min_citations}: {dropped_citations} találat eldobva.")
+
+    # NCBI: with a key 10 req/s, without 3. Stay under.
+    if api_key:
+        C.Entrez.api_key = api_key
+    C.Entrez.email = email
+    C.Entrez.tool = "composer-scholar"
+    ncbi_limiter = C.RateLimiter(8.0 if api_key else 2.5)
+    pdf_limiter = C.RateLimiter(1.0)
+
+    fetcher = validate5d.Fetcher(outdir / "_scholar_cache.json", email, gap=0.3)
+
+    print("  Azonosítás (link-DOI -> Crossref cím-egyezés -> PMID -> MEDLINE rekord) ...")
+    rows, stats = resolve(C, hits, topic, fetcher, ncbi_limiter, args.no_pubmed_link)
+    print(f"    DOI a linkből: {stats['doi_link']}   "
+          f"DOI Crossref cím-egyezésből: {stats['doi_crossref']}   "
+          f"DOI nélkül maradt: {stats['doi_none']}   "
+          f"PubMedben megvan: {stats['pmid']}")
+
+    # Duplicates against whatever is already in the corpus (typically a PubMed
+    # harvest). PRISMA wants these counted, not silently merged away.
+    seen = existing_keys(outdir)
+    unique: list[Any] = []
+    dupes: list[Any] = []
+    for row in rows:
+        keys = row_keys(row)
+        if any(k in seen for k in keys):
+            dupes.append(row)
+            continue
+        seen.update(keys)
+        unique.append(row)
+    duplicates = len(dupes)
+    if duplicates:
+        stamped = stamp_codiscovery(C, outdir, dupes)
+        print(f"    Duplikátum a meglévő korpusszal szemben: {duplicates} "
+              f"(nem kerül be újra; {stamped} meglévő rekord megjelölve "
+              f"Google Scholar-találatként is)")
+    rows = unique
+
+    if not rows:
+        print("  Minden találat már a korpuszban van.")
+
+    session = C.requests.Session()
+    session.headers["User-Agent"] = C.USER_AGENT.format(email=email)
+    topic_dir = outdir / topic
+
+    if not args.no_pdf and rows:
+        print("  Teljes szöveg (PMC Open Access, majd Unpaywall) ...")
+        got = 0
+        for row in rows:
+            if fetch_fulltext(C, row, topic_dir, session, pdf_limiter, fetcher,
+                              email, args.xml_fallback, not args.no_unpaywall):
+                got += 1
+        print(f"    Letöltött teljes szöveg: {got} / {len(rows)}")
+
+    keres_id = f"{run_ts.replace(':', '-')}_gs-{topic}"
+    search_dir = outdir / "keresesek" / keres_id
+    for row in rows:
+        row.keres_id = keres_id
+
+    gate: dict[str, int] = {}
+    if not args.no_validate and rows:
+        print("  5D validáció (Crossref + PubMed + Europa PMC) ...")
+        search_dir.mkdir(parents=True, exist_ok=True)
+        gate = C.validate_rows(rows, search_dir, email,
+                               require_fulltext=not (args.no_fulltext_gate or args.no_pdf))
+        print(f"    Befogadási kapu: befogadva {gate.get('befogadva', 0)} · "
+              f"függőben {gate.get('fuggoben', 0)} · "
+              f"elutasítva {gate.get('elutasitva', 0)}")
+    fetcher.save()
+
+    filters = "; ".join(f for f in (
+        f"sort={args.sort_by}",
+        "patents" if args.patents else "no-patents",
+        "citation-entries" if args.citations else "no-citation-entries",
+        f"year>={args.year_from}" if args.year_from else (f"last-{args.years}-years" if args.years else ""),
+        f"year<={args.year_to}" if args.year_to else "",
+        f"min-citations={args.min_citations}" if args.min_citations else "",
+    ) if f)
+
+    log_entry = {
+        "run_id": f"scholar-{run_ts}",
+        "timestamp": run_ts,
+        "database": "Google Scholar",
+        "topic": topic,
+        "query": args.query,
+        # count_total is what was RETRIEVED, not Google's estimate. A PRISMA
+        # diagram states a number of records identified; Scholar cannot supply
+        # one, so the honest figure is the one we can defend.
+        "count_total": n_identified,
+        "count_estimate": estimate,
+        "count_is_estimate": True,
+        "count_label": "Behozott találat (a Google becslése nem szám)",
+        "retrieved": len(rows),
+        "retmax": args.retmax,
+        "years": args.years,
+        "filters": filters,
+        "interface": "Google Scholar webes felület (scholarly, nem hivatalos API)",
+        "duplicates_vs_corpus": duplicates,
+        "dropped_min_citations": dropped_citations,
+        "prospero_id": protocol.get("prospero_id", ""),
+        "protocol_registered": protocol.get("registered", ""),
+        "validated_5d": not args.no_validate,
+    }
+
+    notes = [
+        "## A Google Scholar mint forrás — a naplóba tartozó korlátok\n\n"
+        "- **Nincs hivatalos API.** A lekérdezés a nyilvános találati oldalak "
+        "olvasásával történt (`scholarly`), amit a Google felhasználási feltételei "
+        "nem engedélyeznek, és amit blokkolással szankcionál. Ezt a módszertani "
+        "részben ki kell mondani, ha a keresés bekerül a közleménybe.\n"
+        "- **A keresés nem reprodukálható.** A Scholar rangsora személyre szabott "
+        "és időben változik; ugyanez a kifejezés más napon más listát ad.\n"
+        f"- **A találatszám becslés.** A Google jelzése: "
+        f"{('kb. ' + str(estimate)) if estimate else 'nem volt kiolvasható'}. "
+        "Ez kerekített érték, és a Scholar legfeljebb ~1000 találatig lapozható, "
+        "bármekkora számot ír ki. A fenti szám ezért a ténylegesen behozott "
+        f"rekordoké ({n_identified}), nem a becslésé.\n"
+        "- **Kiegészítő forrás.** A Cochrane és a PRISMA-S ajánlása szerint a "
+        "Google Scholar önmagában nem elfogadható keresési alap; adatbázis-keresés "
+        "(PubMed/MEDLINE, Embase, CENTRAL) mellett, azt kiegészítve naplózandó.\n"
+        "- **A bibliográfiai adatok nem a Scholarból származnak.** Minden rekord "
+        "DOI-ra, majd lehetőség szerint PMID-re lett feloldva, és a metaadat a "
+        "Crossref, illetve a MEDLINE rekordból épült újra; a Scholar az "
+        "azonosítást és az idézetszámot adta.\n"
+        f"- **Duplikátum a meglévő korpusszal szemben:** {duplicates} rekord már "
+        "benne volt, ezért nem került be újra.",
+    ]
+
+    C.write_search_folder(search_dir, {
+        **log_entry,
+        "keres_id": keres_id,
+        "gate": gate,
+        "fulltext_required": not (args.no_fulltext_gate or args.no_pdf),
+        "notes": notes,
+        "protokoll": ({**protocol, "status_at_search": protocol.get("status", "")}
+                      if protocol else {}),
+        "outdir": str(outdir),
+    }, rows)
+    linked = C.link_fulltext(rows, search_dir / "teljes_szoveg")
+    print(f"  Keresési mappa: {search_dir}"
+          + (f"  ({linked} teljes szöveg belinkelve)" if linked else ""))
+
+    if rows:
+        kept, added = C.merge_csv(rows, outdir / "osszesitett_lista.csv", fresh=args.fresh)
+        print(f"\nKorpusz bővítve: +{added} új rekord "
+              f"({kept} korábbi megtartva) — {outdir / 'osszesitett_lista.csv'}")
+        if not args.no_validate:
+            admitted = [r for r in rows if r.validacio == "befogadva"]
+            held = [r for r in rows if r.validacio and r.validacio != "befogadva"]
+            if admitted:
+                C.merge_csv(admitted, outdir / "befogadott_korpusz.csv", fresh=args.fresh)
+                print(f"Befogadott korpusz (+{len(admitted)}): "
+                      f"{outdir / 'befogadott_korpusz.csv'}")
+            if held:
+                C.merge_csv(held, outdir / "visszatartott.csv", fresh=args.fresh)
+                print(f"Visszatartva (+{len(held)}): {outdir / 'visszatartott.csv'} — indokkal")
+
+    if args.after:
+        link_to_parent(Path(args.after), search_dir, keres_id,
+                       C.SCHOLAR_STATE["yes"])
+
+    log_path = outdir / "kereses_naplo.jsonl"
+    with log_path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+    print(f"Keresési napló bővítve: {log_path}")
+    print(f"  PRISMA:  bin/prisma ingest --outdir {outdir}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

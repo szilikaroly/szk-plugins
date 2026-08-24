@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import re
 import sys
@@ -149,6 +150,59 @@ def journals_match(pubmed_titles: list[str], crossref_titles: list[str]) -> bool
             ):
                 return True
     return False
+
+
+#: Function words that one database prints and another drops, or that a
+#: truncated Google Scholar snippet loses. Keeping them in the comparison makes
+#: two renderings of the SAME title score as low as 0.5, which is below any
+#: usable threshold — so they are removed before the titles are compared.
+TITLE_STOPWORDS = {
+    "a", "an", "the", "of", "in", "on", "and", "or", "for", "to", "with", "by",
+    "from", "at", "as", "is", "are", "was", "were", "be", "its", "their", "this",
+    "that", "into", "between", "among", "during", "after", "before", "versus",
+    "vs", "via",
+}
+
+
+def title_key(title: str) -> str:
+    """A title reduced to what two databases can be expected to agree on."""
+    return " ".join(t for t in fold(title).split() if t not in TITLE_STOPWORDS)
+
+
+def title_similarity(a: str, b: str) -> float:
+    """Token-set Jaccard on folded, stopword-stripped titles.
+
+    Order-insensitive on purpose: Scholar prints the title as the publisher set
+    it, Crossref as the publisher deposited it, and the two differ in
+    punctuation, case and subtitle separators far more often than in words.
+    """
+    ta, tb = set(title_key(a).split()), set(title_key(b).split())
+    if not ta or not tb:
+        return 0.0
+    return len(ta & tb) / len(ta | tb)
+
+
+def record_key(pmid: str = "", doi: str = "", cim: str = "") -> str:
+    """One stable identity per record, across sources that do not share an ID.
+
+    PubMed records key on their PMID, as they always have, so an existing PRISMA
+    state keeps working untouched. A record from a source that has no PMID —
+    Google Scholar reaching a thesis, a book chapter, a journal MEDLINE never
+    indexed — keys on its DOI, and failing that on its normalised title. Without
+    this a PMID-less record simply vanished from the flow: it was harvested,
+    validated and then silently dropped at ingest, which is the one failure mode
+    a PRISMA diagram must never have.
+    """
+    pmid = str(pmid or "").strip()
+    if pmid:
+        return pmid
+    doi = norm_doi(doi or "")
+    if doi:
+        return f"doi:{doi}"
+    key = title_key(cim or "")
+    if key:
+        return "t:" + hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
+    return ""
 
 
 def norm_doi(doi: str) -> str:

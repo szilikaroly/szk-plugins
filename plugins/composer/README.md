@@ -2,11 +2,12 @@
 
 A literature-intake pipeline whose output you do not have to re-check.
 
-Three scripts, none of which calls a language model:
+Five scripts, none of which calls a language model:
 
 | Script | Does |
 |---|---|
 | `scripts/collect` | PubMed search → records → Open Access full texts → per-search folder |
+| `scripts/scholar` | Google Scholar sweep → resolved to DOI/PMID → the same full-text routes and the same gate |
 | `scripts/validate5d.py` | 5-dimension bibliographic validation against Crossref + PubMed + Europe PMC |
 | `scripts/prospero.py` | PROSPERO protocol record — scaffold, eligibility check, export |
 | `scripts/prisma` | PRISMA 2020 flow, PRISMA-S search appendix, screening decisions, exports |
@@ -69,11 +70,66 @@ $S/prospero.py check --protocol endo-diet-protocol.json
 $S/collect --outdir ~/Documents/PubMed_Downloads --protocol endo-diet-protocol.json \
            --query '"endometriosis"[mh] AND diet[tiab]' --query-name endo-diet \
            --raw --retmax 500 --xml-fallback
+# supplementary only, never on its own:
+$S/scholar --outdir ~/Documents/PubMed_Downloads --protocol endo-diet-protocol.json \
+           --query '"endometriosis" diet -mouse' --query-name endo-diet \
+           --retmax 100 --years 10 --min-citations 5 --xml-fallback
 $S/prisma --project endo-diet ingest
 $S/prisma --project endo-diet dedup --auto
 $S/prisma --project endo-diet template          # decide, then screen --from-csv
 $S/prisma --project endo-diet export --format all
 ```
+
+## Google Scholar
+
+Scholar indexes what MEDLINE does not — theses, book chapters, conference
+papers, regional and non-indexed journals. That is the only reason it is here,
+and the limits are logged with every search rather than mentioned once in a
+README:
+
+- **No API.** `scholarly` reads the public result pages. Google's terms do not
+  allow it and Google blocks IPs that keep doing it. `MaxTriesExceededException`
+  is that block, not a network error — wait, do not retry harder.
+- **Not reproducible.** Personalised ranking, a rounded "About N results"
+  estimate, ~1000 results reachable at most. Cochrane and PRISMA-S treat Scholar
+  as supplementary, so `count_total` in the log is the number of records
+  actually retrieved and Google's estimate is reported separately, flagged as an
+  estimate. The PRISMA-S appendix carries the footnote automatically.
+- **Scholar's metadata never enters the corpus.** A snippet has no DOI, no
+  volume, no ISSN and authors printed as "JA Smith" — the gate would mark every
+  record unverifiable. Each hit is resolved instead: DOI from its own link, or a
+  Crossref match that has to agree on title **and** year **and** first author;
+  then DOI → PMID; then the record is rebuilt from MEDLINE or Crossref. Scholar
+  contributes discovery, the link and the citation count.
+- **Full texts stay on the legitimate routes.** PMC Open Access first, then
+  **Unpaywall** for DOIs PMC does not hold. Scholar's own links are not
+  followed.
+
+A paper both sources find is not counted twice: the Scholar hit is dropped and
+the existing corpus row is stamped `PubMed; Google Scholar`, keeping the Scholar
+citation count. The corpus CSVs **grow** across runs and sources — `--fresh`
+overwrites instead, for when a corpus really should start over.
+
+### The Scholar question is asked on every search
+
+Because Scholar is a source you must *account for* whether or not you use it,
+`collect` ends every run with a decision block, and the search log carries the
+answer:
+
+| `--scholar` | log says |
+|---|---|
+| `ask` (default) | `felajánlva, még nem eldöntve` |
+| `yes` | `lefuttatva (külön mappában, kiegészítő forrásként)` |
+| `no` | `megfontolva, elvetve` |
+
+PRISMA-S asks which sources were searched **and** which were considered and
+dropped; a log that simply never mentions Scholar cannot answer either. Set
+`COMPOSER_SCHOLAR=no` in the environment to stop being asked.
+
+When a sweep does run, `scholar --after <search folder>` writes the
+back-reference: the parent log gains a `## Kiegészítő Scholar-keresés` section
+pointing at the sweep's directory, and the parent `kereses.json` flips to
+`lefuttatva`. Running it twice does not duplicate the entry.
 
 ## Self test
 
@@ -93,5 +149,8 @@ both failures look like success in the summary line.
 ## Dependencies
 
 `collect` needs `biopython`, `requests` and (optionally) `pandas` on the
-Anaconda python3 its shebang points at. `validate5d.py`, `prospero.py` and
+Anaconda python3 its shebang points at. `scholar` needs those plus `scholarly`
+(`pip install scholarly`); it imports `collect` as a module, so the Article
+schema, the PMC OA download path, the search-folder writer and the 5D runner are
+the same code rather than a parallel copy. `validate5d.py`, `prospero.py` and
 `prisma` are stdlib-only and run on any python3.

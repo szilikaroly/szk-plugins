@@ -2,6 +2,7 @@
 # composer — literature intake with the 5D admission gate, from any shell.
 #
 #   composer harvest  --query '...' --query-name endo --raw --retmax 500 --xml-fallback
+#   composer scholar  --query '"..." "..."' --query-name endo --retmax 100 --years 10
 #   composer validate --records refs.csv --out refs-validacio.csv --no-fulltext-gate
 #   composer protocol init --project endo-diet --title "..."
 #   composer prisma   --project endo-diet status
@@ -23,6 +24,7 @@ source "$_dir/_resolve.sh"
 cmd="${1:-}"; [[ $# -gt 0 ]] && shift || true
 case "$cmd" in
   harvest|collect)  szk_run composer scripts/collect      "$@" ;;
+  scholar|gs)       szk_run composer scripts/scholar      "$@" ;;
   validate|5d)      szk_run composer scripts/validate5d.py "$@" ;;
   protocol|prospero) szk_run composer scripts/prospero.py  "$@" ;;
   prisma|flow)      szk_run composer scripts/prisma        "$@" ;;
@@ -32,6 +34,6 @@ case "$cmd" in
     exit 0 ;;
   *)
     echo "composer: unknown subcommand '$cmd'" >&2
-    echo "  harvest | validate | protocol | prisma | selftest" >&2
+    echo "  harvest | scholar | validate | protocol | prisma | selftest" >&2
     exit 2 ;;
 esac

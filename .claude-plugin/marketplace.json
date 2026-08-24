@@ -46,11 +46,11 @@
     {
       "name": "composer",
       "source": "./plugins/composer",
-      "description": "Builds a literature corpus that can be cited without checking it again. Harvests PubMed, downloads the Open Access full texts through the legitimate PMC OA / Europe PMC routes, and admits a paper only when it has a readable full text AND survives 5-dimension bibliographic validation — DOI, first author, author list, journal, volume — cross-checked against Crossref, PubMed and Europe PMC with a 2-of-3 majority rule. Every search gets its own directory with the exact query, the date, the true hit count and the gate result, logged to PRISMA 2020 / PRISMA-S and tied to a PROSPERO protocol record.",
+      "description": "Builds a citable literature corpus from PubMed and, as a supplementary source, Google Scholar. Downloads the Open Access full texts through the legitimate PMC OA / Europe PMC / Unpaywall routes and admits a paper only when it has a readable full text AND survives 5-dimension bibliographic validation — DOI, first author, author list, journal, volume — cross-checked against Crossref, PubMed and Europe PMC with a 2-of-3 majority rule. Google Scholar contributes discovery only: every hit is resolved to a DOI and a PMID, and its non-reproducibility and estimated hit count are written into the search log. Every search gets its own directory with the exact query, the date, the hit count and the gate result, logged to PRISMA 2020 / PRISMA-S and tied to a PROSPERO protocol record.",
       "author": { "name": "Dr. Szili Károly" },
       "license": "MIT",
       "category": "productivity",
-      "keywords": ["pubmed", "literature", "prisma", "prospero", "validation", "crossref", "systematic-review"]
+      "keywords": ["pubmed", "google-scholar", "literature", "prisma", "prospero", "validation", "crossref", "unpaywall", "systematic-review"]
     },
     {
       "name": "academic-editor",

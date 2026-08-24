@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import re
 import sys
@@ -47,6 +48,21 @@ DEFAULT_OUTDIR = Path.home() / "Documents" / "PubMed_Downloads"
 
 # A collect CSV letöltési státusza -> van-e teljes szöveg a kézben.
 _RETRIEVED = {"Letöltve (PDF)", "Letöltve (XML)"}
+
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+try:
+    from validate5d import record_key
+except ImportError:  # pragma: no cover — keeps prisma usable on its own
+    def record_key(pmid: str = "", doi: str = "", cim: str = "") -> str:
+        pmid = str(pmid or "").strip()
+        if pmid:
+            return pmid
+        doi = (doi or "").strip().lower()
+        if doi:
+            return f"doi:{doi}"
+        key = re.sub(r"[^a-z0-9]+", " ", (cim or "").lower()).strip()
+        return ("t:" + hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]) if key else ""
 
 
 def now_iso() -> str:
@@ -111,8 +127,9 @@ def save_state(state: dict, outdir: Path, project: str) -> Path:
     return path
 
 
-def new_record(pmid: str) -> dict:
+def new_record(pmid: str, rec_id: str = "") -> dict:
     return {
+        "rec_id": rec_id or pmid,
         "pmid": pmid,
         "cim": "",
         "folyoirat": "",
@@ -120,6 +137,8 @@ def new_record(pmid: str) -> dict:
         "publikacio_datuma": "",
         "pubmed_url": "",
         "source": "",
+        "forras_url": "",
+        "idezetek": "",
         "topic": "",
         "fulltext": "",       # retrieved | not_retrieved | ""
         "decision": "",       # include | exclude | ""
@@ -179,6 +198,14 @@ def ingest(state: dict, outdir: Path, csv_path: Path | None, log_path: Path | No
             "count_total": int(e.get("count_total", 0) or 0),
             "retrieved": int(e.get("retrieved", 0) or 0),
             "filters": e.get("filters", ""),
+            # PRISMA-S asks for the interface per source, and it is not
+            # cosmetic: "PubMed via E-utilities" and "Google Scholar via the
+            # public web interface" are different claims about how reproducible
+            # the search is. Dropping it left the appendix column blank for
+            # every source that was not PubMed.
+            "interface": e.get("interface", ""),
+            "count_is_estimate": bool(e.get("count_is_estimate")),
+            "count_estimate": e.get("count_estimate"),
         })
         existing.add(key)
         added_searches += 1
@@ -187,21 +214,33 @@ def ingest(state: dict, outdir: Path, csv_path: Path | None, log_path: Path | No
     added_rec = updated_rec = 0
     for row in read_collect_csv(csv_path):
         pmid = str(row.get("pmid", "")).strip()
-        if not pmid:
+        # Not every source hands out PMIDs. Keying the flow on the PMID alone
+        # meant a Google Scholar hit on a thesis or a non-indexed journal was
+        # harvested, downloaded, validated — and then dropped here without a
+        # word, which is the one thing a PRISMA diagram must never do.
+        key = record_key(pmid, row.get("doi", ""), row.get("cim", ""))
+        if not key:
             continue
-        rec = state["records"].get(pmid)
+        rec = state["records"].get(key)
         if rec is None:
-            rec = new_record(pmid)
-            state["records"][pmid] = rec
+            rec = new_record(pmid, key)
+            state["records"][key] = rec
             added_rec += 1
         else:
             updated_rec += 1
+        rec.setdefault("rec_id", key)
+        rec["pmid"] = pmid or rec.get("pmid", "")
         rec["cim"] = row.get("cim", rec["cim"])
         rec["folyoirat"] = row.get("folyoirat", rec["folyoirat"])
         rec["doi"] = row.get("doi", rec["doi"])
         rec["publikacio_datuma"] = row.get("publikacio_datuma", rec["publikacio_datuma"])
         rec["pubmed_url"] = row.get("pubmed_url", rec["pubmed_url"])
-        rec["source"] = source
+        # The row states its own origin when the harvester recorded one;
+        # --source is the fallback for a CSV written before multi-source runs.
+        rec["source"] = (row.get("forras") or "").strip() or source
+        rec["forras_url"] = (row.get("forras_url") or rec.get("forras_url")
+                             or rec.get("pubmed_url", ""))
+        rec["idezetek"] = row.get("idezetek", rec.get("idezetek", ""))
         rec["topic"] = row.get("tema", rec["topic"])
         # Teljes szöveg állapota a letöltési státuszból (csak ha még nincs beállítva).
         if not rec["fulltext"]:
@@ -250,8 +289,8 @@ def dedup(state: dict, auto: bool, removed_manual: int | None) -> None:
     seen_doi: dict[str, str] = {}
     seen_title: dict[str, str] = {}
     removed = 0
-    for pmid in list(state["records"]):
-        rec = state["records"][pmid]
+    for key in list(state["records"]):
+        rec = state["records"][key]
         doi = (rec.get("doi") or "").strip().lower()
         title = _norm_title(rec.get("cim", ""))
         dup_of = None
@@ -260,37 +299,45 @@ def dedup(state: dict, auto: bool, removed_manual: int | None) -> None:
         elif title and title in seen_title:
             dup_of = seen_title[title]
         if dup_of:
-            del state["records"][pmid]  # az egyedi halmazból kikerül
+            del state["records"][key]  # az egyedi halmazból kikerül
             removed += 1
             continue
         if doi:
-            seen_doi[doi] = pmid
+            seen_doi[doi] = key
         if title:
-            seen_title[title] = pmid
+            seen_title[title] = key
     state["dedup_removed"] = state.get("dedup_removed", 0) + removed
     print(f"Automatikus dedup: {removed} duplikátum eltávolítva "
           f"(összesen rögzített: {state['dedup_removed']}).")
 
 
 def apply_decisions(state: dict, rows: list[dict]) -> tuple[int, int]:
-    """Döntés-sorok alkalmazása. Oszlopok: pmid, decision, reason, phase."""
+    """Döntés-sorok alkalmazása. Oszlopok: rec_id|pmid, decision, reason, phase.
+
+    `rec_id` wins when the CSV carries one, because a record from a source
+    without PMIDs has nothing else to be addressed by. A decision CSV written
+    before rec_id existed has only `pmid`, and for a PubMed record the two are
+    the same string — so old files keep working untouched.
+    """
     applied = skipped = 0
     for row in rows:
         pmid = str(row.get("pmid", "")).strip()
-        if not pmid:
+        key = str(row.get("rec_id", "")).strip() or record_key(
+            pmid, row.get("doi", ""), row.get("cim", ""))
+        if not key:
             continue
         decision = (row.get("decision", "") or "").strip().lower()
         if decision not in ("", "include", "exclude"):
-            print(f"  ! ismeretlen döntés '{decision}' ({pmid}), kihagyva.", file=sys.stderr)
+            print(f"  ! ismeretlen döntés '{decision}' ({key}), kihagyva.", file=sys.stderr)
             skipped += 1
             continue
         if decision == "":
             continue  # kitöltetlen sor
-        rec = state["records"].get(pmid)
+        rec = state["records"].get(key)
         if rec is None:
-            rec = new_record(pmid)
+            rec = new_record(pmid, key)
             rec["cim"] = row.get("cim", "")
-            state["records"][pmid] = rec
+            state["records"][key] = rec
         phase = (row.get("phase", "") or "").strip().lower()
         if decision == "exclude" and phase not in ("screen", "eligibility"):
             phase = "screen"  # alapértelmezés: cím/absztrakt szintű kizárás
@@ -389,15 +436,19 @@ def status_text(state: dict) -> str:
     lines.append("=" * 64)
     lines.append("AZONOSÍTÁS (keresési naplóból)")
     for s in f["databases"] + f["registers"] + f["other_sources"]:
-        lines.append(f"  {s.get('source',''):<12} {s.get('date',''):<11} "
-                     f"Count={s.get('count_total',0):<7} behozva={s.get('retrieved',0)}")
+        lines.append(f"  {s.get('source',''):<16} {s.get('date',''):<11} "
+                     f"Count={s.get('count_total',0):<7} behozva={s.get('retrieved',0)}"
+                     + ("   [becslés, nem reprodukálható keresés]"
+                        if s.get("count_is_estimate") else ""))
     lines.append(f"  Azonosított összesen: {f['identified_total']}  "
                  f"(adatbázis {f['identified_databases']}, regiszter {f['identified_registers']}, "
                  f"egyéb {f['identified_other']})")
     if f["retrieval_gap"] > 0:
         lines.append(f"  ! FIGYELEM: {f['retrieval_gap']} azonosított rekord NEM került be a "
-                     f"korpuszba (retmax-korlát). A lenti szűrés a behozott {f['retrieved_total']} "
-                     f"rekordon történt — nem kimerítő keresés. Emeld a --retmax-ot a teljességhez.")
+                     f"korpuszba (retmax-korlát, vagy szűrés előtt eltávolított duplikátum). "
+                     f"A lenti szűrés a behozott {f['retrieved_total']} rekordon történt. "
+                     f"Ha a különbség retmax-ból ered, a keresés nem kimerítő — emeld a --retmax-ot; "
+                     f"a forrásonkénti bontás a keresési naplókban van.")
     lines.append("-" * 64)
     lines.append("SZŰRÉS ÉS BEVÁLOGATÁS (rekord-szintű napló)")
     lines.append(f"  Duplikátum eltávolítva:            {f['dedup_removed']}")
@@ -436,8 +487,12 @@ def status_text(state: dict) -> str:
 
 def export_flow_md(state: dict) -> str:
     f = compute_flow(state)
-    dbs = ", ".join(f"{s.get('source','')} (n={s.get('count_total',0)}, {s.get('date','')})"
-                    for s in f["databases"]) or "—"
+    dbs = ", ".join(
+        f"{s.get('source','')} (n={s.get('count_total',0)}"
+        + (", behozott rekordok száma; a forrás nem ad pontos találatszámot"
+           if s.get("count_is_estimate") else "")
+        + f", {s.get('date','')})"
+        for s in f["databases"]) or "—"
     out = [
         f"# PRISMA 2020 folyamat — {state['project']}",
         "",
@@ -446,8 +501,9 @@ def export_flow_md(state: dict) -> str:
     ]
     if f["retrieval_gap"] > 0:
         out.append(
-            f"Ebből **{f['retrieved_total']}** rekord került a korpuszba (retmax-korlát); a szűrés "
-            f"erre a halmazra vonatkozik, így a keresés nem tekinthető kimerítőnek."
+            f"Ebből **{f['retrieved_total']}** rekord került a korpuszba (retmax-korlát, "
+            f"illetve szűrés előtt eltávolított, már meglévő rekordok); a szűrés erre a "
+            f"halmazra vonatkozik."
         )
     out += [
         "",
@@ -477,12 +533,32 @@ def export_prisma_s(state: dict) -> str:
         "| # | Adatbázis | Felület | Keresés dátuma | Szűrők | Találat (Count) | Behozva |",
         "|---|-----------|---------|----------------|--------|-----------------|---------|",
     ]
+    estimated = False
     for i, s in enumerate(rows, 1):
-        interface = "NCBI Entrez / E-utilities" if s.get("source") == "PubMed" else s.get("interface", "")
+        interface = s.get("interface") or (
+            "NCBI Entrez / E-utilities" if s.get("source") == "PubMed" else "")
+        mark = ""
+        if s.get("count_is_estimate"):
+            mark = " *"
+            estimated = True
         out.append(
             f"| {i} | {s.get('source','')} | {interface} | {s.get('date','')} | "
-            f"{s.get('filters','')} | {s.get('count_total',0)} | {s.get('retrieved',0)} |"
+            f"{s.get('filters','')} | {s.get('count_total',0)}{mark} | {s.get('retrieved',0)} |"
         )
+    if estimated:
+        out += [
+            "",
+            "\\* Ennél a forrásnál a *találatszám* nem pontos szám. A Google Scholar "
+            "kerekített becslést ír ki, a listát legfeljebb ~1000 tételig engedi "
+            "lapozni, és a rangsora személyre szabott, tehát a keresés nem "
+            "reprodukálható. A táblázatban ezért a ténylegesen behozott rekordok "
+            "száma szerepel, nem a becslés. A Google Scholar kiegészítő forrásként "
+            "naplózandó, adatbázis-keresés (PubMed/MEDLINE, Embase, CENTRAL) mellett.",
+        ]
+        for s in rows:
+            if s.get("count_is_estimate") and s.get("count_estimate"):
+                out.append(f"  - {s.get('source','')} — a Google becslése a keresés "
+                           f"idején: kb. {s['count_estimate']}.")
     out += ["", "## Teljes keresőkifejezések", ""]
     for i, s in enumerate(rows, 1):
         out.append(f"**{i}. {s.get('source','')} — {s.get('topic','')}**")
@@ -549,7 +625,7 @@ def export_flowchart_spec(state: dict) -> dict:
 def included_records(state: dict) -> list[dict]:
     return sorted(
         (r for r in state["records"].values() if r["decision"] == "include"),
-        key=lambda r: (r.get("folyoirat", ""), r.get("pmid", "")),
+        key=lambda r: (r.get("folyoirat", ""), r.get("rec_id", "") or r.get("pmid", "")),
     )
 
 
@@ -566,10 +642,13 @@ def export_ris(state: dict) -> str:
             out.append(f"PY  - {y}")
         if r.get("doi"):
             out.append(f"DO  - {r['doi']}")
-        if r.get("pubmed_url"):
-            out.append(f"UR  - {r['pubmed_url']}")
+        url = r.get("pubmed_url") or r.get("forras_url")
+        if url:
+            out.append(f"UR  - {url}")
         if r.get("pmid"):
             out.append(f"AN  - {r['pmid']}")
+        if r.get("source"):
+            out.append(f"DB  - {r['source']}")
         out.append("ER  - ")
         out.append("")
     return "\n".join(out)
@@ -577,12 +656,16 @@ def export_ris(state: dict) -> str:
 
 def export_included_csv(state: dict, path: Path) -> int:
     recs = included_records(state)
-    cols = ["pmid", "cim", "folyoirat", "publikacio_datuma", "doi", "pubmed_url"]
+    cols = ["rec_id", "pmid", "forras", "cim", "folyoirat", "publikacio_datuma",
+            "doi", "pubmed_url", "forras_url", "idezetek"]
     with path.open("w", encoding="utf-8-sig", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=cols)
         w.writeheader()
         for r in recs:
-            w.writerow({c: r.get(c, "") for c in cols})
+            row = {c: r.get(c, "") for c in cols}
+            row["rec_id"] = r.get("rec_id", "") or r.get("pmid", "")
+            row["forras"] = r.get("source", "")
+            w.writerow(row)
     return len(recs)
 
 
@@ -660,16 +743,18 @@ def import_source(state: dict, path: Path) -> None:
 
 def write_template(state: dict, out_path: Path) -> int:
     """Kitöltendő szűrési döntés-CSV a még el nem bírált rekordokból."""
-    cols = ["pmid", "cim", "folyoirat", "publikacio_datuma", "statusz_fulltext",
-            "decision", "reason", "phase"]
+    cols = ["rec_id", "pmid", "forras", "cim", "folyoirat", "publikacio_datuma",
+            "statusz_fulltext", "decision", "reason", "phase"]
     todo = [r for r in state["records"].values() if not r["decision"]]
-    todo.sort(key=lambda r: (r.get("folyoirat", ""), r.get("pmid", "")))
+    todo.sort(key=lambda r: (r.get("folyoirat", ""), r.get("rec_id", "") or r.get("pmid", "")))
     with out_path.open("w", encoding="utf-8-sig", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=cols)
         w.writeheader()
         for r in todo:
             w.writerow({
-                "pmid": r["pmid"], "cim": r["cim"], "folyoirat": r["folyoirat"],
+                "rec_id": r.get("rec_id", "") or r["pmid"], "pmid": r["pmid"],
+                "forras": r.get("source", ""),
+                "cim": r["cim"], "folyoirat": r["folyoirat"],
                 "publikacio_datuma": r["publikacio_datuma"], "statusz_fulltext": r["fulltext"],
                 "decision": "", "reason": "", "phase": "",
             })

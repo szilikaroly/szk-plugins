@@ -10,11 +10,12 @@ success in the summary line.
 """
 from __future__ import annotations
 
+import csv
 import io
 import json
 import sys
 import tempfile
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -51,6 +52,39 @@ def run() -> bool:
     ok &= _ok("different surnames still differ",
               not V.surnames_match("Smith", "Jones"))
     ok &= _ok("empty name never matches", not V.surnames_match("", "Smith"))
+
+    print("\n[record identity — multi-source keys]")
+    ok &= _ok("a PMID keys as itself (old states keep working)",
+              V.record_key("31600241", "10.1/x", "Title") == "31600241")
+    ok &= _ok("no PMID falls back to the DOI",
+              V.record_key("", "10.1371/journal.pone.0223316", "T") ==
+              "doi:10.1371/journal.pone.0223316")
+    ok &= _ok("no PMID and no DOI falls back to the title",
+              V.record_key("", "", "A thesis nobody indexed").startswith("t:"))
+    ok &= _ok("the title key is stable across punctuation and case",
+              V.record_key("", "", "A Thesis, Nobody Indexed!") ==
+              V.record_key("", "", "a thesis nobody indexed"))
+    ok &= _ok("an empty record has no key (and is skipped, not invented)",
+              V.record_key("", "", "") == "")
+
+    print("\n[title matching — the Crossref lookup for a Scholar hit]")
+    # Below TITLE_MATCH_MIN (0.80) a Crossref hit must NOT be accepted as the
+    # paper Scholar found. A title-only match on the wrong paper would hand the
+    # corpus a wrong DOI one step upstream of the gate that exists to catch it.
+    ok &= _ok("stopwords do not sink a true match",
+              V.title_similarity("Gut microbiome and PCOS",
+                                 "The gut microbiome in PCOS") == 1.0)
+    ok &= _ok("punctuation and subtitle separators do not sink a true match",
+              V.title_similarity(
+                  "Effects of GLP-1 receptor agonists on pregnancy outcomes: a systematic review",
+                  "Effects of GLP-1 Receptor Agonists on Pregnancy Outcomes — A Systematic Review"
+              ) == 1.0)
+    ok &= _ok("a short title inside a longer one stays below the threshold",
+              V.title_similarity("Obesity",
+                                 "Obesity and diabetes in women of reproductive age") < 0.80)
+    ok &= _ok("an unrelated paper scores near zero",
+              V.title_similarity("Rosacea and metabolic syndrome: a review",
+                                 "Endometriosis and the immune system") < 0.20)
 
     print("\n[journal titles]")
     ok &= _ok("ISO abbreviation matches the full title",
@@ -245,6 +279,123 @@ def run() -> bool:
         ok &= _ok("the Article dataclass carries all five gate fields",
                   {"elso_szerzo", "szerzok", "folyoirat", "kotet", "validacio"}
                   <= set(collect.Article.__dataclass_fields__))
+        ok &= _ok("the Article dataclass records which source found the paper",
+                  {"forras", "forras_url", "idezetek"}
+                  <= set(collect.Article.__dataclass_fields__))
+
+        print("\n[multi-source corpus: the merge must not destroy the other source]")
+        ok &= _ok("two source names join instead of overwriting",
+                  collect._join_sources("PubMed", "Google Scholar")
+                  == "PubMed; Google Scholar")
+        ok &= _ok("the same source twice does not repeat",
+                  collect._join_sources("PubMed; Google Scholar", "PubMed")
+                  == "PubMed; Google Scholar")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "corpus.csv"
+            first = collect.Article(
+                tema="pm", pmid="111", cim="Paper one", folyoirat="J", 
+                publikacio_datuma="2024", doi="10.1/a", pmc_id="PMC1",
+                pubmed_url="u", absztrakt="", statusz="Letöltve (PDF)",
+                fajl=str(path), forras="PubMed", validacio="befogadva")
+            collect.merge_csv([first], path)
+
+            # A second source arrives. The first source's record must survive,
+            # and a metadata-only pass must not wipe the download it already has.
+            second = collect.Article(
+                tema="gs", pmid="", cim="A thesis", folyoirat="Repo",
+                publikacio_datuma="2021", doi="", pmc_id="", pubmed_url="",
+                absztrakt="", statusz="Csak metaadat", forras="Google Scholar")
+            again = collect.Article(
+                tema="gs", pmid="111", cim="Paper one", folyoirat="J",
+                publikacio_datuma="2024", doi="10.1/a", pmc_id="PMC1",
+                pubmed_url="u", absztrakt="", statusz="Csak metaadat",
+                forras="Google Scholar")
+            kept, added = collect.merge_csv([second, again], path)
+
+            with path.open(encoding="utf-8-sig", newline="") as fh:
+                rows = {r["pmid"] or r["cim"]: r for r in csv.DictReader(fh)}
+            ok &= _ok("the first source's record is still there",
+                      kept == 1 and added == 1 and len(rows) == 2)
+            ok &= _ok("a metadata-only rerun does not erase a downloaded full text",
+                      rows["111"]["statusz"] == "Letöltve (PDF)")
+            ok &= _ok("a co-discovered record names both sources",
+                      rows["111"]["forras"] == "PubMed; Google Scholar")
+            ok &= _ok("a PMID-less record is kept, not dropped",
+                      rows["A thesis"]["forras"] == "Google Scholar")
+
+    print("\n[Scholar: the decision has to be in the log, either way]")
+    if collect is None:
+        print("  SKIP  collect not importable here")
+    else:
+        ok &= _ok("all three decision states have a label",
+                  set(collect.SCHOLAR_STATE) == {"ask", "yes", "no"})
+        with tempfile.TemporaryDirectory() as td:
+            base = {"topic": "t", "keres_id": "k", "database": "PubMed",
+                    "timestamp": "2026-01-01T00:00:00Z", "query": "q",
+                    "count_total": 1, "retrieved": 1, "retmax": 1,
+                    "gate": {"befogadva": 1}, "fulltext_required": True}
+            naplok = {}
+            for state in ("ask", "yes", "no"):
+                d = Path(td) / state
+                with redirect_stdout(io.StringIO()):
+                    collect.write_search_folder(
+                        d, {**base,
+                            "kiegeszito_scholar": collect.SCHOLAR_STATE[state]}, [])
+                naplok[state] = (d / "NAPLO.md").read_text(encoding="utf-8")
+            ok &= _ok("a search with no decision yet says so, it does not go silent",
+                      collect.SCHOLAR_STATE["ask"] in naplok["ask"])
+            ok &= _ok("a REJECTED Scholar sweep is still recorded (PRISMA-S)",
+                      collect.SCHOLAR_STATE["no"] in naplok["no"])
+            ok &= _ok("an accepted sweep is recorded as run",
+                      collect.SCHOLAR_STATE["yes"] in naplok["yes"])
+            ok &= _ok("the caveat travels with the log, not just the chat",
+                      "nem védhető keresési alap" in naplok["ask"])
+
+            # link_to_parent: the two directories must find each other.
+            try:
+                import importlib.machinery
+                import importlib.util
+                ldr = importlib.machinery.SourceFileLoader("scholar_mod",
+                                                           str(HERE / "scholar"))
+                sp = importlib.util.spec_from_file_location(
+                    "scholar_mod", str(HERE / "scholar"), loader=ldr)
+                scholar = importlib.util.module_from_spec(sp)
+                sys.modules[sp.name] = scholar
+                sp.loader.exec_module(scholar)
+            except Exception as exc:
+                print(f"  SKIP  scholar not importable: {exc}")
+                scholar = None
+
+            if scholar is not None:
+                parent = Path(td) / "ask"
+                child = Path(td) / "keresesek" / "2026_gs-t"
+                child.mkdir(parents=True, exist_ok=True)
+                buf = io.StringIO()
+                with redirect_stdout(buf):
+                    scholar.link_to_parent(parent, child, "2026_gs-t",
+                                           collect.SCHOLAR_STATE["yes"])
+                    scholar.link_to_parent(parent, child, "2026_gs-t",
+                                           collect.SCHOLAR_STATE["yes"])
+                meta = json.loads((parent / "kereses.json").read_text(encoding="utf-8"))
+                text = (parent / "NAPLO.md").read_text(encoding="utf-8")
+                ok &= _ok("--after flips the parent's Scholar state to 'run'",
+                          meta["kiegeszito_scholar"] == collect.SCHOLAR_STATE["yes"])
+                ok &= _ok("--after records where the supplementary sweep landed",
+                          meta["kiegeszito_scholar_mappa"] == str(child))
+                ok &= _ok("the parent log gains a back-reference",
+                          "[scholar:2026_gs-t]" in text)
+                ok &= _ok("running it twice does not duplicate the entry",
+                          text.count("[scholar:2026_gs-t]") == 1)
+                # A typo in --after must be said out loud. Silently writing
+                # nothing would let a sweep look linked when it is not.
+                bad = Path(td) / "nincs-ilyen"
+                err = io.StringIO()
+                with redirect_stderr(err):
+                    scholar.link_to_parent(bad, child, "x", "y")
+                ok &= _ok("a wrong --after path is named on stderr, not swallowed",
+                          str(bad) in err.getvalue())
+                ok &= _ok("a wrong --after path creates nothing", not bad.exists())
 
     print(f"\n{'ALL PASSED' if ok else 'FAILURES PRESENT'}")
     return ok

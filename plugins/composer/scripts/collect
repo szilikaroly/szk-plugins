@@ -303,6 +303,14 @@ class Article:
     oldalak: str = ""            # or the e-locator on article-number journals
     issn: str = ""
     ev: str = ""
+    # --- provenance ---
+    # Which database produced this record, and the link that stands for it there.
+    # A corpus fed from more than one source has to be able to say, per record,
+    # where it came from: PRISMA counts identification per source, and a record
+    # whose origin is unrecorded cannot be counted in either column.
+    forras: str = "PubMed"
+    forras_url: str = ""
+    idezetek: str = ""           # citation count, when the source reports one
     # --- the gate ---
     keres_id: str = ""
     validacio: str = ""          # befogadva | fuggoben | elutasitva
@@ -425,6 +433,8 @@ def to_article(article: dict, tema: str) -> Article | None:
         doi=ids.get("doi", ""),
         pmc_id=normalize_pmcid(ids.get("pmc")),
         pubmed_url=f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
+        forras="PubMed",
+        forras_url=f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
         absztrakt=get_abstract(article),
         publikacio_tipusok=pub_types,
         elso_szerzo=authors[0] if authors else "",
@@ -634,6 +644,13 @@ def validate_rows(rows: Sequence[Article], search_dir: Path, email: str,
             for state in ("befogadva", "fuggoben", "elutasitva")}
 
 
+SCHOLAR_STATE = {
+    "ask": "felajánlva, még nem eldöntve",
+    "yes": "lefuttatva (külön mappában, kiegészítő forrásként)",
+    "no": "megfontolva, elvetve",
+}
+
+
 def write_search_folder(search_dir: Path, meta: dict, rows: Sequence[Article]) -> None:
     """One directory per search, holding everything a reviewer would ask for.
 
@@ -666,7 +683,7 @@ def write_search_folder(search_dir: Path, meta: dict, rows: Sequence[Article]) -
         f"- **Interfész:** {meta.get('interface', 'NCBI E-utilities (esearch/efetch)')}",
         f"- **Szűrők:** {meta.get('filters') or '—'}",
         f"- **Nyelvi korlátozás:** {meta.get('language_limit') or 'nincs'}",
-        f"- **Találat (PubMed Count):** {meta['count_total']}",
+        f"- **{meta.get('count_label') or 'Találat (PubMed Count)'}:** {meta['count_total']}",
         f"- **Behozva (retmax={meta.get('retmax')}):** {meta['retrieved']}",
         "", "## Keresőkifejezés (szó szerint, futtatható)", "",
         "```", meta["query"], "```", "",
@@ -676,7 +693,18 @@ def write_search_folder(search_dir: Path, meta: dict, rows: Sequence[Article]) -
         f"- elutasítva: {meta['gate'].get('elutasitva', 0)}",
         f"- teljesszöveg-követelmény: {'igen' if meta.get('fulltext_required') else 'nem'}",
         "",
+        "## Kiegészítő forrás — Google Scholar", "",
+        f"- **Állapot:** {meta.get('kiegeszito_scholar') or SCHOLAR_STATE['ask']}",
+        "",
+        "A PRISMA-S azt kéri, hogy minden forrás szerepeljen a naplóban — az is, "
+        "amelyiket megfontoltad és elvetetted. A Scholar kiegészítő forrás: nincs "
+        "API-ja, a találati sorrend személyre szabott, a „About N results” becslés, "
+        "és ~1000 találat fölé nem lehet menni, ezért önmagában nem védhető "
+        "keresési alap. Ha lefut, saját mappát kap, és ez a napló hivatkozni fogja.",
+        "",
     ]
+    for extra in meta.get("notes") or []:
+        lines += [str(extra), ""]
     if prot:
         lines += [
             "## Protokoll (PROSPERO)", "",
@@ -695,7 +723,7 @@ def write_search_folder(search_dir: Path, meta: dict, rows: Sequence[Article]) -
             "folyóiratok ezt számon kérik. Készíts egyet: `prospero.py init`, "
             "majd add át a `--protocol` kapcsolóval.", "",
         ]
-    if meta["retrieved"] < meta["count_total"]:
+    if meta["retrieved"] < meta["count_total"] and not meta.get("count_is_estimate"):
         lines += [
             "## Figyelmeztetés — a keresés nem kimerítő", "",
             f"A PubMed {meta['count_total']} találatot jelentett, de csak "
@@ -720,6 +748,103 @@ def write_csv(rows: Iterable[Article], path: Path) -> int:
             writer.writeheader()
             writer.writerows(records)
     return len(records)
+
+
+#: Fields that describe the downloaded file rather than the paper.
+_DOWNLOAD_STATE = {"statusz", "fajl", "licenc"}
+
+
+def _join_sources(old: str, new: str) -> str:
+    """'PubMed' + 'Google Scholar' -> 'PubMed; Google Scholar', order preserved."""
+    names: list[str] = []
+    for chunk in (old or "", new or ""):
+        for name in (n.strip() for n in chunk.split(";")):
+            if name and name not in names:
+                names.append(name)
+    return "; ".join(names)
+
+
+def merge_csv(rows: Iterable[Article], path: Path, fresh: bool = False) -> tuple[int, int]:
+    """Write the corpus CSV without throwing away what another source put there.
+
+    `osszesitett_lista.csv` and `befogadott_korpusz.csv` are the corpus, not the
+    transcript of one run. Once a second source exists — a Google Scholar sweep
+    next to the PubMed harvest — a plain overwrite means whichever ran last is
+    the only one left, and the PRISMA count for the other source silently goes
+    to zero. So existing rows are read back, matched on record identity, and
+    updated in place; genuinely new rows are appended.
+
+    Returns (kept, added). `--fresh` restores the old overwrite behaviour for
+    when the user really does want to start the corpus over.
+    """
+    new_rows = [asdict(r) for r in rows]
+    if fresh or not path.exists():
+        write_csv(rows, path)
+        return 0, len(new_rows)
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import validate5d
+
+    def key_of(d: dict) -> str:
+        return validate5d.record_key(d.get("pmid", ""), d.get("doi", ""), d.get("cim", ""))
+
+    with path.open("r", encoding="utf-8-sig", newline="") as fh:
+        existing = list(csv.DictReader(fh))
+
+    merged: dict[str, dict] = {}
+    order: list[str] = []
+    for row in existing:
+        k = key_of(row)
+        if not k:
+            continue
+        if k not in merged:
+            order.append(k)
+        merged[k] = row
+
+    kept = len(order)
+    added = 0
+    for row in new_rows:
+        k = key_of(row)
+        if not k:
+            continue
+        if k in merged:
+            # A record already in the corpus keeps its non-empty fields; the new
+            # harvest only fills gaps. Re-running a search must never downgrade a
+            # record that a previous, better-provisioned run had fully resolved.
+            for field_name, value in row.items():
+                if field_name == "forras":
+                    # Two databases finding the same paper is information, not a
+                    # collision. PRISMA counts it as identified in both and then
+                    # deduplicated, so the record has to remember both names —
+                    # overwriting would make the second source look empty-handed.
+                    merged[k][field_name] = _join_sources(
+                        merged[k].get(field_name, ""), value)
+                elif field_name in _DOWNLOAD_STATE and not row.get("fajl") \
+                        and merged[k].get("fajl"):
+                    # A metadata-only pass (--no-pdf, or a source that could not
+                    # reach the full text) must not stamp "Csak metaadat" over a
+                    # record whose PDF is already on disk. The download state
+                    # belongs to the file, so it only moves when the file does.
+                    continue
+                elif value not in ("", None) or field_name not in merged[k]:
+                    merged[k][field_name] = value
+        else:
+            merged[k] = row
+            order.append(k)
+            added += 1
+
+    columns: list[str] = []
+    for k in order:
+        for field_name in merged[k]:
+            if field_name not in columns:
+                columns.append(field_name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8-sig") as fh:
+        writer = csv.DictWriter(fh, fieldnames=columns)
+        writer.writeheader()
+        for k in order:
+            writer.writerow({c: merged[k].get(c, "") for c in columns})
+    return kept, added
 
 
 def print_summary(rows: Sequence[Article]) -> None:
@@ -807,6 +932,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
              "ennek az azonosítójával és regisztrációs dátumával naplózódik.",
     )
     parser.add_argument(
+        "--fresh",
+        action="store_true",
+        help="Az összesített és a befogadott korpusz CSV felülírása a meglévő "
+             "sorok megtartása helyett. Alapból a korpusz BŐVÜL, hogy egy "
+             "második forrás (pl. Google Scholar) ne törölje az elsőt.",
+    )
+    parser.add_argument(
         "--no-validate",
         action="store_true",
         help="Az 5D validáció kihagyása. A befogadási kapu ilyenkor NEM működik, "
@@ -816,6 +948,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--no-fulltext-gate",
         action="store_true",
         help="A befogadáshoz elég az 5D egyezés; ne követelje meg a letöltött teljes szöveget.",
+    )
+    parser.add_argument(
+        "--scholar",
+        choices=("ask", "yes", "no"),
+        default=os.environ.get("COMPOSER_SCHOLAR", "ask"),
+        help="Kérdezzen-e rá a Google Scholar kiegészítő keresésre a futás végén. "
+             "ask (alap): a napló 'nem eldöntve' állapotot rögzít, és a futás "
+             "végén kiírja a döntési blokkot. yes/no: a döntés már megvan, a "
+             "napló azt rögzíti. Alapérték felülírható: COMPOSER_SCHOLAR.",
     )
     parser.add_argument(
         "--email",
@@ -937,6 +1078,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "prospero_id": protocol.get("prospero_id", ""),
             "protocol_registered": protocol.get("registered", ""),
             "validated_5d": not args.no_validate,
+            "kiegeszito_scholar": SCHOLAR_STATE[args.scholar],
         })
 
         print(f"  Találatok (PubMed Count): {total_hits}   behozva: {len(pmids)}")
@@ -1029,9 +1171,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         all_rows.extend(rows)
 
     csv_path = outdir / "osszesitett_lista.csv"
-    count = write_csv(all_rows, csv_path)
-    if count:
-        print(f"\nKész. {count} cikk metaadata mentve: {csv_path}")
+    kept, added = merge_csv(all_rows, csv_path, fresh=args.fresh)
+    if all_rows:
+        print(f"\nKész. {len(all_rows)} cikk metaadata mentve: {csv_path}"
+              + (f"  ({kept} korábbi rekord megtartva, {added} új)" if kept else ""))
 
     # The corpus the downstream tools should read is the ADMITTED set. The full
     # list stays on disk unchanged, because PRISMA needs the excluded records
@@ -1040,11 +1183,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         admitted = [r for r in all_rows if r.validacio == "befogadva"]
         held = [r for r in all_rows if r.validacio and r.validacio != "befogadva"]
         if admitted:
-            write_csv(admitted, outdir / "befogadott_korpusz.csv")
-            print(f"Befogadott korpusz ({len(admitted)} cikk): "
+            merge_csv(admitted, outdir / "befogadott_korpusz.csv", fresh=args.fresh)
+            print(f"Befogadott korpusz (+{len(admitted)} cikk): "
                   f"{outdir / 'befogadott_korpusz.csv'}")
         if held:
-            write_csv(held, outdir / "visszatartott.csv")
+            merge_csv(held, outdir / "visszatartott.csv", fresh=args.fresh)
             print(f"Visszatartva ({len(held)}): {outdir / 'visszatartott.csv'} — "
                   "indokkal, a PRISMA kizárási ágához")
 
@@ -1058,6 +1201,25 @@ def main(argv: Sequence[str] | None = None) -> int:
               f"{outdir}")
 
     print_summary(all_rows)
+
+    if args.scholar == "ask" and all_rows:
+        print("\n=== DÖNTÉS KELL: Google Scholar kiegészítő keresés ===")
+        print("Kérdezd meg a felhasználót, akar-e Scholar-sweepet ehhez a "
+              "kereséshez, és mondd el egyszer, változtatás nélkül:")
+        print("  - a Scholarnak nincs API-ja; a script a publikus találati "
+              "oldalakat olvassa, amit a Google feltételei nem engednek, és amit "
+              "tartós lekérdezés után blokkol;")
+        print("  - a Scholar-keresés nem reprodukálható (személyre szabott "
+              "rangsor, becsült találatszám, ~1000 találatos plafon);")
+        print("  - a Cochrane és a PRISMA-S ezért kiegészítő forrásként kezeli — "
+              "az adatbázis-keresést nem váltja ki.")
+        print("Igen esetén:  scholar --query '<SCHOLAR SZINTAXIS>' --query-name "
+              "<SLUG> --outdir <OUTDIR> --retmax 20 --no-pdf --after <KERESÉSI MAPPA>")
+        print("Nem esetén:   ugyanez a futás --scholar no kapcsolóval, hogy a "
+              "napló az elvetést is rögzítse (PRISMA-S).")
+        print("Ha soha ne kérdezzen: COMPOSER_SCHOLAR=no a környezetbe.")
+        print("=== DÖNTÉS VÉGE ===")
+
     return 0
 
 

@@ -1,6 +1,6 @@
 ---
 name: composer
-description: The Composer — build a citable literature corpus. Searches PubMed, downloads the Open Access full texts through the legitimate PMC OA / Europe PMC routes, and admits a paper only if it has a readable full text AND survives 5-dimension bibliographic validation (DOI, first author, author list, journal, volume) against Crossref, PubMed and Europe PMC. Every search gets its own logged directory under PRISMA 2020 / PRISMA-S rules and a PROSPERO protocol record. Use whenever the user wants to find, collect, screen, download or verify papers — "keress cikkeket X-ről", "gyűjtsd össze az irodalmat", "töltsd le a teljes szövegeket", "ellenőrizd a hivatkozásokat", building a reference base for a manuscript, a systematic or narrative review, a grant, or a PRISMA flow diagram, or any PubMed / NCBI / Entrez / MEDLINE / Crossref request. Hungarian triggers — irodalomkutatás, szakirodalom gyűjtés, PubMed keresés, cikkek letöltése, teljes szöveg, hivatkozás-ellenőrzés, PRISMA folyamatábra, PROSPERO protokoll, keresési napló.
+description: The Composer — build a citable literature corpus. Searches PubMed and, as a supplementary source, Google Scholar, downloads the Open Access full texts through the legitimate PMC OA / Europe PMC / Unpaywall routes, and admits a paper only if it has a readable full text AND survives 5-dimension bibliographic validation (DOI, first author, author list, journal, volume) against Crossref, PubMed and Europe PMC. Every search gets its own logged directory under PRISMA 2020 / PRISMA-S rules and a PROSPERO protocol record. Use whenever the user wants to find, collect, screen, download or verify papers — "keress cikkeket X-ről", "gyűjtsd össze az irodalmat", "töltsd le a teljes szövegeket", "ellenőrizd a hivatkozásokat", building a reference base for a manuscript, a systematic or narrative review, a grant, or a PRISMA flow diagram, or any PubMed / NCBI / Entrez / MEDLINE / Crossref / Google Scholar / scholarly request. Hungarian triggers — irodalomkutatás, szakirodalom gyűjtés, PubMed keresés, Google Scholar keresés, szürke irodalom, cikkek letöltése, teljes szöveg, hivatkozás-ellenőrzés, PRISMA folyamatábra, PROSPERO protokoll, keresési napló.
 ---
 
 # The Composer
@@ -86,6 +86,75 @@ review" publication type, so without `--strict` the filter falls back to
 record, so a genuine narrative review that merely *discusses* meta-analyses can
 be excluded; that is usually why a known paper is missing.
 
+### 2a. The Scholar question — asked on every search
+
+`collect` finishes with a `DÖNTÉS KELL: Google Scholar` block unless the run
+already carried `--scholar yes|no` (or `COMPOSER_SCHOLAR` is set). Put it to the
+user as a real clickable question and record the answer either way: the search
+log has a **Kiegészítő forrás — Google Scholar** section whose state is one of
+
+| state | meaning |
+|---|---|
+| `felajánlva, még nem eldöntve` | the question was raised and is still open — the log says so rather than going quiet |
+| `lefuttatva (külön mappában, kiegészítő forrásként)` | a sweep ran; `--after` linked the two logs |
+| `megfontolva, elvetve` | deliberately not run — **this is a PRISMA-S requirement**, not bookkeeping |
+
+A reviewer asking "did you search Scholar?" gets an answer from the log in all
+three cases. A search that never mentions Scholar cannot answer it at all.
+
+### 2b. Google Scholar — supplementary only
+
+```bash
+"$P/scholar" --outdir ~/Documents/PubMed_Downloads \
+             --protocol <slug>-protocol.json \
+             --query '"endometriosis" "economic burden" -mouse' --query-name <slug> \
+             --retmax 100 --years 10 --min-citations 5 --xml-fallback
+```
+
+Reach for this when the question needs what MEDLINE does not index — theses,
+book chapters, conference papers, regional or non-indexed journals, working
+papers. That is its only job here. **Never run it as the primary search**, and
+say why once, out loud, before the first run:
+
+- **No API.** `scholarly` reads the public result pages. Google's terms do not
+  allow that, and Google enforces it with a CAPTCHA and then an IP block. If a
+  run dies with `MaxTriesExceededException`, that IS the block — waiting is the
+  fix, retrying harder is not.
+- **Not reproducible.** Personalised ranking, a rounded "About N results"
+  estimate, and only ~1000 results reachable however large N looks. Cochrane and
+  PRISMA-S treat Scholar as supplementary. The script therefore logs the number
+  of records actually retrieved as the count, and reports Google's estimate
+  separately, flagged.
+- **Scholar's metadata is never trusted.** A snippet has no DOI, no volume, no
+  ISSN and authors printed as "JA Smith" — every record would fail the gate as
+  unverifiable. So each hit is resolved: DOI from its own link, or a Crossref
+  match on title **and** year **and** first author; then DOI → PMID; then the
+  record is rebuilt from MEDLINE or Crossref. Scholar contributes the discovery,
+  the link and the citation count, nothing else.
+- **Full texts still come from PMC OA, then Unpaywall.** Scholar's links are not
+  followed.
+
+| Flag | Effect |
+|---|---|
+| `--query` | **Scholar** syntax, not PubMed. `"phrase"`, `AND`/`OR`, `-excluded`, `intitle:`, `author:"Surname"`, `source:"Journal"`. PubMed field tags are rejected outright — Scholar would search for the literal bracket text and return confident nonsense |
+| `--retmax N` | start at 20. A big first run is how the IP gets blocked |
+| `--pause S` | politeness gap between hits (default 1.5s). Raise it, never lower it |
+| `--min-citations N` | the cheapest cut through Scholar's grey-literature noise |
+| `--years N`, `--year-from`, `--year-to`, `--sort-by date` | date limits |
+| `--patents`, `--citations` | both **off** by default; `--citations` re-admits citation-only stubs that have no document behind them |
+| `--proxy scraperapi` | needs `SCRAPERAPI_KEY`. `--proxy free` exists and rarely works |
+| `--no-unpaywall`, `--no-pubmed-link` | narrow the resolution chain |
+| `--dry-run` | print the query and settings, search nothing |
+
+Report the resolution line — how many hits got a DOI from their link, how many
+from a Crossref title match, how many stayed unidentified, how many are in
+PubMed. A hit with no DOI cannot pass the gate; for a thesis that is the correct
+outcome, not a bug, and chasing it by hand is the user's call.
+
+A paper both sources found is **not** counted twice: the Scholar hit is dropped
+and the existing corpus row is stamped `PubMed; Google Scholar`, keeping the
+Scholar citation count. The search log records the duplicate count for PRISMA.
+
 ### 3. Read the result — never `cat` the CSV
 
 The abstracts alone will flood the context.
@@ -99,7 +168,12 @@ print(df[['pmid','cim','folyoirat','ev','statusz','validacio']].to_string(index=
 ```
 
 - `befogadott_korpusz.csv` — the admitted set. **This is the corpus.** Downstream
-  tools read this one.
+  tools read this one. It **grows** across runs and across sources, so a Scholar
+  sweep does not erase the PubMed harvest and vice versa; `--fresh` restores the
+  old overwrite behaviour when a corpus really should start over.
+- the `forras` column says which database found each record (`PubMed`,
+  `Google Scholar`, or both), and `idezetek` carries the Scholar citation count
+  when there is one.
 - `visszatartott.csv` — held records with the reason. Go through these with the
   user: a `fuggoben` on "nincs letöltött teljes szöveg" is usually a paywall,
   and the answer is interlibrary loan or dropping it — not quietly citing it.
@@ -160,11 +234,21 @@ and under which licence, fetches from the OA link or Europe PMC's render
 endpoint, and verifies the `%PDF-` header before keeping the file. Non-OA papers
 stay metadata-only — that is the honest outcome. Do not add a scraping fallback.
 
+For a DOI that PMC does not hold, `scholar` asks **Unpaywall** — the documented
+API for "is there a legal free copy of this DOI, and where" — and downloads the
+publisher's or repository's own deposit, header-checked the same way. Links that
+Google Scholar prints are never followed. Scholar's own retrieval is the one
+place in this plugin that touches a page it was not invited to, it is confined
+to discovery, and the search log says so in writing.
+
 Credentials resolve `--api-key`/`--email` → `NCBI_API_KEY`/`NCBI_EMAIL` →
 `~/.config/ncbi/env` (already set up, mode 600), so normally pass nothing.
 
 ## Dependencies
 
 `collect` needs `biopython`, `requests`, optionally `pandas`, on the Anaconda
-python3 its shebang names. `validate5d.py`, `prospero.py` and `prisma` are
-stdlib-only.
+python3 its shebang names. `scholar` needs all of that plus `scholarly`
+(`pip install scholarly`); it imports `collect` as a module, so the Article
+schema, the PMC OA download path, the search-folder writer and the 5D runner are
+literally the same code, not a parallel copy. `validate5d.py`, `prospero.py` and
+`prisma` are stdlib-only.
