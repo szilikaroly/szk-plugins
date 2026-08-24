@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "memo-guard",
-  "version": "0.14.0",
+  "version": "0.14.1",
   "displayName": "Memo Guard",
   "description": "Watches the context window on every tool call. At 70% and 80% it archives the full original transcript (lossless, gzipped) and builds a compressed memo of the session in the background — using the memo-index skill's local model when available, a deterministic distiller otherwise. After /compact, /clear, or resume, a tiny RESUME index (~500 tokens) is auto-injected so work continues without re-reading the originals.",
   "author": {

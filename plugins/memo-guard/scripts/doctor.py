@@ -168,9 +168,11 @@ def check_model_server() -> list[Finding]:
             "A single-slot runner serves one request at a time, so everything\n"
             "else queues and then times out — which looks exactly like a wedged\n"
             "server from the outside. It is not one, and restarting it would\n"
-            "kill the job that is running.\n" + degraded,
-            "OLLAMA_NUM_PARALLEL=2 before the server next starts, so a short "
-            "embedding does not wait behind a long generation")]
+            "kill the job that is running.\n"
+            "Adding slots is not the fix either: Ollama sizes NUM_PARALLEL from\n"
+            "free memory, and a second slot means a second KV cache. On a\n"
+            "machine that is already paging that trades a queue for thrashing.\n" + degraded,
+            "wait — nothing to repair here")]
     if verdict == "DOWN":
         return [Finding(
             "warn", "the model server is not running",

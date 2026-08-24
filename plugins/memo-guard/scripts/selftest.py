@@ -637,23 +637,48 @@ def check_busy_vs_wedged() -> bool:
     checks["an unparseable TIME field is 0, not a crash"] = broker._cpu_seconds("??") == 0.0
 
     real_cpu = broker.runner_cpu_ms
+    real_clients = broker.other_clients
     real_sleep = broker.time.sleep
     try:
         broker.time.sleep = lambda _s: None
-        ticks = iter([1000.0, 1400.0])
-        broker.runner_cpu_ms = lambda: next(ticks)
-        ev = broker.busy_evidence(sample_s=1.0)
-        checks["a runner burning CPU reads as busy"] = ev["busy"] and ev["cpu_ms"] == 400
 
-        ticks = iter([1000.0, 1000.0])
-        broker.runner_cpu_ms = lambda: next(ticks)
+        def cpu(*vals):
+            it = iter(vals)
+            broker.runner_cpu_ms = lambda: next(it)
+
+        cpu(1000.0, 1400.0)
+        broker.other_clients = lambda: 1
+        ev = broker.busy_evidence(sample_s=1.0)
+        checks["CPU burning + another client attached reads as busy"] = (
+            ev["busy"] and ev["cpu_ms"] == 400 and ev["clients"] == 1)
+
+        # The mirror of the original bug. Loading a 5 GB model burns CPU with
+        # nobody attached, and on a paging machine that load outlasts the probe
+        # timeout — so CPU alone would call a merely-slow server "busy" and
+        # advise waiting for a queue that does not exist.
+        cpu(1000.0, 1400.0)
+        broker.other_clients = lambda: 0
+        ev = broker.busy_evidence(1.0)
+        checks["CPU burning with nobody attached is NOT busy"] = not ev["busy"]
+        checks["...and it says why: loading, not serving"] = "loading" in ev["why"]
+
+        cpu(1000.0, 1000.0)
+        broker.other_clients = lambda: 1
         checks["an idle runner does not read as busy"] = not broker.busy_evidence(1.0)["busy"]
 
+        cpu(1000.0, 1400.0)
+        broker.other_clients = lambda: None
+        ev = broker.busy_evidence(1.0)
+        checks["no lsof means unknown, not a guess"] = (
+            (not ev["known"]) and not ev["busy"] and ev["clients"] is None)
+
         broker.runner_cpu_ms = lambda: None
+        broker.other_clients = lambda: 1
         ev = broker.busy_evidence(1.0)
         checks["unmeasurable is not silently 'idle'"] = (not ev["known"]) and not ev["busy"]
     finally:
         broker.runner_cpu_ms = real_cpu
+        broker.other_clients = real_clients
         broker.time.sleep = real_sleep
 
     # The verdicts, with the server stubbed out entirely.
@@ -675,6 +700,8 @@ def check_busy_vs_wedged() -> bool:
         checks["port up + runner computing reads as BUSY"] = busy["verdict"] == "BUSY"
         checks["the BUSY fix never says restart"] = not any(
             w in busy["fix"].lower() for w in ("restart", "level 3", "kill"))
+        checks["the BUSY fix does not prescribe more slots"] = (
+            "num_parallel" not in busy["fix"].lower())
 
         broker.busy_evidence = lambda *a, **k: {"known": True, "busy": False,
                                                 "cpu_ms": 0, "why": "w"}

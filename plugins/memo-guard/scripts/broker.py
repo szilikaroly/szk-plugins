@@ -349,6 +349,47 @@ def runner_cpu_ms() -> float | None:
     return total * 1000 if seen else None
 
 
+def other_clients() -> int | None:
+    """How many OTHER processes hold an open connection to the model server.
+
+    CPU time alone cannot answer "is somebody else being served": loading a
+    model burns CPU too, and on a memory-pressured machine a 5 GB load can take
+    longer than the probe timeout, so a server that is merely paging looks
+    exactly as busy as one that is generating. The difference is whether
+    another client is actually attached.
+
+    -1 is impossible, so None means "could not measure" and callers must not
+    read it as zero.
+    """
+    if os.name == "nt":
+        return None
+    port = OLLAMA.rsplit(":", 1)[-1].strip("/")
+    if not port.isdigit():
+        return None
+    try:
+        out = subprocess.run(
+            ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:ESTABLISHED"],
+            capture_output=True, text=True, timeout=6).stdout
+    except Exception:
+        return None
+    me = os.getpid()
+    peers = set()
+    for line in out.splitlines()[1:]:
+        parts = line.split()
+        if len(parts) < 2 or not parts[1].isdigit():
+            continue
+        pid = int(parts[1])
+        # The server's own half of each connection, and our own probe, are not
+        # other clients.
+        if pid == me:
+            continue
+        name = parts[0].lower()
+        if name.startswith("ollama"):
+            continue
+        peers.add(pid)
+    return len(peers)
+
+
 def busy_evidence(sample_s: float = 1.2, floor_ms: float = 100.0) -> dict:
     """Is somebody ELSE's request being computed right now?
 
@@ -366,19 +407,43 @@ def busy_evidence(sample_s: float = 1.2, floor_ms: float = 100.0) -> dict:
     """
     a = runner_cpu_ms()
     if a is None:
-        return {"known": False, "busy": False,
+        return {"known": False, "busy": False, "clients": other_clients(),
                 "why": "no model runner process visible to ps"}
     time.sleep(sample_s)
     b = runner_cpu_ms()
     if b is None:
-        return {"known": False, "busy": False,
+        return {"known": False, "busy": False, "clients": other_clients(),
                 "why": "the runner disappeared mid-measurement"}
     delta = b - a
-    return {"known": True, "busy": delta > floor_ms, "cpu_ms": round(delta),
-            "window_s": sample_s,
-            "why": (f"the runner burned {delta:.0f} ms of CPU in {sample_s:.1f} s"
-                    if delta > floor_ms else
-                    f"the runner burned only {delta:.0f} ms of CPU in {sample_s:.1f} s")}
+    clients = other_clients()
+    working = delta > floor_ms
+
+    if clients is None:
+        # Half the evidence. Say so rather than guessing either way: a wrong
+        # "busy" hides a broken server, a wrong "wedged" recommends killing a
+        # working one.
+        return {"known": False, "busy": False, "cpu_ms": round(delta),
+                "clients": None, "window_s": sample_s,
+                "why": "cannot see who is connected (no lsof); "
+                       f"the runner burned {delta:.0f} ms of CPU in {sample_s:.1f} s"}
+    if clients and working:
+        return {"known": True, "busy": True, "cpu_ms": round(delta),
+                "clients": clients, "window_s": sample_s,
+                "why": f"{clients} other client(s) connected and the runner "
+                       f"burned {delta:.0f} ms of CPU in {sample_s:.1f} s"}
+    if working:
+        # CPU with nobody attached is the model loading, not a queue. On a
+        # memory-pressured machine that load can outlast the probe timeout,
+        # which is what makes this look like a busy server.
+        return {"known": True, "busy": False, "cpu_ms": round(delta),
+                "clients": 0, "window_s": sample_s,
+                "why": f"the runner burned {delta:.0f} ms of CPU in "
+                       f"{sample_s:.1f} s but no other client is connected — "
+                       "loading or spinning, not serving"}
+    return {"known": True, "busy": False, "cpu_ms": round(delta),
+            "clients": clients, "window_s": sample_s,
+            "why": f"the runner burned only {delta:.0f} ms of CPU in "
+                   f"{sample_s:.1f} s"}
 
 
 def port_up(timeout: float = 3.0) -> bool:
@@ -416,8 +481,8 @@ def diagnose(hw: dict | None = None) -> dict:
                     "why": "another client holds the slot and is being served — "
                            + ev["why"],
                     "loaded": loaded, "busy_evidence": ev,
-                    "fix": "wait for it, or raise OLLAMA_NUM_PARALLEL so a "
-                           "second request does not queue behind a long one"}
+                    "fix": "wait — nothing to repair; the semantic paths "
+                           "degrade to lexical until the slot frees"}
         return {"verdict": "WEDGED", "probe_ms": round(probe_ms),
                 "why": "the model server did not answer a trivial request, and "
                        "no runner is computing — " + ev["why"],
@@ -442,8 +507,8 @@ def diagnose(hw: dict | None = None) -> dict:
                     "why": "the request was queued behind another client — "
                            + ev["why"],
                     "loaded": loaded, "busy_evidence": ev,
-                    "fix": "wait for it, or raise OLLAMA_NUM_PARALLEL so a "
-                           "second request does not queue behind a long one"}
+                    "fix": "wait — nothing to repair; the semantic paths "
+                           "degrade to lexical until the slot frees"}
         return {"verdict": "SLOW", "probe_ms": round(probe_ms),
                 "why": "server answers but far slower than a warm embed should, "
                        "and nothing else is being computed — " + ev["why"],
@@ -459,11 +524,12 @@ def _spawn_server() -> None:
     only satisfies the first half, and on this machine the server is started by
     a session script rather than by launchd, so nothing else brings it back.
 
-    NUM_PARALLEL is set here for the same reason the doctor recommends it: a
-    single slot makes every short request wait behind the longest one.
+    The environment is passed through unchanged. In particular NUM_PARALLEL is
+    NOT forced: Ollama picks the slot count from available memory, and on a
+    machine that is already paging, a second slot costs another KV cache and
+    makes everything slower rather than more concurrent.
     """
     env = dict(os.environ)
-    env.setdefault("OLLAMA_NUM_PARALLEL", "2")
     app = "/Applications/Ollama.app"
     try:
         if sys.platform == "darwin" and os.path.isdir(app):

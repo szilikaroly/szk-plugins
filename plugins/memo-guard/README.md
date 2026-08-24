@@ -740,7 +740,18 @@ This was not hypothetical. A memo-index run held the only slot for twenty
 minutes while `/api/tags` answered in 3 ms; the doctor called the server wedged,
 and the fix it printed — `--recover --level 3` — would have destroyed the job.
 The doctor now reports that state as **info, not a warning**, and its advice is
-`OLLAMA_NUM_PARALLEL=2` at next start rather than a restart.
+to wait. Raising `OLLAMA_NUM_PARALLEL` is deliberately *not* recommended:
+Ollama already sizes the slot count from free memory — the `1` on this machine
+is its own auto-pick with 0.7 GB free and a 5.4 GB model — and a second slot
+means a second KV cache, which trades a queue for thrashing. memo-guard's
+circuit breaker already makes the semantic paths fail fast and fall back to
+lexical for the duration, which is the intended behaviour, not a fault.
+
+Evidence for BUSY requires **both** a runner burning CPU and another client
+actually connected (`lsof`). CPU alone is not enough: loading a model burns CPU
+too, and on a paging machine a 5 GB load outlasts the probe timeout — which
+would make a merely-slow server look busy. Where `lsof` is unavailable the
+verdict reports `known: false` rather than guessing.
 
 An unmeasurable runner (no `ps`, no runner process) reports `known: false` and
 is never read as "idle" — a missing measurement must not become evidence.
