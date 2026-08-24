@@ -17,3 +17,22 @@ metrics.jsonl
 
 # internal working doc: names unpublished clinical work
 PLAN-sql-gpu.md
+
+# --- vault: generated, safe to extend below ---
+._*
+Thumbs.db
+desktop.ini
+*.py[cod]
+.ipynb_checkpoints/
+.venv/
+venv/
+env/
+node_modules/
+.Rproj.user/
+.Rhistory
+.RData
+*.tmp
+*.temp
+*.swp
+*.bak
+.vault/
