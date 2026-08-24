@@ -304,6 +304,93 @@ def ensure_room(model: str, hw: dict | None = None) -> dict:
             "free_mb": free_vram_mb(hw), "evicted": evicted}
 
 
+RUNNER_NAMES = ("llama-server", "ollama_llama_server", "ollama runner")
+
+
+def _cpu_seconds(field: str) -> float:
+    """Parse a ps TIME field: [dd-]hh:mm:ss[.ff], or mm:ss.ff on macOS."""
+    days = 0.0
+    if "-" in field:
+        d, _, field = field.partition("-")
+        days = float(d)
+    parts = field.split(":")
+    try:
+        nums = [float(x) for x in parts]
+    except ValueError:
+        return 0.0
+    secs = 0.0
+    for n in nums:
+        secs = secs * 60 + n
+    return days * 86400 + secs
+
+
+def runner_cpu_ms() -> float | None:
+    """CPU time burned so far by the model runner processes, in milliseconds.
+
+    None means "could not measure" — no ps, no runner process, or a platform
+    where this does not apply. None is not zero: a caller must not read it as
+    "the runner is idle".
+    """
+    if os.name == "nt":
+        return None
+    try:
+        out = subprocess.run(["ps", "-Ao", "time=,command="],
+                             capture_output=True, text=True, timeout=5).stdout
+    except Exception:
+        return None
+    total, seen = 0.0, False
+    for line in out.splitlines():
+        line = line.strip()
+        if not line or not any(n in line for n in RUNNER_NAMES):
+            continue
+        field, _, _ = line.partition(" ")
+        total += _cpu_seconds(field)
+        seen = True
+    return total * 1000 if seen else None
+
+
+def busy_evidence(sample_s: float = 1.2, floor_ms: float = 100.0) -> dict:
+    """Is somebody ELSE's request being computed right now?
+
+    This is the difference between a server that cannot answer and a server
+    that will not answer *yet*, and the two need opposite responses. A single
+    -np 1 runner serves one request at a time: while a long generation holds
+    the slot, every other client — an embedding, a health probe — waits and
+    then times out, which is indistinguishable from wedged at the socket.
+
+    Measured by CPU time, not by asking the server: a runner that is generating
+    accrues hundreds of ms of CPU per wall second, an idle one accrues none.
+    Observed on this machine: a memo-index run held the only slot for 20+
+    minutes while /api/tags answered in 3 ms and /api/generate never returned.
+    Diagnosing that as wedged, and restarting, would have destroyed the job.
+    """
+    a = runner_cpu_ms()
+    if a is None:
+        return {"known": False, "busy": False,
+                "why": "no model runner process visible to ps"}
+    time.sleep(sample_s)
+    b = runner_cpu_ms()
+    if b is None:
+        return {"known": False, "busy": False,
+                "why": "the runner disappeared mid-measurement"}
+    delta = b - a
+    return {"known": True, "busy": delta > floor_ms, "cpu_ms": round(delta),
+            "window_s": sample_s,
+            "why": (f"the runner burned {delta:.0f} ms of CPU in {sample_s:.1f} s"
+                    if delta > floor_ms else
+                    f"the runner burned only {delta:.0f} ms of CPU in {sample_s:.1f} s")}
+
+
+def port_up(timeout: float = 3.0) -> bool:
+    """Does the HTTP layer answer at all? Cheap, and never blocked by the slot."""
+    try:
+        with urllib.request.urlopen(f"{OLLAMA}/api/tags", timeout=timeout) as r:
+            r.read()
+        return True
+    except Exception:
+        return False
+
+
 def diagnose(hw: dict | None = None) -> dict:
     """One structured verdict, with the evidence that produced it.
 
@@ -319,20 +406,75 @@ def diagnose(hw: dict | None = None) -> dict:
     spilled = [m for m in loaded if m["on_gpu"] < 0.95]
 
     if not alive:
+        if not port_up(3.0):
+            return {"verdict": "DOWN", "probe_ms": round(probe_ms),
+                    "why": "nothing is listening — the server is not running",
+                    "loaded": loaded, "fix": "start the model server"}
+        ev = busy_evidence()
+        if ev["busy"]:
+            return {"verdict": "BUSY", "probe_ms": round(probe_ms),
+                    "why": "another client holds the slot and is being served — "
+                           + ev["why"],
+                    "loaded": loaded, "busy_evidence": ev,
+                    "fix": "wait for it, or raise OLLAMA_NUM_PARALLEL so a "
+                           "second request does not queue behind a long one"}
         return {"verdict": "WEDGED", "probe_ms": round(probe_ms),
-                "why": "the model server did not answer a trivial request",
-                "loaded": loaded, "fix": "recover --level 2, then --level 3"}
+                "why": "the model server did not answer a trivial request, and "
+                       "no runner is computing — " + ev["why"],
+                "loaded": loaded, "busy_evidence": ev,
+                "fix": "recover --level 2, then --level 3"}
     if spilled:
+        ev = busy_evidence()
+        fix = "recover --level 1 (evict idle models)"
+        if ev["busy"]:
+            fix = ("wait — " + ev["why"] + "; evicting now kills that request. "
+                   "Then recover --level 1")
         return {"verdict": "SPILLED", "probe_ms": round(probe_ms),
                 "why": f"{len(spilled)} model(s) partly on CPU: " +
                        ", ".join(f"{m['name']} {m['on_gpu']:.0%}" for m in spilled),
-                "loaded": loaded, "fix": "recover --level 1 (evict idle models)"}
+                "loaded": loaded, "busy_evidence": ev, "fix": fix}
     if probe_ms > 2500:
+        # Slow and queued look the same from here. They are not: evicting a
+        # model does nothing about a queue, and would abort whatever is in it.
+        ev = busy_evidence()
+        if ev["busy"]:
+            return {"verdict": "BUSY", "probe_ms": round(probe_ms),
+                    "why": "the request was queued behind another client — "
+                           + ev["why"],
+                    "loaded": loaded, "busy_evidence": ev,
+                    "fix": "wait for it, or raise OLLAMA_NUM_PARALLEL so a "
+                           "second request does not queue behind a long one"}
         return {"verdict": "SLOW", "probe_ms": round(probe_ms),
-                "why": "server answers but far slower than a warm embed should",
-                "loaded": loaded, "fix": "recover --level 1"}
+                "why": "server answers but far slower than a warm embed should, "
+                       "and nothing else is being computed — " + ev["why"],
+                "loaded": loaded, "busy_evidence": ev, "fix": "recover --level 1"}
     return {"verdict": "OK", "probe_ms": round(probe_ms), "why": "",
             "loaded": loaded, "fix": ""}
+
+
+def _spawn_server() -> None:
+    """Bring the server back up after a level-3 kill.
+
+    Restarting means the server is running again afterwards. `pkill` on its own
+    only satisfies the first half, and on this machine the server is started by
+    a session script rather than by launchd, so nothing else brings it back.
+
+    NUM_PARALLEL is set here for the same reason the doctor recommends it: a
+    single slot makes every short request wait behind the longest one.
+    """
+    env = dict(os.environ)
+    env.setdefault("OLLAMA_NUM_PARALLEL", "2")
+    app = "/Applications/Ollama.app"
+    try:
+        if sys.platform == "darwin" and os.path.isdir(app):
+            subprocess.Popen(["open", "-a", "Ollama"], env=env,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            subprocess.Popen(["ollama", "serve"], env=env,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             start_new_session=True)
+    except Exception as exc:                                   # pragma: no cover
+        print(f"could not start the model server: {exc}", file=sys.stderr)
 
 
 def recover(level: int = 1, hw: dict | None = None) -> dict:
@@ -357,10 +499,22 @@ def recover(level: int = 1, hw: dict | None = None) -> dict:
                 break
             time.sleep(1.0)
     if level >= 3:
+        ev = busy_evidence()
+        if ev["busy"]:
+            # Level 3 is explicit, so it is not refused — but the one thing it
+            # must never do is take a working server down silently.
+            done.append(f"WARNING: a request was in flight ({ev['why']}); "
+                        "killing the server aborted it")
         if os.name == "nt":
             _run(["taskkill", "/IM", "ollama.exe", "/F"], timeout=10)
+            _spawn_server()
         elif sys.platform == "darwin":
+            # pkill alone leaves nothing running: the previous version killed
+            # the server and then waited 20 s for a health check that could
+            # never pass, and reported the restart as done.
             _run(["pkill", "-f", "ollama serve"], timeout=5)
+            time.sleep(1.5)
+            _spawn_server()
         else:
             _run(["systemctl", "--user", "restart", "ollama"], timeout=10)
         done.append("requested model server restart")

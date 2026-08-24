@@ -188,8 +188,9 @@ def main() -> int:
     mr_ok = check_map_reduce(home)
     dr_ok = check_doctor(home)
     dg_ok = check_degradation(home)
+    bw_ok = check_busy_vs_wedged()
     return 0 if (ok and hit and ap_ok and cv_ok and sb_ok and rc_ok and ev_ok
-                 and mr_ok and dr_ok and dg_ok) else 1
+                 and mr_ok and dr_ok and dg_ok and bw_ok) else 1
 
 
 def check_doctor(home: Path) -> bool:
@@ -605,6 +606,142 @@ def check_recall(home: Path) -> bool:
         f"cold {cold_ms:.0f} ms incl. interpreter start)": hit_ms < 400,
         "lexical-only recall makes no model call": no_net,
     }
+    for name, val in checks.items():
+        print(f"   {'ok ' if val else 'FAIL'} {name}")
+    return all(checks.values())
+
+
+def check_busy_vs_wedged() -> bool:
+    """A server serving somebody else must never be diagnosed as broken.
+
+    The two states are identical at the socket: a request goes out, nothing
+    comes back. The prescriptions are opposite — wedged wants a restart, busy
+    wants patience — so getting this wrong is not a cosmetic error. It happened
+    here: a memo-index run held the only slot (`-np 1`) for twenty minutes
+    while /api/tags answered in 3 ms, the doctor called it wedged, and the fix
+    it printed would have killed the job.
+    """
+    print("\n[busy is not wedged]")
+    import importlib
+    sys.path.insert(0, str(Path(__file__).parent))
+    import broker
+    importlib.reload(broker)
+    import doctor
+    importlib.reload(doctor)
+
+    checks = {}
+
+    checks["ps TIME mm:ss.ff parses"] = abs(broker._cpu_seconds("12:34.56") - 754.56) < 0.01
+    checks["ps TIME hh:mm:ss parses"] = broker._cpu_seconds("1:02:03") == 3723
+    checks["ps TIME dd-hh:mm:ss parses"] = broker._cpu_seconds("2-03:04:05") == 183845
+    checks["an unparseable TIME field is 0, not a crash"] = broker._cpu_seconds("??") == 0.0
+
+    real_cpu = broker.runner_cpu_ms
+    real_sleep = broker.time.sleep
+    try:
+        broker.time.sleep = lambda _s: None
+        ticks = iter([1000.0, 1400.0])
+        broker.runner_cpu_ms = lambda: next(ticks)
+        ev = broker.busy_evidence(sample_s=1.0)
+        checks["a runner burning CPU reads as busy"] = ev["busy"] and ev["cpu_ms"] == 400
+
+        ticks = iter([1000.0, 1000.0])
+        broker.runner_cpu_ms = lambda: next(ticks)
+        checks["an idle runner does not read as busy"] = not broker.busy_evidence(1.0)["busy"]
+
+        broker.runner_cpu_ms = lambda: None
+        ev = broker.busy_evidence(1.0)
+        checks["unmeasurable is not silently 'idle'"] = (not ev["known"]) and not ev["busy"]
+    finally:
+        broker.runner_cpu_ms = real_cpu
+        broker.time.sleep = real_sleep
+
+    # The verdicts, with the server stubbed out entirely.
+    real = (broker.healthy, broker.port_up, broker.busy_evidence,
+            broker.loaded_models, broker.probe_hardware)
+    try:
+        broker.healthy = lambda *a, **k: False
+        broker.loaded_models = lambda: [{"name": "m", "size_mb": 1, "on_gpu": 1.0}]
+        broker.probe_hardware = lambda: {}
+
+        broker.port_up = lambda *a, **k: False
+        checks["nothing listening reads as DOWN, not wedged"] = (
+            broker.diagnose()["verdict"] == "DOWN")
+
+        broker.port_up = lambda *a, **k: True
+        broker.busy_evidence = lambda *a, **k: {"known": True, "busy": True,
+                                                "cpu_ms": 400, "why": "w"}
+        busy = broker.diagnose()
+        checks["port up + runner computing reads as BUSY"] = busy["verdict"] == "BUSY"
+        checks["the BUSY fix never says restart"] = not any(
+            w in busy["fix"].lower() for w in ("restart", "level 3", "kill"))
+
+        broker.busy_evidence = lambda *a, **k: {"known": True, "busy": False,
+                                                "cpu_ms": 0, "why": "w"}
+        wedged = broker.diagnose()
+        checks["port up + nothing computing still reads as WEDGED"] = (
+            wedged["verdict"] == "WEDGED")
+        checks["the WEDGED fix does say level 3"] = "level 3" in wedged["fix"]
+    finally:
+        (broker.healthy, broker.port_up, broker.busy_evidence,
+         broker.loaded_models, broker.probe_hardware) = real
+
+    # The doctor has to carry the distinction through, not re-derive it.
+    real_d = (broker.healthy, broker.diagnose)
+    try:
+        broker.healthy = lambda *a, **k: False
+        broker.diagnose = lambda *a, **k: {
+            "verdict": "BUSY", "why": "another client holds the slot",
+            "fix": "wait", "loaded": []}
+        f = doctor.check_model_server()
+        checks["the doctor reports BUSY as info, not a warning"] = (
+            len(f) == 1 and f[0].level == "info")
+        checks["the doctor's BUSY text never advises a restart"] = not any(
+            w in (f[0].detail + f[0].fix).lower()
+            for w in ("--recover --level 3", "restarts the model server"))
+
+        broker.diagnose = lambda *a, **k: {
+            "verdict": "WEDGED", "why": "no runner is computing",
+            "fix": "recover --level 2, then --level 3", "loaded": []}
+        f = doctor.check_model_server()
+        checks["the doctor still warns, and offers level 3, when truly wedged"] = (
+            f[0].level == "warn" and "level 3" in f[0].fix)
+    finally:
+        broker.healthy, broker.diagnose = real_d
+
+    # Level 3 says "restart". Killing and not starting is not a restart.
+    real_r = (broker._run, broker._spawn_server, broker.busy_evidence,
+              broker.loaded_models, broker.healthy, broker.diagnose,
+              broker.probe_hardware, broker.time.sleep)
+    try:
+        killed, spawned = [], []
+        broker._run = lambda cmd, **k: killed.append(cmd)
+        broker._spawn_server = lambda: spawned.append(True)
+        broker.loaded_models = lambda: []
+        broker.healthy = lambda *a, **k: True
+        broker.diagnose = lambda *a, **k: {"verdict": "OK"}
+        broker.probe_hardware = lambda: {}
+        broker.time.sleep = lambda _s: None
+
+        broker.busy_evidence = lambda *a, **k: {"known": True, "busy": False,
+                                                "cpu_ms": 0, "why": "idle"}
+        r = broker.recover(3)
+        checks["level 3 kills the server"] = bool(killed)
+        checks["level 3 also starts one again"] = spawned == [True]
+        checks["an idle level 3 does not cry wolf"] = not any(
+            "WARNING" in a for a in r["actions"])
+
+        killed, spawned = [], []
+        broker.busy_evidence = lambda *a, **k: {"known": True, "busy": True,
+                                                "cpu_ms": 400, "why": "w"}
+        r = broker.recover(3)
+        checks["level 3 says out loud that it aborted a live request"] = any(
+            "WARNING" in a for a in r["actions"])
+    finally:
+        (broker._run, broker._spawn_server, broker.busy_evidence,
+         broker.loaded_models, broker.healthy, broker.diagnose,
+         broker.probe_hardware, broker.time.sleep) = real_r
+
     for name, val in checks.items():
         print(f"   {'ok ' if val else 'FAIL'} {name}")
     return all(checks.values())

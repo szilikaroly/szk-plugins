@@ -699,9 +699,9 @@ broker.py --break-lock   # refuses unless the lock is genuinely stale
 
 Prevention runs inside `slot()`, once the slot is held so nothing races it:
 
-1. `diagnose()` — one verdict with its evidence. `WEDGED` and `SLOW` look
-   identical from outside (nothing comes back) but need opposite responses, so
-   they are separated by measurement.
+1. `diagnose()` — one verdict with its evidence. `BUSY`, `WEDGED` and `SLOW`
+   look identical from outside (nothing comes back) but need opposite
+   responses, so they are separated by measurement.
 2. `recover(1)` if degraded — eviction only, so a hook may run it unattended.
 3. `ensure_room(model)` — evict what is in the way **before** the load, instead
    of discovering afterwards that the model went half onto the CPU.
@@ -711,7 +711,7 @@ died mid-model, which is the most common way to inherit a degraded server. The
 next run breaks the lock, diagnoses, and repairs rather than inheriting it.
 
 ```bash
-broker.py --diagnose            # OK | SPILLED | SLOW | WEDGED, with evidence
+broker.py --diagnose            # OK | BUSY | SPILLED | SLOW | WEDGED | DOWN
 broker.py --fit gemma4:12b      # would it fit, and what would be evicted
 broker.py --recover --level 1   # evict spilled models      (safe, automatic)
 broker.py --recover --level 2   # evict everything, re-probe (safe, automatic)
@@ -719,7 +719,31 @@ broker.py --recover --level 3   # restart the server        (never automatic)
 ```
 
 Level 3 is deliberately excluded from automatic recovery: it kills a process the
-user may be using for something else.
+user may be using for something else. It now also *starts one again* — killing
+without starting is not a restart, and on a machine where the server is launched
+by a session script rather than by launchd, nothing else brings it back. If a
+request was in flight when level 3 ran, the result says so instead of leaving
+the aborted job to be discovered later.
+
+### Busy is not wedged
+
+A server with one slot (`OLLAMA_NUM_PARALLEL=1`) serves one request at a time.
+While a long generation holds that slot, every other client waits and then times
+out — at the socket this is **identical** to a hung server, and the prescriptions
+are opposite: wedged wants a restart, busy wants patience.
+
+They are told apart by CPU time, not by asking the server: a runner that is
+generating burns hundreds of milliseconds of CPU per wall second, an idle one
+burns none. `busy_evidence()` samples `ps` twice and reports the delta.
+
+This was not hypothetical. A memo-index run held the only slot for twenty
+minutes while `/api/tags` answered in 3 ms; the doctor called the server wedged,
+and the fix it printed — `--recover --level 3` — would have destroyed the job.
+The doctor now reports that state as **info, not a warning**, and its advice is
+`OLLAMA_NUM_PARALLEL=2` at next start rather than a restart.
+
+An unmeasurable runner (no `ps`, no runner process) reports `known: false` and
+is never read as "idle" — a missing measurement must not become evidence.
 
 Verified: an unreachable server is called `WEDGED` in 16 ms; `--fit gemma4:12b`
 with 3,305 MB free evicted `llama3.1:8b` and reported 11,936 MB after; a lock

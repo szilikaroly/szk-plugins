@@ -148,43 +148,48 @@ def check_model_server() -> list[Finding]:
         return [Finding("info", "model server answers embeddings", "")]
     try:
         d = broker.diagnose()
-        verdict, why = d.get("verdict", "?"), d.get("why", "")
     except Exception:
-        verdict, why = "UNREACHABLE", "no answer at all"
-    # Distinguish a busy server from a wedged one. Both report SLOW, and the
-    # fixes are not the same: evicting models helps the first and does nothing
-    # for the second. Measured here — /api/tags in 8 ms while /api/generate and
-    # both embedding models never returned at all, through a 60 s timeout.
-    wedged = False
-    try:
-        import urllib.request
-        req = urllib.request.Request(
-            f"{broker.OLLAMA}/api/generate",
-            data=b'{"model":"llama3.2:3b","prompt":"hi","stream":false}',
-            headers={"Content-Type": "application/json"})
-        urllib.request.urlopen(req, timeout=8).read()
-    except Exception:
-        wedged = True
+        d = {"verdict": "UNREACHABLE", "why": "no answer at all",
+             "fix": "broker.py --diagnose"}
+    verdict, why, fix = d.get("verdict", "?"), d.get("why", ""), d.get("fix", "")
 
-    common = (f"{why}\n"
-              "Every semantic path degrades to lexical while this holds: claim\n"
-              "matching misses paraphrases, recall loses the queries that share\n"
-              "no words with their answer, and recall_eval --calibrate refuses\n"
-              "to run. Nothing breaks; it just quietly gets worse.")
-    if wedged:
+    degraded = ("Every semantic path degrades to lexical while this holds: claim\n"
+                "matching misses paraphrases, recall loses the queries that share\n"
+                "no words with their answer, and recall_eval --calibrate refuses\n"
+                "to run. Nothing breaks; it just quietly gets worse.")
+
+    if verdict == "BUSY":
+        # Not a fault. Saying "wedged" here would be worse than saying nothing:
+        # the fix for wedged is a restart, and a restart of a busy server
+        # destroys whatever that other client is halfway through.
+        return [Finding(
+            "info", "the model server is busy, not broken",
+            f"{why}\n"
+            "A single-slot runner serves one request at a time, so everything\n"
+            "else queues and then times out — which looks exactly like a wedged\n"
+            "server from the outside. It is not one, and restarting it would\n"
+            "kill the job that is running.\n" + degraded,
+            "OLLAMA_NUM_PARALLEL=2 before the server next starts, so a short "
+            "embedding does not wait behind a long generation")]
+    if verdict == "DOWN":
+        return [Finding(
+            "warn", "the model server is not running",
+            f"{why}\n" + degraded,
+            "start Ollama, then re-run the doctor")]
+    if verdict == "WEDGED":
         return [Finding(
             "warn", "the model server accepts connections but never finishes one",
-            common + "\n"
-            "This one is not a loaded-model problem: /api/tags answers in\n"
-            "milliseconds while inference never returns, so evicting models\n"
-            "(levels 1 and 2) will not help. Only a restart will, and that\n"
-            "kills a process you may be using for something else — so it is\n"
-            "left to you rather than done automatically.",
+            f"{why}\n" + degraded + "\n"
+            "This one is not a loaded-model problem and not a queue: /api/tags\n"
+            "answers in milliseconds, no runner is burning CPU, and inference\n"
+            "still never returns. Evicting models (levels 1 and 2) will not\n"
+            "help. Only a restart will, and that kills a process you may be\n"
+            "using for something else — so it is left to you.",
             "broker.py --recover --level 3   (restarts the model server)")]
     return [Finding(
         "warn", f"embeddings are not working ({verdict})",
-        common,
-        "broker.py --diagnose, then --recover --level 1 or 2")]
+        f"{why}\n" + degraded,
+        fix or "broker.py --diagnose, then --recover --level 1 or 2")]
 
 
 def check_memory_hygiene() -> list[Finding]:
