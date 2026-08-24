@@ -11,64 +11,151 @@
       "name": "memo-guard",
       "source": "./plugins/memo-guard",
       "description": "Monitors the context window, archives the original losslessly at 70%/80%, compresses it into a queryable memo, and re-injects a ~500-token resume after /compact or /clear.",
-      "author": { "name": "Dr. Szili Károly" },
+      "author": {
+        "name": "Dr. Szili Károly"
+      },
       "license": "MIT",
       "category": "productivity",
-      "keywords": ["context-window", "tokens", "memo", "compaction", "archive"]
+      "keywords": [
+        "context-window",
+        "tokens",
+        "memo",
+        "compaction",
+        "archive"
+      ]
     },
     {
       "name": "science-monitor",
       "source": "./plugins/science-monitor",
       "description": "Tracks finished manuscripts by submission — journal, cover letter state, whether the package was actually sent, the decision that came back, and every reviewer point still unanswered. /science-monitor:context pulls a manuscript's working context into the session in one step; /science-monitor:review turns an incoming reviewer letter into tracked, answerable points.",
-      "author": { "name": "Dr. Szili Károly" },
+      "author": {
+        "name": "Dr. Szili Károly"
+      },
       "license": "MIT",
       "category": "productivity",
-      "keywords": ["manuscript", "submission", "peer-review", "journal", "research"]
+      "keywords": [
+        "manuscript",
+        "submission",
+        "peer-review",
+        "journal",
+        "research"
+      ]
     },
     {
       "name": "figure-forge",
       "source": "./plugins/figure-forge",
       "description": "Nature-style scientific figures at 600 dpi with editable-text labels and a self-correcting quality loop that guarantees no label sits outside its box or covers a curve, marker or arrow. Builds box plots, forest plots, flowcharts, diagrams and multi-panel composites; exports editable SVG plus 600 dpi PNG/TIFF, PDF and PPTX; writes a QC audit and a visual proof overlay for every figure.",
-      "author": { "name": "Dr. Szili Károly" },
+      "author": {
+        "name": "Dr. Szili Károly"
+      },
       "license": "MIT",
       "category": "productivity",
-      "keywords": ["figures", "nature-style", "forest-plot", "flowchart", "svg", "tiff", "600dpi", "publication"]
+      "keywords": [
+        "figures",
+        "nature-style",
+        "forest-plot",
+        "flowchart",
+        "svg",
+        "tiff",
+        "600dpi",
+        "publication"
+      ]
     },
     {
       "name": "presubmit",
       "source": "./plugins/presubmit",
       "description": "Catches the common manuscript submission mistakes before a journal does — missing sections, incomplete author info, over-long abstracts, reference problems (duplicates by DOI or text, missing years, in-text citations with no matching reference, uncited references), and missing ethics/disclosure statements. Reads .docx/.pdf/.tex/.txt, applies a journal profile (Cureus built in), and prints a severity-ranked readiness report with fix hints. Offline and deterministic — no false positives on medical terms.",
-      "author": { "name": "Dr. Szili Károly" },
+      "author": {
+        "name": "Dr. Szili Károly"
+      },
       "license": "MIT",
       "category": "productivity",
-      "keywords": ["manuscript", "submission", "references", "ethics", "cureus", "checklist"]
+      "keywords": [
+        "manuscript",
+        "submission",
+        "references",
+        "ethics",
+        "cureus",
+        "checklist"
+      ]
     },
     {
       "name": "composer",
       "source": "./plugins/composer",
       "description": "Builds a citable literature corpus from PubMed and, as a supplementary source, Google Scholar. Downloads the Open Access full texts through the legitimate PMC OA / Europe PMC / Unpaywall routes and admits a paper only when it has a readable full text AND survives 5-dimension bibliographic validation — DOI, first author, author list, journal, volume — cross-checked against Crossref, PubMed and Europe PMC with a 2-of-3 majority rule. Google Scholar contributes discovery only: every hit is resolved to a DOI and a PMID, and its non-reproducibility and estimated hit count are written into the search log. Every search gets its own directory with the exact query, the date, the hit count and the gate result, logged to PRISMA 2020 / PRISMA-S and tied to a PROSPERO protocol record.",
-      "author": { "name": "Dr. Szili Károly" },
+      "author": {
+        "name": "Dr. Szili Károly"
+      },
       "license": "MIT",
       "category": "productivity",
-      "keywords": ["pubmed", "google-scholar", "literature", "prisma", "prospero", "validation", "crossref", "unpaywall", "systematic-review"]
+      "keywords": [
+        "pubmed",
+        "google-scholar",
+        "literature",
+        "prisma",
+        "prospero",
+        "validation",
+        "crossref",
+        "unpaywall",
+        "systematic-review"
+      ]
     },
     {
       "name": "academic-editor",
       "source": "./plugins/academic-editor",
       "description": "Line-edits scientific manuscripts into native academic English at professional editing-service standard and delivers a .docx with real Word tracked changes plus anchored editor queries, alongside a clean accepted copy. Rules derived from a real AJE Senior Editor's Premium edit — 61 changed paragraphs, 979 insertions, 896 deletions, 11 queries — each citing the operation that produced it. Measures the target journal's current house style from that journal's own recent Open Access papers first, so the edit matches its practice rather than a generic idea of good English. Never edits science.",
-      "author": { "name": "Dr. Szili Károly" },
+      "author": {
+        "name": "Dr. Szili Károly"
+      },
       "license": "MIT",
       "category": "productivity",
-      "keywords": ["manuscript", "copyediting", "academic-english", "tracked-changes", "docx", "house-style"]
+      "keywords": [
+        "manuscript",
+        "copyediting",
+        "academic-english",
+        "tracked-changes",
+        "docx",
+        "house-style"
+      ]
     },
     {
       "name": "validator",
       "source": "./plugins/validator",
       "description": "Critical appraisal with the right instrument, every slot answered, and the domain verdicts computed from the answers instead of asserted. Routes a design to its tool — RoB 2, ROBINS-I, ROBINS-E, QUADAS-2, QUIPS, PROBAST+AI, TRIPOD+AI, AMSTAR 2, ROBIS, Newcastle-Ottawa, JBI, GRADE — prints the full slot list, verifies that none was left blank, and applies each tool's published rating algorithm where one exists. Item lists are parsed from the reference files so the script and the reference cannot drift apart.",
-      "author": { "name": "Dr. Szili Károly" },
+      "author": {
+        "name": "Dr. Szili Károly"
+      },
       "license": "MIT",
       "category": "productivity",
-      "keywords": ["risk-of-bias", "critical-appraisal", "rob2", "robins", "amstar2", "grade", "quadas2", "probast"]
+      "keywords": [
+        "risk-of-bias",
+        "critical-appraisal",
+        "rob2",
+        "robins",
+        "amstar2",
+        "grade",
+        "quadas2",
+        "probast"
+      ]
+    },
+    {
+      "name": "vault",
+      "source": "./plugins/vault",
+      "description": "Keeps every project under continuous version control and pushes it to a private GitHub repository, without ever asking. Discovers each project under a configured root, gives it a git repo and a sane .gitignore, creates the private remote on first run, and from then on commits and pushes in the background on every session stop - debounced, detached, and incapable of blocking the session. Files GitHub will not accept are excluded and recorded by name, size and checksum, so nothing disappears silently. Cross-platform: identical behaviour on macOS and Windows.",
+      "author": {
+        "name": "Dr. Szili Karoly"
+      },
+      "license": "MIT",
+      "category": "productivity",
+      "keywords": [
+        "git",
+        "backup",
+        "autosave",
+        "github",
+        "private",
+        "version-control",
+        "cross-platform"
+      ]
     }
   ]
 }
