@@ -1,0 +1,832 @@
+#!/Users/szili/anaconda3/bin/python3
+# -*- coding: utf-8 -*-
+"""Kiegészítő forrás-ágak a The Collectorhoz.
+
+Négy forrás, egyik sem igényel API kulcsot:
+
+    openalex        Folyóiratcikkek. A legnagyobb lefedettségű nyílt index;
+                    a PubMed által nem indexelt szakterületeket (egészség-
+                    gazdaságtan, informatika, mérnöki) is lefedi.
+    semanticscholar Folyóiratcikkek + a hivatkozási háló. Kiegészítő.
+    arxiv           Preprintek. KÜLÖN SÁVBAN, saját befogadási kapuval.
+    clinicaltrials  Vizsgálati regiszter. Nem közlemény: külön kimenetbe megy.
+
+Miért külön script és miért nem a `collect`-ben:
+a PubMed-keresés a rendszer gerince, ezek pedig kiegészítő források. A PRISMA-S
+forrásonként külön követeli meg a keresés dokumentálását, és egy kiegészítő
+forrás nem válthatja ki az adatbázis-keresést. Ugyanaz a viszony, mint a
+`scholar` ágnál: minden keresésnél külön rá kell kérdezni, hogy fusson-e.
+
+Használat:
+    lookup --query "endometriosis AND cost" --sources openalex,semanticscholar
+    lookup --query "GLP-1 pregnancy" --sources arxiv --preprints
+    lookup --query "endometriosis" --sources clinicaltrials --retmax 100
+    lookup --query "..." --after ~/PubMed/kereses_20260830_endometriosis
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import importlib.util
+import json
+import re
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+import xml.etree.ElementTree as ET
+from dataclasses import asdict
+from datetime import datetime, timezone
+from importlib.machinery import SourceFileLoader
+from pathlib import Path
+from typing import Any, Sequence
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+
+try:
+    import validate5d
+except ImportError as exc:  # pragma: no cover
+    sys.exit(f"Hiányzó testvér-modul: validate5d.py ({exc})")
+
+try:
+    import requests
+except ImportError:  # pragma: no cover
+    sys.exit("Hiányzó függőség: requests. Telepítés: pip install requests")
+
+
+OPENALEX = "https://api.openalex.org/works"
+S2 = "https://api.semanticscholar.org/graph/v1/paper/search"
+ARXIV = "https://export.arxiv.org/api/query"
+CTGOV = "https://clinicaltrials.gov/api/v2/studies"
+
+UA = "composer-lookup/1.0 (https://orcid.org/0000-0001-9803-9103; mailto:{mail})"
+
+ALL_SOURCES = ("openalex", "semanticscholar", "arxiv", "clinicaltrials")
+
+#: A kiegészítő forrás állapota a szülő keresés naplójában.
+LOOKUP_STATE = {
+    "ask": "felajánlva, még nem eldöntve",
+    "yes": "lefuttatva (külön mappában, kiegészítő forrásként)",
+    "no": "megfontolva, elvetve",
+}
+
+ATOM = "{http://www.w3.org/2005/Atom}"
+ARX = "{http://arxiv.org/schemas/atom}"
+
+
+# --------------------------------------------------------------------------
+# Testvér-scriptek
+# --------------------------------------------------------------------------
+
+
+def _load_sibling(name: str, modname: str):
+    """A `collect` és a `scholar` CLI, nem .py — kézzel kell betölteni.
+
+    Ugyanaz az indok, mint a scholar oldalán: az Article séma, a teljesszöveg-
+    útvonal, a keresési mappa írója és az 5D futtató mind ott van, és egy
+    másolat elkerülhetetlenül elcsúszna tőlük.
+    """
+    path = HERE / name
+    if not path.exists():
+        sys.exit(f"Hiányzik a testvér-script: {path}")
+    loader = SourceFileLoader(modname, str(path))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[loader.name] = module
+    loader.exec_module(module)
+    return module
+
+
+# --------------------------------------------------------------------------
+# HTTP
+# --------------------------------------------------------------------------
+
+
+def fetch_text(url: str, email: str, timeout: int = 30) -> str:
+    """Nyers szöveg. A Fetcher csak JSON-t ad vissza, az arXiv Atomot küld."""
+    req = urllib.request.Request(url, headers={
+        "User-Agent": UA.format(mail=email or "anonymous@example.org"),
+        "Accept": "application/atom+xml, application/xml;q=0.9, */*;q=0.8",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.read().decode("utf-8", "replace")
+    except Exception as exc:
+        print(f"  ! lekérés sikertelen: {str(exc)[:120]}", file=sys.stderr)
+        return ""
+
+
+def get_json_retry(fetcher: validate5d.Fetcher, url: str, tries: int = 4,
+                  wait: float = 2.0) -> dict | None:
+    """`fetcher.get_json`, de egy átmeneti HTTP-hiba nem lesz végleges válasz.
+
+    A Fetcher a hálózati kivételt szándékosan nem cache-eli, a HTTPError-t
+    viszont igen — az 5D validációnál ez helyes (egy 404-es DOI holnap sem lesz
+    jó), itt viszont nem: a Semantic Scholar kulcs nélkül rutinszerűen 429-et
+    ad, és az bekerülve a cache-be örökre kiütné a forrást. Ezért a visszatartó
+    státuszokat kivesszük a cache-ből, és növekvő várakozással újrapróbáljuk.
+    """
+    transient = ("HTTP 429", "HTTP 500", "HTTP 502", "HTTP 503", "HTTP 504")
+    delay = wait
+    for attempt in range(tries):
+        data = fetcher.get_json(url)
+        if not data:
+            return data
+        err = str(data.get("__error__", ""))
+        if not err:
+            return data
+        if not err.startswith(transient):
+            return data
+        fetcher.store.pop(url, None)
+        if attempt < tries - 1:
+            print(f"  . {err}, újrapróbálom {delay:.0f} s múlva "
+                  f"({attempt + 1}/{tries - 1})", file=sys.stderr)
+            time.sleep(delay)
+            delay *= 2
+    return data
+
+
+def _clean(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "")).strip()
+
+
+# --------------------------------------------------------------------------
+# OpenAlex
+# --------------------------------------------------------------------------
+
+
+def search_openalex(query: str, retmax: int, year_from: int | None, year_to: int | None,
+                    fetcher: validate5d.Fetcher, email: str) -> tuple[list[dict], int]:
+    """OpenAlex `search` — cím, absztrakt és teljes szöveg fölött keres."""
+    filters = ["type:article"]
+    if year_from:
+        filters.append(f"from_publication_date:{year_from}-01-01")
+    if year_to:
+        filters.append(f"to_publication_date:{year_to}-12-31")
+
+    out: list[dict] = []
+    total = 0
+    page = 1
+    while len(out) < retmax:
+        params = {
+            "search": query,
+            "per-page": str(min(200, retmax - len(out))),
+            "page": str(page),
+            "filter": ",".join(filters),
+        }
+        if email:
+            params["mailto"] = email
+        data = get_json_retry(fetcher, f"{OPENALEX}?{urllib.parse.urlencode(params)}")
+        if not data or "__error__" in data:
+            if data and "__error__" in data:
+                print(f"  ! OpenAlex: {data['__error__']}", file=sys.stderr)
+            break
+        total = int(((data.get("meta") or {}).get("count") or 0))
+        results = data.get("results") or []
+        if not results:
+            break
+        out.extend(results)
+        page += 1
+        if page > 25:  # 25 * 200 = 5000; a hard stop, nem csendes csonkolás
+            print("  ! OpenAlex: 25 oldalnál megállítva", file=sys.stderr)
+            break
+    return out[:retmax], total
+
+
+def article_from_openalex(C, rec: dict, topic: str) -> Any:
+    canon = validate5d.from_openalex(rec)
+    ids = rec.get("ids") or {}
+    pmid = str(ids.get("pmid", "") or "").rsplit("/", 1)[-1]
+    pmcid = str(ids.get("pmcid", "") or "").rsplit("/", 1)[-1]
+    biblio = rec.get("biblio") or {}
+    pages = "-".join([p for p in (biblio.get("first_page"), biblio.get("last_page")) if p])
+    return C.Article(
+        tema=topic,
+        pmid=pmid,
+        cim=_clean(canon["cim"]),
+        folyoirat=(canon["folyoirat"] or [""])[0],
+        publikacio_datuma=str(rec.get("publication_date", "") or ""),
+        doi=canon["doi"],
+        pmc_id=C.normalize_pmcid(pmcid) if pmcid else "",
+        pubmed_url=f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/" if pmid else "",
+        absztrakt=_clean(_openalex_abstract(rec))[:5000],
+        elso_szerzo=canon["elso_szerzo"],
+        szerzok="; ".join(canon["szerzok"]),
+        kotet=canon["kotet"],
+        szam=str(biblio.get("issue", "") or ""),
+        oldalak=pages,
+        issn="; ".join(canon["issn"][:2]),
+        ev=canon["ev"],
+        forras="OpenAlex",
+        forras_url=str(rec.get("id", "") or ""),
+        idezetek=str(rec.get("cited_by_count", "") or ""),
+    )
+
+
+def _openalex_abstract(rec: dict) -> str:
+    """Az OpenAlex invertált indexben tárolja az absztraktot."""
+    inv = rec.get("abstract_inverted_index")
+    if not isinstance(inv, dict):
+        return ""
+    positions: list[tuple[int, str]] = []
+    for word, spots in inv.items():
+        for spot in spots or []:
+            positions.append((int(spot), word))
+    return " ".join(word for _, word in sorted(positions))
+
+
+# --------------------------------------------------------------------------
+# Semantic Scholar
+# --------------------------------------------------------------------------
+
+
+S2_FIELDS = ("title,abstract,year,venue,externalIds,authors,citationCount,"
+             "journal,publicationTypes,publicationDate,openAccessPdf")
+
+
+def search_semanticscholar(query: str, retmax: int, year_from: int | None,
+                           year_to: int | None, fetcher: validate5d.Fetcher
+                           ) -> tuple[list[dict], int]:
+    out: list[dict] = []
+    total = 0
+    offset = 0
+    while len(out) < retmax:
+        params = {"query": query, "limit": str(min(100, retmax - len(out))),
+                  "offset": str(offset), "fields": S2_FIELDS}
+        if year_from or year_to:
+            params["year"] = f"{year_from or ''}-{year_to or ''}"
+        data = get_json_retry(fetcher, f"{S2}?{urllib.parse.urlencode(params)}")
+        if not data or "__error__" in data:
+            if data and "__error__" in data:
+                print(f"  ! Semantic Scholar: {data['__error__']} "
+                      "(kulcs nélkül szigorú rate limit)", file=sys.stderr)
+            break
+        total = int(data.get("total") or 0)
+        batch = data.get("data") or []
+        if not batch:
+            break
+        out.extend(batch)
+        offset += len(batch)
+        if offset >= 1000:  # az API kulcs nélkül itt elvágja
+            break
+    return out[:retmax], total
+
+
+def article_from_s2(C, rec: dict, topic: str) -> Any:
+    ext = rec.get("externalIds") or {}
+    journal = rec.get("journal") or {}
+    authors = [_surname(a.get("name", "")) for a in (rec.get("authors") or [])]
+    authors = [a for a in authors if a]
+    pmid = str(ext.get("PubMed", "") or "")
+    pmcid = str(ext.get("PubMedCentral", "") or "")
+    return C.Article(
+        tema=topic,
+        pmid=pmid,
+        cim=_clean(rec.get("title", "")),
+        folyoirat=_clean(journal.get("name") or rec.get("venue") or ""),
+        publikacio_datuma=str(rec.get("publicationDate", "") or ""),
+        doi=validate5d.norm_doi(str(ext.get("DOI", "") or "")),
+        pmc_id=C.normalize_pmcid(pmcid) if pmcid else "",
+        pubmed_url=f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/" if pmid else "",
+        absztrakt=_clean(rec.get("abstract") or "")[:5000],
+        publikacio_tipusok="; ".join(rec.get("publicationTypes") or []),
+        elso_szerzo=authors[0] if authors else "",
+        szerzok="; ".join(authors),
+        kotet=str(journal.get("volume", "") or "").strip(),
+        oldalak=str(journal.get("pages", "") or "").strip(),
+        ev=str(rec.get("year", "") or ""),
+        forras="Semantic Scholar",
+        forras_url=f"https://www.semanticscholar.org/paper/{rec.get('paperId', '')}",
+        idezetek=str(rec.get("citationCount", "") or ""),
+    )
+
+
+def _surname(name: str) -> str:
+    name = (name or "").strip()
+    if not name:
+        return ""
+    if "," in name:
+        return name.split(",", 1)[0].strip()
+    return name.split()[-1]
+
+
+# --------------------------------------------------------------------------
+# arXiv — preprint sáv
+# --------------------------------------------------------------------------
+
+
+def _arxiv_query(query: str) -> str:
+    """Egy szóközös kifejezés az arXiv-nál kifejezésként keresendő.
+
+    `all:endometriosis cost of illness` több tízezer találatot ad, mert a
+    szavakat lazán kezeli — és egy PRISMA-naplóban a 135 000-es találatszám a
+    top-5 mellett félrevezető. Ha a kifejezésben nincs mezőnév és nincs boolean
+    operátor, idézőjelbe tesszük; ha van, érintetlenül megy.
+    """
+    q = query.strip()
+    if ":" in q or re.search(r"\b(AND|OR|ANDNOT|NOT)\b", q):
+        return q if ":" in q else f"all:{q}"
+    return f'all:"{q}"' if " " in q else f"all:{q}"
+
+
+def search_arxiv(query: str, retmax: int, email: str) -> tuple[list[dict], int]:
+    params = {"search_query": _arxiv_query(query), "start": "0",
+              "max_results": str(min(retmax, 300)), "sortBy": "relevance"}
+    xml = fetch_text(f"{ARXIV}?{urllib.parse.urlencode(params)}", email)
+    if not xml:
+        return [], 0
+    try:
+        root = ET.fromstring(xml)
+    except ET.ParseError as exc:
+        print(f"  ! arXiv: értelmezhetetlen válasz ({exc})", file=sys.stderr)
+        return [], 0
+
+    total_el = root.find("{http://a9.com/-/spec/opensearch/1.1/}totalResults")
+    total = int(total_el.text) if total_el is not None and total_el.text else 0
+
+    out = []
+    for entry in root.findall(f"{ATOM}entry"):
+        def txt(tag: str) -> str:
+            el = entry.find(tag)
+            return _clean(el.text) if el is not None and el.text else ""
+        out.append({
+            "id": txt(f"{ATOM}id"),
+            "title": txt(f"{ATOM}title"),
+            "summary": txt(f"{ATOM}summary"),
+            "published": txt(f"{ATOM}published"),
+            "updated": txt(f"{ATOM}updated"),
+            "doi": txt(f"{ARX}doi"),
+            "journal_ref": txt(f"{ARX}journal_ref"),
+            "authors": [_clean(a.findtext(f"{ATOM}name") or "")
+                        for a in entry.findall(f"{ATOM}author")],
+            "categories": [c.get("term", "") for c in entry.findall(f"{ATOM}category")],
+            "pdf": next((l.get("href", "") for l in entry.findall(f"{ATOM}link")
+                         if l.get("title") == "pdf"), ""),
+        })
+    return out, total
+
+
+def article_from_arxiv(C, rec: dict, topic: str) -> Any:
+    authors = [_surname(a) for a in rec.get("authors") or []]
+    authors = [a for a in authors if a]
+    arxiv_id, version = split_arxiv_id(rec.get("id", ""))
+    return C.Article(
+        tema=topic,
+        pmid="",
+        cim=_clean(rec.get("title", "")),
+        # Szándékosan üres: a preprintnek nincs folyóirata. Ha később megjelent
+        # (van DOI), a Crossref tölti ki az 5D kapuban — nem mi találjuk ki.
+        folyoirat="",
+        publikacio_datuma=(rec.get("published", "") or "")[:10],
+        doi=validate5d.norm_doi(rec.get("doi", "")),
+        pmc_id="",
+        pubmed_url="",
+        absztrakt=_clean(rec.get("summary", ""))[:5000],
+        publikacio_tipusok="preprint",
+        elso_szerzo=authors[0] if authors else "",
+        szerzok="; ".join(authors),
+        ev=(rec.get("published", "") or "")[:4],
+        forras="arXiv",
+        forras_url=rec.get("id", ""),
+    )
+
+
+def split_arxiv_id(url: str) -> tuple[str, str]:
+    """'http://arxiv.org/abs/2401.01234v2' -> ('2401.01234', 'v2')"""
+    tail = (url or "").rstrip("/").rsplit("/", 1)[-1]
+    m = re.match(r"^(.+?)(v\d+)$", tail)
+    return (m.group(1), m.group(2)) if m else (tail, "")
+
+
+def preprint_gate(rows: Sequence[Any], raw: Sequence[dict]) -> dict[str, int]:
+    """Az 5D kapu preprint-változata.
+
+    A rendes kapu öt dimenziót kér: DOI, első szerző, szerzőlista, folyóirat,
+    kötet. Egy preprintnek a definíció szerint nincs folyóirata és kötete, tehát
+    a rendes kapun minden preprint elbukna — nem azért, mert gyanús, hanem mert
+    rossz kérdést tettünk fel neki.
+
+    Amit egy preprintnél ellenőrizni LEHET és KELL:
+      - stabil azonosító (arXiv ID) és a konkrét verzió — verzió nélkül nem
+        reprodukálható, mert a szöveg a helyén megváltozhat;
+      - beküldési dátum;
+      - első szerző és szerzőlista;
+      - cím.
+    Ha a rekord megjelent változatra mutató DOI-t hoz, az NEM ide tartozik: azt
+    a hívó a rendes 5D kapura küldi, mert akkor már van végleges változat.
+    """
+    stats = {"befogadva": 0, "fuggoben": 0, "elutasitva": 0}
+    for row, rec in zip(rows, raw):
+        arxiv_id, version = split_arxiv_id(rec.get("id", ""))
+        missing = []
+        if not arxiv_id:
+            missing.append("arXiv azonosító")
+        if not version:
+            missing.append("verzió")
+        if not row.publikacio_datuma:
+            missing.append("beküldési dátum")
+        if not row.elso_szerzo:
+            missing.append("első szerző")
+        if not row.szerzok:
+            missing.append("szerzőlista")
+        if not row.cim:
+            missing.append("cím")
+
+        if missing:
+            row.validacio = "elutasitva"
+            row.validacio_indok = "preprint kapu — hiányzik: " + ", ".join(missing)
+            stats["elutasitva"] += 1
+        else:
+            row.validacio = "befogadva"
+            row.validacio_indok = (
+                f"preprint kapu — {arxiv_id}{version}, "
+                f"beküldve {row.publikacio_datuma}; NEM lektorált"
+            )
+            stats["befogadva"] += 1
+        # A verzió a rekordba is bekerül, különben a hivatkozás nem reprodukálható.
+        row.kotet = version
+        row.forras_url = rec.get("id", "") or row.forras_url
+    return stats
+
+
+# --------------------------------------------------------------------------
+# ClinicalTrials.gov — regiszter, nem közlemény
+# --------------------------------------------------------------------------
+
+
+def search_clinicaltrials(query: str, retmax: int, fetcher: validate5d.Fetcher
+                          ) -> tuple[list[dict], int]:
+    out: list[dict] = []
+    total = 0
+    token = ""
+    while len(out) < retmax:
+        params = {"query.term": query, "pageSize": str(min(1000, retmax - len(out))),
+                  "countTotal": "true"}
+        if token:
+            params["pageToken"] = token
+        data = get_json_retry(fetcher, f"{CTGOV}?{urllib.parse.urlencode(params)}")
+        if not data or "__error__" in data:
+            if data and "__error__" in data:
+                print(f"  ! ClinicalTrials.gov: {data['__error__']}", file=sys.stderr)
+            break
+        total = int(data.get("totalCount") or 0)
+        studies = data.get("studies") or []
+        if not studies:
+            break
+        out.extend(studies)
+        token = data.get("nextPageToken") or ""
+        if not token:
+            break
+    return out[:retmax], total
+
+
+def trial_row(study: dict) -> dict:
+    ps = study.get("protocolSection") or {}
+    ident = ps.get("identificationModule") or {}
+    status = ps.get("statusModule") or {}
+    design = ps.get("designModule") or {}
+    cond = ps.get("conditionsModule") or {}
+    arms = ps.get("armsInterventionsModule") or {}
+    outc = ps.get("outcomesModule") or {}
+    spons = ps.get("sponsorCollaboratorsModule") or {}
+    nct = ident.get("nctId", "")
+    primary = [_clean(o.get("measure", "")) for o in (outc.get("primaryOutcomes") or [])]
+    return {
+        "nct_id": nct,
+        "cim": _clean(ident.get("briefTitle", "")),
+        "statusz": status.get("overallStatus", ""),
+        "fazis": "; ".join(design.get("phases") or []),
+        "tipus": (design.get("studyType") or ""),
+        "betegsegek": "; ".join(cond.get("conditions") or []),
+        "beavatkozasok": "; ".join(
+            _clean(f"{i.get('type', '')}: {i.get('name', '')}")
+            for i in (arms.get("interventions") or [])),
+        "elsodleges_vegpont": " | ".join(primary),
+        "esetszam": str(((design.get("enrollmentInfo") or {}).get("count", "")) or ""),
+        "kezdes": (status.get("startDateStruct") or {}).get("date", ""),
+        "befejezes": (status.get("completionDateStruct") or {}).get("date", ""),
+        "szponzor": ((spons.get("leadSponsor") or {}).get("name", "")),
+        "van_eredmeny": "igen" if study.get("hasResults") else "nem",
+        "url": f"https://clinicaltrials.gov/study/{nct}" if nct else "",
+    }
+
+
+def write_trials(search_dir: Path, trials: list[dict]) -> Path:
+    path = search_dir / "regiszter_clinicaltrials.csv"
+    if not trials:
+        return path
+    with path.open("w", newline="", encoding="utf-8-sig") as fh:
+        writer = csv.DictWriter(fh, fieldnames=list(trials[0].keys()))
+        writer.writeheader()
+        writer.writerows(trials)
+    return path
+
+
+# --------------------------------------------------------------------------
+# Szülő keresés összekötése
+# --------------------------------------------------------------------------
+
+
+def link_to_parent(parent: Path, search_dir: Path, keres_id: str,
+                   sources: Sequence[str], state_label: str) -> None:
+    """A kiegészítő sweep visszakötése az adatbázis-kereséshez.
+
+    PRISMA-S forrásonként kéri a dokumentálást: a folyamatábrának meg kell
+    mondania, melyik forrás hány rekordot adott, és az olvasónak el kell tudnia
+    jutni egyikről a másikra.
+    """
+    if not parent.is_dir():
+        print(f"  ! --after: nincs ilyen keresési mappa: {parent}", file=sys.stderr)
+        return
+
+    label = ", ".join(sources)
+    meta_path = parent / "kereses.json"
+    if meta_path.exists():
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            print(f"  ! --after: {meta_path} olvashatatlan ({exc})", file=sys.stderr)
+        else:
+            meta.setdefault("kiegeszito_forrasok", {})
+            for src in sources:
+                meta["kiegeszito_forrasok"][src] = {
+                    "allapot": state_label,
+                    "mappa": str(search_dir),
+                    "keres_id": keres_id,
+                }
+            meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2),
+                                 encoding="utf-8")
+
+    naplo = parent / "NAPLO.md"
+    if naplo.exists():
+        text = naplo.read_text(encoding="utf-8")
+        marker = f"[lookup:{keres_id}]"
+        if marker not in text:
+            naplo.write_text(
+                text.rstrip("\n")
+                + f"\n\n## Kiegészítő forrás-keresés {marker}\n\n"
+                  f"- **Források:** {label}\n"
+                  f"- **Mappa:** `{search_dir}`\n"
+                  f"- **Keresés azonosító:** `{keres_id}`\n"
+                  "- Kiegészítő forrás: a fenti adatbázis-keresést nem váltja ki.\n",
+                encoding="utf-8")
+
+    print(f"  Kiegészítő forrásként bejegyezve ide: {parent}")
+
+
+# --------------------------------------------------------------------------
+# CLI
+# --------------------------------------------------------------------------
+
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    p = argparse.ArgumentParser(
+        description="Kiegészítő forrás-ágak: OpenAlex, Semantic Scholar, arXiv, ClinicalTrials.gov.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    p.add_argument("--query", required=True, help="Keresőkifejezés (természetes nyelvű).")
+    p.add_argument("--sources", default="openalex",
+                   help="Vesszővel elválasztva: " + ", ".join(ALL_SOURCES))
+    p.add_argument("--query-name", default="lookup", help="Mappanév / téma-címke.")
+    p.add_argument("--outdir", type=Path, default=Path.home() / "PubMed_Downloads")
+    p.add_argument("--retmax", type=int, default=50, help="Forrásonkénti maximum.")
+    p.add_argument("--year-from", type=int)
+    p.add_argument("--year-to", type=int)
+    p.add_argument("--preprints", action="store_true",
+                   help="Az arXiv-ág engedélyezése (preprint sáv, saját kapuval).")
+    p.add_argument("--no-pdf", action="store_true", help="Csak metaadat.")
+    p.add_argument("--no-unpaywall", action="store_true")
+    p.add_argument("--xml-fallback", action="store_true")
+    p.add_argument("--no-validate", action="store_true", help="Az 5D kapu kihagyása.")
+    p.add_argument("--no-fulltext-gate", action="store_true",
+                   help="Teljes szöveg nélkül is befogadható.")
+    p.add_argument("--after", type=Path,
+                   help="A szülő adatbázis-keresés mappája (PRISMA-S visszakötés).")
+    p.add_argument("--protocol", type=Path, help="PROSPERO protokoll JSON.")
+    p.add_argument("--fresh", action="store_true")
+    p.add_argument("--dry-run", action="store_true", help="Csak a találatszám.")
+    p.add_argument("--email", default="", help="Kapcsolattartó e-mail.")
+    return p.parse_args(argv)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = parse_args(argv)
+    C = _load_sibling("collect", "composer_collect")
+    S = _load_sibling("scholar", "composer_scholar")
+
+    sources = [s.strip().lower() for s in args.sources.split(",") if s.strip()]
+    unknown = [s for s in sources if s not in ALL_SOURCES]
+    if unknown:
+        return _fail(f"Ismeretlen forrás: {', '.join(unknown)}. "
+                     f"Választható: {', '.join(ALL_SOURCES)}")
+    if "arxiv" in sources and not args.preprints:
+        return _fail(
+            "Az arXiv-ág preprinteket ad, amelyek NEM lektoráltak, és a rendes 5D\n"
+            "kapun (folyóirat, kötet) definíció szerint elbuknának. Külön sávba\n"
+            "kerülnek, saját kapuval. Ha ezt tudva kéred: add hozzá a --preprints\n"
+            "kapcsolót.")
+
+    email = args.email or C.load_credentials_file().get("NCBI_EMAIL", "") or ""
+    stamp = datetime.now(timezone.utc).astimezone()
+    keres_id = f"{stamp:%Y%m%d_%H%M%S}_{args.query_name}"
+    outdir = args.outdir.expanduser()
+    search_dir = outdir / f"kereses_{keres_id}"
+    topic_dir = search_dir / "teljes_szoveg"
+
+    print(f"Kiegészítő források: {', '.join(sources)}")
+    print(f"Keresés: {args.query}")
+
+    cache = outdir / "_validacio_cache.json"
+    outdir.mkdir(parents=True, exist_ok=True)
+    fetcher = validate5d.Fetcher(cache, email, gap=1.0)
+
+    rows: list[Any] = []
+    arxiv_rows: list[Any] = []
+    arxiv_raw: list[dict] = []
+    trials: list[dict] = []
+    counts: dict[str, int] = {}
+
+    if "openalex" in sources:
+        hits, total = search_openalex(args.query, args.retmax, args.year_from,
+                                      args.year_to, fetcher, email)
+        counts["openalex"] = total
+        print(f"  OpenAlex: {total} találat, behozva {len(hits)}")
+        rows += [article_from_openalex(C, h, args.query_name) for h in hits]
+
+    if "semanticscholar" in sources:
+        hits, total = search_semanticscholar(args.query, args.retmax, args.year_from,
+                                             args.year_to, fetcher)
+        counts["semanticscholar"] = total
+        print(f"  Semantic Scholar: {total} találat, behozva {len(hits)}")
+        rows += [article_from_s2(C, h, args.query_name) for h in hits]
+
+    if "arxiv" in sources:
+        hits, total = search_arxiv(args.query, args.retmax, email)
+        counts["arxiv"] = total
+        print(f"  arXiv: {total} találat, behozva {len(hits)}")
+        for h in hits:
+            row = article_from_arxiv(C, h, args.query_name)
+            # Megjelent változat: akkor már nem preprint, a rendes kapura megy.
+            if row.doi:
+                rows.append(row)
+            else:
+                arxiv_rows.append(row)
+                arxiv_raw.append(h)
+
+    if "clinicaltrials" in sources:
+        hits, total = search_clinicaltrials(args.query, args.retmax, fetcher)
+        counts["clinicaltrials"] = total
+        print(f"  ClinicalTrials.gov: {total} találat, behozva {len(hits)}")
+        trials = [trial_row(s) for s in hits]
+
+    fetcher.save()
+
+    if args.dry_run:
+        print("\n--dry-run: nincs letöltés, nincs írás.")
+        return 0
+
+    if not (rows or arxiv_rows or trials):
+        print("Nincs találat.")
+        return 0
+
+    # Duplikátumok a már meglévő korpusz ellen — egy kiegészítő forrás nem
+    # növelheti a PRISMA identifikációs számot ugyanazzal a közleménnyel.
+    known = S.existing_keys(outdir)
+    fresh_rows, dupes = [], []
+    for row in rows:
+        if known & set(S.row_keys(row)):
+            dupes.append(row)
+        else:
+            fresh_rows.append(row)
+            known |= set(S.row_keys(row))
+    if dupes:
+        print(f"  {len(dupes)} rekord már a korpuszban van (nem kerül újra be)")
+        S.stamp_codiscovery(C, outdir, dupes)
+    rows = fresh_rows
+
+    search_dir.mkdir(parents=True, exist_ok=True)
+
+    if not args.no_pdf:
+        session = requests.Session()
+        limiter = C.RateLimiter(3)
+        got = 0
+        for row in rows:
+            if S.fetch_fulltext(C, row, topic_dir, session, limiter, fetcher, email,
+                                args.xml_fallback, not args.no_unpaywall):
+                got += 1
+        print(f"  Teljes szöveg: {got}/{len(rows)}")
+        fetcher.save()
+
+    gate: dict[str, int] = {}
+    if rows and not args.no_validate:
+        gate = C.validate_rows(rows, search_dir, email,
+                               require_fulltext=not args.no_fulltext_gate)
+        print(f"  5D kapu: {gate}")
+
+    pre_gate: dict[str, int] = {}
+    if arxiv_rows:
+        pre_gate = preprint_gate(arxiv_rows, arxiv_raw)
+        print(f"  Preprint kapu: {pre_gate}")
+        write_preprints(search_dir, arxiv_rows)
+
+    if trials:
+        path = write_trials(search_dir, trials)
+        print(f"  Regiszter: {len(trials)} vizsgálat -> {path.name}")
+
+    protocol = {}
+    if args.protocol and args.protocol.exists():
+        try:
+            protocol = json.loads(args.protocol.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            print(f"  ! protokoll olvashatatlan: {exc}", file=sys.stderr)
+
+    meta = {
+        "topic": args.query_name,
+        "keres_id": keres_id,
+        "database": ", ".join(sources),
+        "timestamp": f"{stamp:%Y-%m-%d %H:%M:%S %Z}",
+        "interface": "nyilvános REST API-k, kulcs nélkül",
+        "filters": _filter_label(args),
+        "language_limit": "nincs",
+        "count_label": "Találat (forrásonként)",
+        "count_total": sum(counts.values()),
+        "count_is_estimate": True,
+        "retmax": args.retmax,
+        "retrieved": len(rows) + len(arxiv_rows),
+        "query": args.query,
+        "gate": gate,
+        "fulltext_required": not args.no_fulltext_gate,
+        "kiegeszito_scholar": LOOKUP_STATE["ask"],
+        "protokoll": protocol,
+        "notes": _notes(counts, pre_gate, trials, sources),
+    }
+    C.write_search_folder(search_dir, meta, rows)
+
+    if rows:
+        added, updated = C.merge_csv(rows, outdir / "osszesitett_lista.csv",
+                                     fresh=args.fresh)
+        print(f"  Összesített lista: +{added} új, {updated} frissítve")
+        C.link_fulltext(rows, outdir / "teljes_szovegek")
+
+    if args.after:
+        link_to_parent(args.after.expanduser(), search_dir, keres_id, sources,
+                       LOOKUP_STATE["yes"])
+
+    print(f"\nKész: {search_dir}")
+    return 0
+
+
+def write_preprints(search_dir: Path, rows: Sequence[Any]) -> Path:
+    """A preprintek KÜLÖN fájlba mennek.
+
+    Nem a lektorált korpuszba: egy nem lektorált kézirat és egy megjelent
+    közlemény ugyanabban a CSV-ben előbb-utóbb ugyanabban a hivatkozásjegyzékben
+    is összekeveredne.
+    """
+    path = search_dir / "preprintek.csv"
+    dicts = [asdict(r) for r in rows]
+    with path.open("w", newline="", encoding="utf-8-sig") as fh:
+        writer = csv.DictWriter(fh, fieldnames=list(dicts[0].keys()))
+        writer.writeheader()
+        writer.writerows(dicts)
+    return path
+
+
+def _filter_label(args: argparse.Namespace) -> str:
+    bits = []
+    if args.year_from or args.year_to:
+        bits.append(f"év: {args.year_from or '—'}–{args.year_to or '—'}")
+    bits.append("OpenAlex: type:article")
+    if args.preprints:
+        bits.append("arXiv: preprint sáv")
+    return "; ".join(bits)
+
+
+def _notes(counts: dict[str, int], pre_gate: dict[str, int],
+           trials: list[dict], sources: Sequence[str]) -> list[str]:
+    notes = ["Kiegészítő források. Az adatbázis-keresést (PubMed) nem váltják ki; "
+             "a PRISMA folyamatábrán külön forrásként kell szerepelniük."]
+    for src in sources:
+        notes.append(f"{src}: {counts.get(src, 0)} találat a forrás szerint.")
+    if pre_gate:
+        notes.append(
+            f"Preprintek külön sávban ({pre_gate.get('befogadva', 0)} befogadva, "
+            f"{pre_gate.get('elutasitva', 0)} elutasítva): NEM lektoráltak, és a "
+            "rendes 5D kapun (folyóirat, kötet) definíció szerint elbuknának. "
+            "Fájl: preprintek.csv")
+    if trials:
+        notes.append(f"{len(trials)} regisztrált vizsgálat (ClinicalTrials.gov): "
+                     "nem közlemény, a regiszter_clinicaltrials.csv-ben. "
+                     "A 'regisztrált, de nem közölt' vizsgálatok kimutatásához.")
+    return notes
+
+
+def _fail(message: str) -> int:
+    print(message, file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -8,7 +8,8 @@ Five scripts, none of which calls a language model:
 |---|---|
 | `scripts/collect` | PubMed search → records → Open Access full texts → per-search folder |
 | `scripts/scholar` | Google Scholar sweep → resolved to DOI/PMID → the same full-text routes and the same gate |
-| `scripts/validate5d.py` | 5-dimension bibliographic validation against Crossref + PubMed + Europe PMC |
+| `scripts/lookup` | Supplementary sources — OpenAlex, Semantic Scholar, arXiv preprints, ClinicalTrials.gov |
+| `scripts/validate5d.py` | 5-dimension bibliographic validation against Crossref + PubMed + Europe PMC + OpenAlex |
 | `scripts/prospero.py` | PROSPERO protocol record — scaffold, eligibility check, export |
 | `scripts/prisma` | PRISMA 2020 flow, PRISMA-S search appendix, screening decisions, exports |
 
@@ -135,6 +136,36 @@ pointing at the sweep's directory, and the parent `kereses.json` flips to
 
 ```bash
 python3 scripts/selftest.py
+```
+
+## Supplementary sources
+
+```
+$S/lookup --outdir ~/Documents/PubMed_Downloads --sources openalex \
+    --query 'endometriosis cost of illness' --query-name endo-cost --retmax 50 \
+    --after ~/Documents/PubMed_Downloads/kereses_<stamp>_<slug>
+```
+
+| Source | For | Gate |
+|---|---|---|
+| `openalex` | the fields PubMed does not index — health economics, informatics, engineering | ordinary 5D |
+| `semanticscholar` | metadata and citation graph; heavily rate-limited without a key | ordinary 5D |
+| `arxiv` | preprints; requires `--preprints` | preprint gate → `preprintek.csv` |
+| `clinicaltrials` | registered but never published | none → `regiszter_clinicaltrials.csv` |
+
+`collect` ends every run with a second decision block, `DÖNTÉS KELL: kiegészítő
+források` (suppress with `--lookup yes|no` or `COMPOSER_LOOKUP`), and the search
+log records the answer either way — including a deliberate rejection, which is
+what PRISMA-S asks for.
+
+Preprints never enter `osszesitett_lista.csv`. They have no journal and no
+volume, so the ordinary 5D gate would reject every one of them by definition
+rather than by suspicion; the preprint gate checks what they can be held to
+instead — arXiv ID, version, submission date, first author, author list, title.
+
+OpenAlex is also the **fourth authority** in the gate itself (Crossref → PubMed
+→ Europe PMC → OpenAlex), consulted only for a dimension the first three left
+unsettled, and never able to overturn a dimension already outvoted 2:0.
 ```
 
 Offline and deterministic — the three authorities are stubbed with the exact

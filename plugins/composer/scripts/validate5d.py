@@ -62,6 +62,7 @@ CROSSREF = "https://api.crossref.org/works/"
 EUTILS = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
 ESEARCH = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
 EPMC = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
+OPENALEX = "https://api.openalex.org/works/"
 UA = "composer-validate5d/1.0 (https://orcid.org/0000-0001-9803-9103; mailto:{mail})"
 
 #: Leading name particles that some authorities keep and others drop.
@@ -450,6 +451,77 @@ def from_row(row: dict) -> dict:
 # --------------------------------------------------------------------------- compare
 
 
+def openalex_record(doi: str, pmid: str, fetcher: Fetcher) -> dict | None:
+    """The fourth authority, consulted only when three could not settle a dimension.
+
+    OpenAlex is not a fourth copy of the same deposit. It indexes Crossref,
+    PubMed, DataCite and publisher feeds together and reconciles them, so it
+    carries a volume for society journals Crossref left blank and an author list
+    for the consortium papers Crossref mangles. It is the only no-key source that
+    covers non-biomedical journals, which Europe PMC does not index at all — a
+    health-economics or informatics citation that PubMed and Europe PMC both miss
+    still has a canonical record here.
+
+    Same discipline as the third authority: it fills gaps and breaks ties, and
+    never overrides a dimension already judged `ok`.
+    """
+    if not (doi or pmid):
+        return None
+    ident = f"doi:{doi}" if doi else f"pmid:{pmid}"
+    url = f"{OPENALEX}{urllib.parse.quote(ident, safe=':/')}"
+    if fetcher.email:
+        url += f"?mailto={urllib.parse.quote(fetcher.email)}"
+    data = fetcher.get_json(url)
+    if not data or "__error__" in data or not data.get("id"):
+        return None
+    return data
+
+
+def _openalex_surname(name: str) -> str:
+    """OpenAlex prints a display name, not a family name.
+
+    'Smith, John' -> 'Smith'; 'John Smith' -> 'Smith'; 'Johan van der Meer' ->
+    'van der Meer' is not recoverable from the display form, so the last token
+    is returned and `surname_key` strips the particles from the other side.
+    """
+    name = (name or "").strip()
+    if not name:
+        return ""
+    if "," in name:
+        return name.split(",", 1)[0].strip()
+    return name.split()[-1]
+
+
+def from_openalex(rec: dict) -> dict:
+    authors = [
+        _openalex_surname(
+            ((a.get("author") or {}).get("display_name") or a.get("raw_author_name") or "")
+        )
+        for a in (rec.get("authorships") or [])
+    ]
+    authors = [a for a in authors if a]
+    src = ((rec.get("primary_location") or {}).get("source") or {})
+    titles = [src.get("display_name", ""), src.get("host_organization_name", "")]
+    biblio = rec.get("biblio") or {}
+    issns = list(src.get("issn") or [])
+    if src.get("issn_l"):
+        issns.append(src["issn_l"])
+    return {
+        "doi": norm_doi(rec.get("doi", "")),
+        "elso_szerzo": authors[0] if authors else "",
+        "szerzok": authors,
+        # host_organization_name is a publisher, not a journal; it is kept only
+        # so a repository record has something to match, and journal_key will
+        # simply fail to match it against a real journal title.
+        "folyoirat": [t for t in titles[:1] if t],
+        "kotet": str(biblio.get("volume", "") or "").strip(),
+        "elocator": str(biblio.get("first_page", "") or "").strip(),
+        "issn": [s for s in issns if s],
+        "ev": str(rec.get("publication_year", "") or ""),
+        "cim": rec.get("title") or rec.get("display_name") or "",
+    }
+
+
 def compare(local: dict, canon: dict) -> dict[str, tuple[str, str]]:
     """{dimension: (verdict, note)} where verdict is ok | mismatch | missing."""
     out: dict[str, tuple[str, str]] = {}
@@ -579,7 +651,7 @@ def verdict_of(dims: dict[str, tuple[str, str]],
 
 
 def validate_row(row: dict, fetcher: Fetcher, require_fulltext: bool,
-                 use_epmc: bool = True) -> dict:
+                 use_epmc: bool = True, use_openalex: bool = True) -> dict:
     local = from_row(row)
     canon: dict = {}
     source = ""
@@ -651,6 +723,37 @@ def validate_row(row: dict, fetcher: Fetcher, require_fulltext: bool,
                     notes.append(f"{d}: mindkét hitelesítő eltér")
             canon = merged
             source = (source + "+EuropePMC") if source else "EuropePMC"
+
+    # Fourth authority. Europe PMC does not index non-biomedical journals at
+    # all, so a health-economics or informatics citation can reach this point
+    # with the same dimension still blank. OpenAlex covers those and reconciles
+    # several deposits into one record.
+    #
+    # The majority rule is counted, not assumed. A dimension where Crossref and
+    # Europe PMC BOTH disagreed with the record is already 2:0 against it; a
+    # single agreeing fourth source makes it 2:1 and must not flip the verdict.
+    # Only a dimension left unsettled by a gap, or contradicted by one authority
+    # alone, can be settled here.
+    unsettled = [d for d in DIMENSIONS if dims[d][0] in ("missing", "mismatch")]
+    if unsettled and use_openalex:
+        oa = openalex_record(local["doi"], pmid, fetcher)
+        if oa:
+            fourth = from_openalex(oa)
+            solo = compare(local, fourth)
+            merged = merge_canonical(canon, fourth) if canon else fourth
+            filled = compare(local, merged)
+            outvoted = {n.split(":", 1)[0] for n in notes if "mindkét hitelesítő eltér" in n}
+            for d in unsettled:
+                if dims[d][0] == "mismatch" and solo[d][0] == "ok" and d not in outvoted:
+                    dims[d] = ("ok", f"{solo[d][1]} — OpenAlex és a rekord egyezik, "
+                                     f"a korábbi hitelesítő eltér ({dims[d][1]})")
+                    notes.append(f"{d}: OpenAlex erősíti meg a rekordot")
+                elif dims[d][0] == "missing" and filled[d][0] != "missing":
+                    dims[d] = (filled[d][0], filled[d][1] + " [OpenAlex]")
+                elif dims[d][0] == "mismatch" and solo[d][0] == "mismatch":
+                    notes.append(f"{d}: OpenAlex is eltér")
+            canon = merged
+            source = (source + "+OpenAlex") if source else "OpenAlex"
 
     ft = None
     if require_fulltext:

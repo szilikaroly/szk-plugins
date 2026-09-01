@@ -702,6 +702,18 @@ def write_search_folder(search_dir: Path, meta: dict, rows: Sequence[Article]) -
         "és ~1000 találat fölé nem lehet menni, ezért önmagában nem védhető "
         "keresési alap. Ha lefut, saját mappát kap, és ez a napló hivatkozni fogja.",
         "",
+        "## Kiegészítő források — OpenAlex / Semantic Scholar / arXiv / ClinicalTrials.gov", "",
+        f"- **Állapot:** {meta.get('kiegeszito_lookup') or SCHOLAR_STATE['ask']}",
+        "",
+        "Ugyanaz a PRISMA-S szabály: az elvetett forrást is rögzíteni kell. "
+        "Az OpenAlex a PubMed által nem indexelt szakterületeket is lefedi "
+        "(egészséggazdaságtan, informatika, mérnöki), ezért egy nem tisztán "
+        "biomedicinális kérdésnél az elhagyása valódi lefedettségi hiány. Az "
+        "arXiv preprinteket ad: nem lektoráltak, külön sávba kerülnek, és a "
+        "rendes 5D kapun (folyóirat, kötet) definíció szerint elbuknának. A "
+        "ClinicalTrials.gov nem közleményforrás: a regisztrált, de nem közölt "
+        "vizsgálatok kimutatására való.",
+        "",
     ]
     for extra in meta.get("notes") or []:
         lines += [str(extra), ""]
@@ -959,6 +971,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
              "napló azt rögzíti. Alapérték felülírható: COMPOSER_SCHOLAR.",
     )
     parser.add_argument(
+        "--lookup",
+        choices=("ask", "yes", "no"),
+        default=os.environ.get("COMPOSER_LOOKUP", "ask"),
+        help="Kérdezzen-e rá a kiegészítő forrásokra (OpenAlex, Semantic "
+             "Scholar, arXiv, ClinicalTrials.gov) a futás végén. Ugyanaz a "
+             "szemantika, mint a --scholar kapcsolónál. Alapérték "
+             "felülírható: COMPOSER_LOOKUP.",
+    )
+    parser.add_argument(
         "--email",
         default="",
         help=f"NCBI kapcsolattartó e-mail. Enélkül: NCBI_EMAIL, majd {CREDENTIALS_FILE}.",
@@ -1079,6 +1100,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "protocol_registered": protocol.get("registered", ""),
             "validated_5d": not args.no_validate,
             "kiegeszito_scholar": SCHOLAR_STATE[args.scholar],
+            "kiegeszito_lookup": SCHOLAR_STATE[args.lookup],
         })
 
         print(f"  Találatok (PubMed Count): {total_hits}   behozva: {len(pmids)}")
@@ -1218,6 +1240,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("Nem esetén:   ugyanez a futás --scholar no kapcsolóval, hogy a "
               "napló az elvetést is rögzítse (PRISMA-S).")
         print("Ha soha ne kérdezzen: COMPOSER_SCHOLAR=no a környezetbe.")
+        print("=== DÖNTÉS VÉGE ===")
+
+    if args.lookup == "ask" and all_rows:
+        print("\n=== DÖNTÉS KELL: kiegészítő források ===")
+        print("Kérdezd meg a felhasználót, futtassunk-e kiegészítő forrás-keresést, "
+              "és mondd el, mit nyer vele:")
+        print("  - OpenAlex: a PubMed által NEM indexelt szakterületeket is lefedi "
+              "(egészséggazdaságtan, informatika, mérnöki). Nem biomedicinális "
+              "kérdésnél az elhagyása valódi lefedettségi hiány.")
+        print("  - Semantic Scholar: metaadat és hivatkozási háló; kulcs nélkül "
+              "erősen rate-limitelt, gyakran nem elérhető.")
+        print("  - arXiv: PREPRINTEK. Nem lektoráltak, külön sávba kerülnek saját "
+              "kapuval, és külön --preprints kapcsolót kell kérni hozzá.")
+        print("  - ClinicalTrials.gov: nem közlemény, hanem regiszter — a "
+              "'regisztrált, de nem közölt' vizsgálatok kimutatásához.")
+        print("Igen esetén:  lookup --query '<KERESÉS>' --query-name <SLUG> "
+              "--outdir <OUTDIR> --sources openalex --retmax 50 --after <KERESÉSI MAPPA>")
+        print("Nem esetén:   ugyanez a futás --lookup no kapcsolóval, hogy a "
+              "napló az elvetést is rögzítse (PRISMA-S).")
+        print("Ha soha ne kérdezzen: COMPOSER_LOOKUP=no a környezetbe.")
         print("=== DÖNTÉS VÉGE ===")
 
     return 0

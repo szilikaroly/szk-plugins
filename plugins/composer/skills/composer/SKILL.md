@@ -1,6 +1,6 @@
 ---
 name: composer
-description: The Composer — build a citable literature corpus. Searches PubMed and, as a supplementary source, Google Scholar, downloads the Open Access full texts through the legitimate PMC OA / Europe PMC / Unpaywall routes, and admits a paper only if it has a readable full text AND survives 5-dimension bibliographic validation (DOI, first author, author list, journal, volume) against Crossref, PubMed and Europe PMC. Every search gets its own logged directory under PRISMA 2020 / PRISMA-S rules and a PROSPERO protocol record. Use whenever the user wants to find, collect, screen, download or verify papers — "keress cikkeket X-ről", "gyűjtsd össze az irodalmat", "töltsd le a teljes szövegeket", "ellenőrizd a hivatkozásokat", building a reference base for a manuscript, a systematic or narrative review, a grant, or a PRISMA flow diagram, or any PubMed / NCBI / Entrez / MEDLINE / Crossref / Google Scholar / scholarly request. Hungarian triggers — irodalomkutatás, szakirodalom gyűjtés, PubMed keresés, Google Scholar keresés, szürke irodalom, cikkek letöltése, teljes szöveg, hivatkozás-ellenőrzés, PRISMA folyamatábra, PROSPERO protokoll, keresési napló.
+description: The Composer — build a citable literature corpus. Searches PubMed and, as supplementary sources, OpenAlex, Semantic Scholar, arXiv preprints, ClinicalTrials.gov and Google Scholar, downloads the Open Access full texts through the legitimate PMC OA / Europe PMC / Unpaywall routes, and admits a paper only if it has a readable full text AND survives 5-dimension bibliographic validation (DOI, first author, author list, journal, volume) against Crossref, PubMed and Europe PMC. Every search gets its own logged directory under PRISMA 2020 / PRISMA-S rules and a PROSPERO protocol record. Use whenever the user wants to find, collect, screen, download or verify papers — "keress cikkeket X-ről", "gyűjtsd össze az irodalmat", "töltsd le a teljes szövegeket", "ellenőrizd a hivatkozásokat", building a reference base for a manuscript, a systematic or narrative review, a grant, or a PRISMA flow diagram, or any PubMed / NCBI / Entrez / MEDLINE / Crossref / Google Scholar / scholarly request. Hungarian triggers — irodalomkutatás, szakirodalom gyűjtés, PubMed keresés, OpenAlex, Semantic Scholar, arXiv preprint, klinikai vizsgálati regiszter, Google Scholar keresés, szürke irodalom, cikkek letöltése, teljes szöveg, hivatkozás-ellenőrzés, PRISMA folyamatábra, PROSPERO protokoll, keresési napló.
 ---
 
 # The Composer
@@ -154,6 +154,52 @@ outcome, not a bug, and chasing it by hand is the user's call.
 A paper both sources found is **not** counted twice: the Scholar hit is dropped
 and the existing corpus row is stamped `PubMed; Google Scholar`, keeping the
 Scholar citation count. The search log records the duplicate count for PRISMA.
+
+### 2c. Supplementary sources — OpenAlex, Semantic Scholar, arXiv, ClinicalTrials.gov
+
+`collect` finishes with a second decision block, `DÖNTÉS KELL: kiegészítő
+források`, unless the run carried `--lookup yes|no` (or `COMPOSER_LOOKUP` is
+set). Same rule as the Scholar question: ask it as a real clickable question and
+record the answer either way. The log gains a **Kiegészítő források** section
+using the same three states.
+
+```
+"$P/lookup" --outdir ~/Documents/PubMed_Downloads \
+    --query '<QUERY>' --query-name <SLUG> --sources openalex --retmax 50 \
+    --after <SEARCH FOLDER>
+```
+
+| Source | What it is for | Gate |
+|---|---|---|
+| `openalex` | journal articles; the only no-key source covering what PubMed does not index — health economics, informatics, engineering. On a non-biomedical question, omitting it is a genuine coverage gap | ordinary 5D |
+| `semanticscholar` | metadata and citation graph. Without a key it is heavily rate-limited and often returns 429 | ordinary 5D |
+| `arxiv` | **preprints**; needs `--preprints` explicitly | preprint gate, separate file |
+| `clinicaltrials` | registry, not literature — for "registered but never published" | none; own CSV |
+
+**The preprint lane exists because the ordinary gate asks the wrong question of
+a preprint.** The 5D gate wants DOI, first author, author list, journal and
+volume. A preprint has no journal and no volume, so every preprint would fail —
+by definition, not by suspicion. The preprint gate checks what a preprint can
+actually be held to: arXiv ID, **version**, submission date, first author,
+author list, title. The version is not optional; without it the citation is not
+reproducible, because the text at that ID can change. Preprints land in
+`preprintek.csv`, never in `osszesitett_lista.csv`, and every row says
+`NEM lektorált`. A preprint that already carries a published DOI is routed to
+the ordinary 5D gate instead — the version of record wins.
+
+**OpenAlex is also wired into the gate itself, as a fourth authority.** The
+escalation is Crossref → PubMed → Europe PMC → OpenAlex, and it is consulted
+only for a dimension the first three left unsettled. Europe PMC does not index
+non-biomedical journals at all, so a health-economics citation could reach a
+verdict with a dimension still blank; OpenAlex fills those. The majority is
+counted, not assumed: a dimension where **both** Crossref and Europe PMC already
+disagreed with the record is 2:0 against it, and a single agreeing fourth source
+cannot flip it — verified against a real record where OpenAlex reproduces
+Crossref's mangled author list rather than correcting it.
+
+Report the three gates separately. Journal rows, preprints and trials are three
+different evidence classes, and merging them into one "found N papers" is the
+one thing that makes the log useless.
 
 ### 3. Read the result — never `cat` the CSV
 

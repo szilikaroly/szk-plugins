@@ -23,6 +23,21 @@ sys.path.insert(0, str(HERE))
 import validate5d as V      # noqa: E402
 import prospero as P        # noqa: E402
 
+import importlib.util                # noqa: E402
+from importlib.machinery import SourceFileLoader  # noqa: E402
+
+
+def _load(name: str, modname: str):
+    loader = SourceFileLoader(modname, str(HERE / name))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[loader.name] = mod
+    loader.exec_module(mod)
+    return mod
+
+
+L = _load("lookup", "composer_lookup")
+
 
 def _ok(label: str, cond: bool) -> bool:
     print(f"  {'PASS' if cond else 'FAIL'}  {label}")
@@ -396,6 +411,77 @@ def run() -> bool:
                 ok &= _ok("a wrong --after path is named on stderr, not swallowed",
                           str(bad) in err.getvalue())
                 ok &= _ok("a wrong --after path creates nothing", not bad.exists())
+
+    print("\n[OpenAlex — the fourth authority]")
+    oa = {
+        "doi": "https://doi.org/10.1186/S12916-024-03503-Y",
+        "authorships": [
+            {"author": {"display_name": "Ana Pérez-Prieto"}},
+            {"author": {"display_name": "Smith, John"}},
+            {"raw_author_name": "Johan van der Meer"},
+        ],
+        "primary_location": {"source": {"display_name": "BMC Medicine",
+                                        "issn": ["1741-7015"], "issn_l": "1741-7015"}},
+        "biblio": {"volume": "22", "first_page": "e12"},
+        "publication_year": 2024,
+        "title": "A paper",
+    }
+    canon = V.from_openalex(oa)
+    ok &= _ok("the DOI is normalised, not passed through as a URL",
+              canon["doi"] == "10.1186/s12916-024-03503-y")
+    ok &= _ok("a display name yields the surname", canon["elso_szerzo"] == "Pérez-Prieto")
+    ok &= _ok("'Surname, Given' also yields the surname", canon["szerzok"][1] == "Smith")
+    ok &= _ok("a raw_author_name is not dropped", len(canon["szerzok"]) == 3)
+    ok &= _ok("the journal is the source title, not the publisher",
+              canon["folyoirat"] == ["BMC Medicine"])
+    ok &= _ok("volume and year are carried", canon["kotet"] == "22" and canon["ev"] == "2024")
+    ok &= _ok("an offline fetcher asks OpenAlex for nothing",
+              V.openalex_record("10.1/x", "", Stub()) is None)
+    ok &= _ok("no identifier means no lookup at all",
+              V.openalex_record("", "", Stub()) is None)
+
+    print("\n[preprints — the ordinary gate asks the wrong question]")
+    ok &= _ok("an arXiv id splits into identifier and version",
+              L.split_arxiv_id("http://arxiv.org/abs/2401.01234v2") == ("2401.01234", "v2"))
+    ok &= _ok("a versionless id yields an empty version",
+              L.split_arxiv_id("http://arxiv.org/abs/2401.01234") == ("2401.01234", ""))
+
+    class _Row:
+        def __init__(self, **kw):
+            self.publikacio_datuma = kw.get("d", "2024-01-02")
+            self.elso_szerzo = kw.get("a", "Roe")
+            self.szerzok = kw.get("s", "Roe; Smith")
+            self.cim = kw.get("c", "A preprint")
+            self.kotet = ""
+            self.forras_url = ""
+            self.validacio = ""
+            self.validacio_indok = ""
+
+    full, no_ver, no_auth = _Row(), _Row(), _Row(a="")
+    stats = L.preprint_gate(
+        [full, no_ver, no_auth],
+        [{"id": "http://arxiv.org/abs/2401.01234v2"},
+         {"id": "http://arxiv.org/abs/2401.01234"},
+         {"id": "http://arxiv.org/abs/2401.05555v1"}])
+    ok &= _ok("a complete preprint is admitted", full.validacio == "befogadva")
+    ok &= _ok("the version is recorded on the row", full.kotet == "v2")
+    ok &= _ok("the verdict says it is not peer reviewed",
+              "NEM lektorált" in full.validacio_indok)
+    ok &= _ok("a versionless preprint is rejected — the text at that id can change",
+              no_ver.validacio == "elutasitva" and "verzió" in no_ver.validacio_indok)
+    ok &= _ok("a preprint with no first author is rejected",
+              no_auth.validacio == "elutasitva")
+    ok &= _ok("the counts add up", stats == {"befogadva": 1, "fuggoben": 0, "elutasitva": 2})
+
+    print("\n[supplementary sources: the decision has to be in the log, either way]")
+    ok &= _ok("all three decision states have a label",
+              set(L.LOOKUP_STATE) == {"ask", "yes", "no"})
+    ok &= _ok("an undecided run says so rather than going silent",
+              "nem eldöntve" in L.LOOKUP_STATE["ask"])
+    ok &= _ok("arXiv without --preprints is refused, not silently run",
+              L.main(["--query", "x", "--sources", "arxiv"]) == 2)
+    ok &= _ok("an unknown source name is refused",
+              L.main(["--query", "x", "--sources", "scopus"]) == 2)
 
     print(f"\n{'ALL PASSED' if ok else 'FAILURES PRESENT'}")
     return ok
