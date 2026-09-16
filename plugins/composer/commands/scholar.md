@@ -23,7 +23,7 @@ by hand), run that first — Scholar on its own is not a defensible search base.
 3. Run:
 
 ```
-"${CLAUDE_PLUGIN_ROOT}/scripts/scholar" --outdir ~/Documents/PubMed_Downloads \
+"${CLAUDE_PLUGIN_ROOT}/scripts/run" scholar --outdir ~/Documents/PubMed_Downloads \
     --query '<SCHOLAR QUERY>' --query-name <SLUG> --retmax <N> --years <N> --xml-fallback
 ```
 

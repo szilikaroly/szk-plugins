@@ -5,12 +5,12 @@ allowed-tools: Bash, Read, Edit
 Manage the PROSPERO protocol record. Request: $ARGUMENTS
 
 ```
-P="${CLAUDE_PLUGIN_ROOT}/scripts/prospero.py"
-python3 "$P" fields                                        # the 36 registration fields
-python3 "$P" init --project <slug> --title "<title>"       # scaffold
-python3 "$P" check --protocol <file>                       # eligibility + completeness
-python3 "$P" stage --protocol <file> --set formal_screening=started
-python3 "$P" export --protocol <file> --out protocol.md    # submission-ready
+R="${CLAUDE_PLUGIN_ROOT}/scripts/run"
+"$R" prospero.py fields                                        # the 36 registration fields
+"$R" prospero.py init --project <slug> --title "<title>"       # scaffold
+"$R" prospero.py check --protocol <file>                       # eligibility + completeness
+"$R" prospero.py stage --protocol <file> --set formal_screening=started
+"$R" prospero.py export --protocol <file> --out protocol.md    # submission-ready
 ```
 
 Fill the fields *with* the user, one block at a time — review question,

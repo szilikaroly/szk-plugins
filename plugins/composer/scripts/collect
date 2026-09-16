@@ -462,6 +462,42 @@ class OAInfo:
     pdf_url: str = ""
 
 
+EUROPEPMC_SEARCH = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
+
+#: Figyelmeztetésenként egyszer szólunk — egy 500 rekordos futás ne írjon ki
+#: 500 azonos sort, de egyetlen csendes "nem OA" se maradjon.
+_OA_WARNED: set[str] = set()
+
+
+def _oa_warn(message: str) -> None:
+    if message not in _OA_WARNED:
+        _OA_WARNED.add(message)
+        print(f"  ! {message}", file=sys.stderr)
+
+
+def _europepmc_open_access(pmcid: str, session: requests.Session, limiter: RateLimiter) -> OAInfo:
+    """Europe PMC: OA-e a cikk és milyen licenccel.
+
+    PDF-linket nem ad; a `download_pdf` ilyenkor az EUROPEPMC_PDF render-útra,
+    majd a JATS XML-re esik vissza.
+    """
+    limiter.wait()
+    try:
+        r = session.get(EUROPEPMC_SEARCH, params={"query": f"PMCID:{pmcid}", "format": "json",
+                                                  "resultType": "core"}, timeout=30)
+        r.raise_for_status()
+        res = r.json().get("resultList", {}).get("result", [])
+    except (requests.RequestException, ValueError) as exc:
+        _oa_warn(f"az Europe PMC OA-lekérdezés is sikertelen ({exc.__class__.__name__}) "
+                 f"— az érintett cikkek 'nem OA'-ként maradnak")
+        return OAInfo(open_access=False)
+    want = normalize_pmcid(pmcid).upper()
+    hit = next((x for x in res if normalize_pmcid(x.get("pmcid")).upper() == want), None)
+    if hit is None or hit.get("isOpenAccess") != "Y":
+        return OAInfo(open_access=False)
+    return OAInfo(open_access=True, license=(hit.get("license") or "").upper(), pdf_url="")
+
+
 def check_open_access(pmcid: str, session: requests.Session, limiter: RateLimiter) -> OAInfo:
     """A PMC OA Web Service megmondja, hogy a cikk az Open Access készletben van-e.
 
@@ -473,12 +509,28 @@ def check_open_access(pmcid: str, session: requests.Session, limiter: RateLimite
     try:
         response = session.get(PMC_OA_SERVICE, params={"id": pmcid}, timeout=30)
         response.raise_for_status()
-    except requests.RequestException:
-        return OAInfo(open_access=False)
+    except requests.RequestException as exc:
+        # Az üzenetben nem lehet cikkazonosító (az URL-ben benne van), különben
+        # a "futásonként egyszer" szabály rekordonként egyszer lesz.
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        _oa_warn(f"az NCBI OA szolgáltatás nem elérhető ({exc.__class__.__name__}"
+                 f"{f', HTTP {status}' if status else ''}) — Europe PMC tartalék")
+        return _europepmc_open_access(pmcid, session, limiter)
 
     body = response.text
-    if "idIsNotOpenAccess" in body or "idDoesNotExist" in body or "<record" not in body:
+    # Az NCBI két kódja végleges válasz: ezekre nincs tartalék.
+    if "idIsNotOpenAccess" in body or "idDoesNotExist" in body:
         return OAInfo(open_access=False)
+    if "<OA>" not in body or "<record" not in body:
+        # 2026-09-16: a régi cím 200 helyett HTML 404-et ad, az új 301/405-öt.
+        # Korábban minden "<record" nélküli válasz csendben "nem OA" lett, és így
+        # MINDEN PMC-cikk kiesett a teljes szöveges kapun. Egy nem-OA-XML válasz
+        # a szolgáltatás hibája, nem a cikké — ezt mondjuk ki, és az Europe PMC
+        # dokumentált REST API-jához fordulunk.
+        _oa_warn(f"az NCBI OA szolgáltatás nem OA-XML-t adott (HTTP "
+                 f"{response.status_code}, {response.headers.get('Content-Type', '?')}) "
+                 f"— Europe PMC tartalék")
+        return _europepmc_open_access(pmcid, session, limiter)
 
     license_match = re.search(r'license="([^"]*)"', body)
     # Néhány rekordhoz közvetlen PDF link is tartozik, máshoz csak .tar.gz csomag.

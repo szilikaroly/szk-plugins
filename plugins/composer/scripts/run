@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# Portable launcher for the composer scripts.
+#
+#   run <script> [args...]     e.g.  run collect --query '...' --retmax 50
+#   run --which [script]       print the interpreter that would be used
+#
+# Why: `collect`, `lookup`, `scholar` and `prisma` carry the shebang
+# /Users/szili/anaconda3/bin/python3 — right on the Mac (the login-shell
+# python3 there is a different interpreter without biopython), fatal anywhere
+# else. On Windows, `python3` on PATH is usually the Microsoft Store stub, which
+# prints an install hint and exits. So an interpreter is chosen by whether it
+# can actually import what the script needs, not by its name.
+#
+# Order: $COMPOSER_PYTHON, $SZK_PYTHON (taken as given, no probe), then the
+# shebang's Anaconda, other conda/venv locations, then python3/python/py on PATH.
+set -euo pipefail
+here="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+which_only=0
+if [[ "${1:-}" == "--which" ]]; then which_only=1; shift; fi
+script="${1:-collect}"
+[[ $which_only -eq 0 ]] && { [[ $# -gt 0 ]] || { echo "usage: run <script> [args...]" >&2; exit 2; }; shift; }
+
+case "$script" in
+  collect|lookup|validate5d.py) need="import Bio, requests" ;;
+  scholar)                      need="import Bio, requests, scholarly" ;;
+  *)                            need="import sys" ;;   # prisma, prospero.py, selftest.py: stdlib
+esac
+[[ "$script" == "selftest.py" ]] && need="import Bio, requests"   # also exercises collect
+
+# "py -3" is the Windows launcher; every other candidate is one path, which may
+# contain spaces, so it is quoted.
+pyrun() { local c="$1"; shift; if [[ "$c" == "py -3" ]]; then py -3 "$@"; else "$c" "$@"; fi; }
+
+pick() {
+  if [[ -n "${COMPOSER_PYTHON:-}" ]]; then echo "$COMPOSER_PYTHON"; return 0; fi
+  if [[ -n "${SZK_PYTHON:-}" ]];      then echo "$SZK_PYTHON";      return 0; fi
+  local c fallback=""
+  local candidates=(
+    /Users/szili/anaconda3/bin/python3
+    "$HOME/anaconda3/bin/python3" "$HOME/miniconda3/bin/python3"
+    "$HOME/anaconda3/python.exe"  "$HOME/miniconda3/python.exe"
+    "$HOME/.claude/.venv/bin/python" "$HOME/.claude/.venv/Scripts/python.exe"
+    python3 python "py -3"
+  )
+  for c in "${candidates[@]}"; do
+    if pyrun "$c" -c "import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)" >/dev/null 2>&1; then
+      [[ -z "$fallback" ]] && fallback="$c"
+      if pyrun "$c" -c "$need" >/dev/null 2>&1; then echo "$c"; return 0; fi
+    fi
+  done
+  # Nothing has the dependencies: hand back a working interpreter anyway, so the
+  # script itself prints which package is missing and how to install it.
+  [[ -n "$fallback" ]] && { echo "$fallback"; return 0; }
+  return 1
+}
+
+if ! py="$(pick)"; then
+  echo "composer: no usable Python 3.9+ found. Set COMPOSER_PYTHON to one that has" >&2
+  echo "  biopython and requests (pip install biopython requests pandas)." >&2
+  exit 1
+fi
+if [[ $which_only -eq 1 ]]; then echo "$py"; exit 0; fi
+
+export PYTHONIOENCODING="${PYTHONIOENCODING:-utf-8}"   # Hungarian output on a cp1250 console
+if [[ "$py" == "py -3" ]]; then exec py -3 "$here/$script" "$@"; fi
+exec "$py" "$here/$script" "$@"

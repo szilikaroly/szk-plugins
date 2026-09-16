@@ -135,7 +135,7 @@ pointing at the sweep's directory, and the parent `kereses.json` flips to
 ## Self test
 
 ```bash
-python3 scripts/selftest.py
+scripts/run selftest.py
 ```
 
 ## Supplementary sources
@@ -179,9 +179,39 @@ both failures look like success in the summary line.
 
 ## Dependencies
 
-`collect` needs `biopython`, `requests` and (optionally) `pandas` on the
-Anaconda python3 its shebang points at. `scholar` needs those plus `scholarly`
+`collect` needs `biopython`, `requests` and (optionally) `pandas`. `scholar` needs those plus `scholarly`
 (`pip install scholarly`); it imports `collect` as a module, so the Article
 schema, the PMC OA download path, the search-folder writer and the 5D runner are
 the same code rather than a parallel copy. `validate5d.py`, `prospero.py` and
 `prisma` are stdlib-only and run on any python3.
+
+### Running on another machine (Windows)
+
+The scripts' shebangs name `/Users/szili/anaconda3/bin/python3`, which exists
+only on the Mac. Call them through the launcher instead:
+
+```bash
+scripts/run collect --query '...' --retmax 50 --no-pdf
+scripts/run --which collect        # which interpreter it picked
+COMPOSER_PYTHON=/path/to/python scripts/run selftest.py
+```
+
+`run` probes `$COMPOSER_PYTHON`/`$SZK_PYTHON`, the Mac Anaconda, other conda
+and `~/.claude/.venv` locations, then `python3`/`python`/`py -3`, and uses the
+first one that can import what that script needs — which skips the Microsoft
+Store `python3` stub. It needs a bash (Git Bash on Windows). The slash commands
+and `bin/composer` already go through it.
+
+NCBI credentials are read from `~/.config/ncbi/env` (`NCBI_EMAIL=…`,
+`NCBI_API_KEY=…`, mode 600). The file is **not** synced: on a machine that lacks
+it, pass `--email` / `--api-key` or export the variables. Without a key NCBI
+allows 3 requests/s instead of 10.
+
+## PMC Open Access check
+
+`collect` asks the NCBI PMC OA Web Service first. Its old address answers with
+an HTML 404 (seen 2026-09-16); any response that is not OA XML, or a failed
+request, now prints one warning per run and falls back to Europe PMC's REST
+search (`isOpenAccess == "Y"`, `license`). Before 1.3.1 such a response was read
+silently as "not open access", so every PMC paper was held at the full-text gate.
+NCBI's explicit `idIsNotOpenAccess` / `idDoesNotExist` answers remain final.

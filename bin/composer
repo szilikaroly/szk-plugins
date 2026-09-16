@@ -2,6 +2,7 @@
 # composer — literature intake with the 5D admission gate, from any shell.
 #
 #   composer harvest  --query '...' --query-name endo --raw --retmax 500 --xml-fallback
+#   composer lookup   --sources openalex --query '...' --query-name endo
 #   composer scholar  --query '"..." "..."' --query-name endo --retmax 100 --years 10
 #   composer validate --records refs.csv --out refs-validacio.csv --no-fulltext-gate
 #   composer protocol init --project endo-diet --title "..."
@@ -21,19 +22,32 @@ done
 _dir="$(cd -P "$(dirname "$_self")" && pwd)"
 source "$_dir/_resolve.sh"
 
+# composer ships its own interpreter picker (scripts/run): the scripts' shebangs
+# name the Mac Anaconda, and a bare `python3` is the wrong interpreter on the Mac
+# and the Microsoft Store stub on Windows. With SZK_PYTHON set, or on an install
+# older than 1.3.1 that has no `run`, the shared runner is used as before.
+crun() {
+  local r
+  if [[ -n "${SZK_PYTHON:-}" ]] || ! r="$(szk_resolve composer scripts/run)"; then
+    szk_run composer "scripts/$1" "${@:2}"
+  fi
+  exec bash "$r" "$@"
+}
+
 cmd="${1:-}"; [[ $# -gt 0 ]] && shift || true
 case "$cmd" in
-  harvest|collect)  szk_run composer scripts/collect      "$@" ;;
-  scholar|gs)       szk_run composer scripts/scholar      "$@" ;;
-  validate|5d)      szk_run composer scripts/validate5d.py "$@" ;;
-  protocol|prospero) szk_run composer scripts/prospero.py  "$@" ;;
-  prisma|flow)      szk_run composer scripts/prisma        "$@" ;;
-  selftest)         szk_run composer scripts/selftest.py   "$@" ;;
+  harvest|collect)  crun collect       "$@" ;;
+  scholar|gs)       crun scholar       "$@" ;;
+  lookup)           crun lookup        "$@" ;;
+  validate|5d)      crun validate5d.py "$@" ;;
+  protocol|prospero) crun prospero.py  "$@" ;;
+  prisma|flow)      crun prisma        "$@" ;;
+  selftest)         crun selftest.py   "$@" ;;
   ""|-h|--help|help)
     awk 'NR>1 && /^#/ {sub(/^# ?/,""); print; next} NR>1 {exit}' "$_self"
     exit 0 ;;
   *)
     echo "composer: unknown subcommand '$cmd'" >&2
-    echo "  harvest | scholar | validate | protocol | prisma | selftest" >&2
+    echo "  harvest | scholar | lookup | validate | protocol | prisma | selftest" >&2
     exit 2 ;;
 esac

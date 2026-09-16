@@ -5,13 +5,13 @@ allowed-tools: Bash, Read
 Build or advance the PRISMA trail. Request: $ARGUMENTS
 
 ```
-R="${CLAUDE_PLUGIN_ROOT}/scripts/prisma"
-"$R" --project <slug> ingest        # search log + corpus + the 5D verdicts
-"$R" --project <slug> dedup --auto  # by DOI, then normalised title
-"$R" --project <slug> template      # -> decisions CSV of undecided records
-"$R" --project <slug> screen --from-csv <file>
-"$R" --project <slug> status
-"$R" --project <slug> export --format all
+R="${CLAUDE_PLUGIN_ROOT}/scripts/run"
+"$R" prisma --project <slug> ingest        # search log + corpus + the 5D verdicts
+"$R" prisma --project <slug> dedup --auto  # by DOI, then normalised title
+"$R" prisma --project <slug> template      # -> decisions CSV of undecided records
+"$R" prisma --project <slug> screen --from-csv <file>
+"$R" prisma --project <slug> status
+"$R" prisma --project <slug> export --format all
 ```
 
 Add a database the harvest did not run:

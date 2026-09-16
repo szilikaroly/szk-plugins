@@ -14,7 +14,7 @@ Run a Composer harvest. What the user asked for: $ARGUMENTS
 3. Run:
 
 ```
-"${CLAUDE_PLUGIN_ROOT}/scripts/collect" --outdir ~/Documents/PubMed_Downloads \
+"${CLAUDE_PLUGIN_ROOT}/scripts/run" collect --outdir ~/Documents/PubMed_Downloads \
     --query '<QUERY>' --query-name <SLUG> --raw --retmax <N> --xml-fallback
 ```
 

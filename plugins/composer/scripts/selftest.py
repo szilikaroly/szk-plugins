@@ -298,6 +298,103 @@ def run() -> bool:
                   {"forras", "forras_url", "idezetek"}
                   <= set(collect.Article.__dataclass_fields__))
 
+        print("\n[open access: a dead NCBI endpoint is not a closed article]")
+        # 2026-09-16: oa.fcgi started answering with an HTML 404 page. The old
+        # code read "no <record" as "not open access", so every PMC article was
+        # held at the full-text gate and the run still looked successful.
+
+        class _Resp:
+            def __init__(self, status=200, text="", payload=None,
+                         ctype="text/xml"):
+                self.status_code, self.text, self._payload = status, text, payload
+                self.headers = {"Content-Type": ctype}
+
+            def raise_for_status(self):
+                if self.status_code >= 400:
+                    raise collect.requests.HTTPError(f"{self.status_code}")
+
+            def json(self):
+                if self._payload is None:
+                    raise ValueError("no json")
+                return self._payload
+
+        class _Session:
+            """Routes NCBI and Europe PMC calls to canned responses."""
+
+            def __init__(self, ncbi, epmc):
+                self.ncbi, self.epmc, self.calls = ncbi, epmc, []
+
+            def get(self, url, params=None, **_):
+                self.calls.append(url)
+                src = self.ncbi if "ncbi" in url else self.epmc
+                if isinstance(src, Exception):
+                    raise src
+                return src
+
+        def _epmc(pmcid, oa="Y", lic="cc by"):
+            return _Resp(payload={"resultList": {"result": [
+                {"pmcid": pmcid, "isOpenAccess": oa, "license": lic}]}},
+                ctype="application/json")
+
+        html404 = _Resp(404, "<html><body>Page not found</body></html>",
+                        ctype="text/html")
+        nolimit = collect.RateLimiter(0)
+
+        def _check(ncbi, epmc):
+            sess = _Session(ncbi, epmc)
+            err = io.StringIO()
+            with redirect_stderr(err):
+                info = collect.check_open_access("PMC5334499", sess, nolimit)
+            return info, sess, err.getvalue()
+
+        getattr(collect, "_OA_WARNED", set()).clear()
+        info, sess, err = _check(html404, _epmc("PMC5334499"))
+        ok &= _ok("an HTML 404 from NCBI falls back to Europe PMC and finds the OA article",
+                  info.open_access and info.license == "CC BY"
+                  and any("ebi.ac.uk" in c for c in sess.calls))
+        ok &= _ok("the fallback is announced on stderr, not silent",
+                  "NCBI OA" in err and "Europe PMC" in err)
+        _, _, err2 = _check(html404, _epmc("PMC5334499"))
+        ok &= _ok("the same warning is printed once per run, not once per record",
+                  err2 == "")
+
+        getattr(collect, "_OA_WARNED", set()).clear()
+        info, _, err = _check(_Resp(200, "<html>moved</html>", ctype="text/html"),
+                              _epmc("PMC5334499"))
+        ok &= _ok("a 200 that is not OA XML also falls back, with a warning",
+                  info.open_access and "nem OA-XML" in err)
+
+        info, _, _ = _check(collect.requests.ConnectionError("down"),
+                            _epmc("PMC5334499"))
+        ok &= _ok("a failed NCBI request falls back too", info.open_access)
+
+        info, _, _ = _check(html404, _epmc("PMC5334499", oa="N"))
+        ok &= _ok("Europe PMC saying 'not OA' is respected", not info.open_access)
+
+        info, _, _ = _check(html404, _epmc("PMC1111111"))
+        ok &= _ok("a Europe PMC hit for a different PMCID is not accepted",
+                  not info.open_access)
+
+        getattr(collect, "_OA_WARNED", set()).clear()
+        info, _, err = _check(html404, collect.requests.ConnectionError("down"))
+        ok &= _ok("both services down: not OA, and the reason is on stderr",
+                  not info.open_access and "Europe PMC OA-lekérdezés" in err)
+
+        info, sess, _ = _check(
+            _Resp(200, '<OA><error code="idIsNotOpenAccess">x</error></OA>'),
+            _epmc("PMC5334499"))
+        ok &= _ok("NCBI's definitive 'not open access' is final — no fallback",
+                  not info.open_access and len(sess.calls) == 1)
+
+        valid = ('<OA><records><record id="PMC5334499" license="CC BY">'
+                 '<link format="pdf" href="ftp://ftp.ncbi.nlm.nih.gov/pub/x.pdf"/>'
+                 '</record></records></OA>')
+        info, sess, _ = _check(_Resp(200, valid), _epmc("PMC5334499", oa="N"))
+        ok &= _ok("a valid NCBI OA record is used as before, ftp rewritten to https",
+                  info.open_access and info.license == "CC BY"
+                  and info.pdf_url == "https://ftp.ncbi.nlm.nih.gov/pub/x.pdf"
+                  and len(sess.calls) == 1)
+
         print("\n[multi-source corpus: the merge must not destroy the other source]")
         ok &= _ok("two source names join instead of overwriting",
                   collect._join_sources("PubMed", "Google Scholar")

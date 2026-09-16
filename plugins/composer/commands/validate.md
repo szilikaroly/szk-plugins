@@ -9,7 +9,7 @@ Work out what is being validated:
 - **A harvest or reference CSV** (has `pmid` and/or `doi` columns):
 
 ```
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/validate5d.py" --records <CSV> \
+"${CLAUDE_PLUGIN_ROOT}/scripts/run" validate5d.py --records <CSV> \
     --out <CSV>-validacio.csv --cache .v5d-cache.json --no-fulltext-gate
 ```
 

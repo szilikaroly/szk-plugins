@@ -37,7 +37,7 @@ defensible search base.
 2. Run:
 
 ```
-"${CLAUDE_PLUGIN_ROOT}/scripts/lookup" --outdir ~/Documents/PubMed_Downloads \
+"${CLAUDE_PLUGIN_ROOT}/scripts/run" lookup --outdir ~/Documents/PubMed_Downloads \
     --query '<QUERY>' --query-name <SLUG> --sources openalex --retmax 50
 ```
 

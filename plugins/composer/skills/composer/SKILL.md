@@ -37,8 +37,8 @@ title, an ahead-of-print volume — and is held as `variant`, not rejected.
 
 ```bash
 P="${CLAUDE_PLUGIN_ROOT}/scripts"
-python3 "$P/prospero.py" init --project <slug> --title "<review title>"
-python3 "$P/prospero.py" check --protocol <slug>-protocol.json
+"$P/run" prospero.py init --project <slug> --title "<review title>"
+"$P/run" prospero.py check --protocol <slug>-protocol.json
 ```
 
 `check` enforces two rules people get wrong, and it is worth reading its output
@@ -59,7 +59,7 @@ absence, and say that out loud once.
 ### 2. Harvest
 
 ```bash
-"$P/collect" --outdir ~/Documents/PubMed_Downloads \
+"$P/run" collect --outdir ~/Documents/PubMed_Downloads \
              --protocol <slug>-protocol.json \
              --query '<PubMed syntax>' --query-name <slug> \
              --raw --retmax 500 --xml-fallback
@@ -105,7 +105,7 @@ three cases. A search that never mentions Scholar cannot answer it at all.
 ### 2b. Google Scholar — supplementary only
 
 ```bash
-"$P/scholar" --outdir ~/Documents/PubMed_Downloads \
+"$P/run" scholar --outdir ~/Documents/PubMed_Downloads \
              --protocol <slug>-protocol.json \
              --query '"endometriosis" "economic burden" -mouse' --query-name <slug> \
              --retmax 100 --years 10 --min-citations 5 --xml-fallback
@@ -164,7 +164,7 @@ record the answer either way. The log gains a **Kiegészítő források** sectio
 using the same three states.
 
 ```
-"$P/lookup" --outdir ~/Documents/PubMed_Downloads \
+"$P/run" lookup --outdir ~/Documents/PubMed_Downloads \
     --query '<QUERY>' --query-name <SLUG> --sources openalex --retmax 50 \
     --after <SEARCH FOLDER>
 ```
@@ -229,12 +229,12 @@ print(df[['pmid','cim','folyoirat','ev','statusz','validacio']].to_string(index=
 ### 4. Screen, then build the PRISMA trail
 
 ```bash
-"$P/prisma" --project <slug> ingest        # search log + corpus + gate verdicts
-"$P/prisma" --project <slug> dedup --auto  # by DOI, then by normalised title
-"$P/prisma" --project <slug> template      # -> a decisions CSV of undecided records
-"$P/prisma" --project <slug> screen --from-csv <...>-szures.csv
-"$P/prisma" --project <slug> status
-"$P/prisma" --project <slug> export --format all
+"$P/run" prisma --project <slug> ingest        # search log + corpus + gate verdicts
+"$P/run" prisma --project <slug> dedup --auto  # by DOI, then by normalised title
+"$P/run" prisma --project <slug> template      # -> a decisions CSV of undecided records
+"$P/run" prisma --project <slug> screen --from-csv <...>-szures.csv
+"$P/run" prisma --project <slug> status
+"$P/run" prisma --project <slug> export --format all
 ```
 
 `ingest` carries the 5D verdicts into the flow: a rejected record becomes an
@@ -257,7 +257,7 @@ passage: `CC BY` is permissive, `CC BY-NC-ND` forbids derivatives.
 audits a manuscript's existing reference list:
 
 ```bash
-python3 "$P/validate5d.py" --records refs.csv --out refs-validacio.csv \
+"$P/run" validate5d.py --records refs.csv --out refs-validacio.csv \
         --cache .v5d-cache.json --no-fulltext-gate
 ```
 
@@ -280,6 +280,15 @@ and under which licence, fetches from the OA link or Europe PMC's render
 endpoint, and verifies the `%PDF-` header before keeping the file. Non-OA papers
 stay metadata-only — that is the honest outcome. Do not add a scraping fallback.
 
+The NCBI OA service's old address (`www.ncbi.nlm.nih.gov/pmc/utils/oa/oa.fcgi`)
+has answered with an HTML 404 since at least 2026-09-16. When that service fails
+or returns anything that is not OA XML, `collect` prints a `! az NCBI OA
+szolgáltatás …` warning once and asks **Europe PMC's REST search**
+(`isOpenAccess`, `license`) instead; the PDF then comes from Europe PMC's render
+endpoint, or JATS XML with `--xml-fallback`. If you see that warning, say so in
+the report. If you see *both* services failing, every PMC paper in that run was
+held for lack of full text — report it as a retrieval failure, not as "not OA".
+
 For a DOI that PMC does not hold, `scholar` asks **Unpaywall** — the documented
 API for "is there a legal free copy of this DOI, and where" — and downloads the
 publisher's or repository's own deposit, header-checked the same way. Links that
@@ -288,12 +297,20 @@ place in this plugin that touches a page it was not invited to, it is confined
 to discovery, and the search log says so in writing.
 
 Credentials resolve `--api-key`/`--email` → `NCBI_API_KEY`/`NCBI_EMAIL` →
-`~/.config/ncbi/env` (already set up, mode 600), so normally pass nothing.
+`~/.config/ncbi/env` (mode 600). That file exists on the Mac; on the Windows
+machine (`C:\Users\szili\.config\ncbi\env`) it does **not**, so there `collect`
+stops asking for an e-mail. Pass `--email` (and `--api-key` if the user has one),
+or ask the user to create the file — never write an API key into it yourself.
 
-## Dependencies
+## Dependencies and the launcher
 
-`collect` needs `biopython`, `requests`, optionally `pandas`, on the Anaconda
-python3 its shebang names. `scholar` needs all of that plus `scholarly`
+Always call the scripts through `scripts/run <script> …`, not directly. The
+shebangs name `/Users/szili/anaconda3/bin/python3`, which exists only on the Mac;
+on Windows `python3` is the Microsoft Store stub. `run` picks the first
+interpreter that can actually import what the script needs (`COMPOSER_PYTHON` /
+`SZK_PYTHON` override it; `run --which collect` shows the choice).
+
+`collect` needs `biopython`, `requests`, optionally `pandas`. `scholar` needs all of that plus `scholarly`
 (`pip install scholarly`); it imports `collect` as a module, so the Article
 schema, the PMC OA download path, the search-folder writer and the 5D runner are
 literally the same code, not a parallel copy. `validate5d.py`, `prospero.py` and
