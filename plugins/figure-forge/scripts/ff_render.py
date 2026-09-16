@@ -126,20 +126,42 @@ def forest_plot(df, *, label, effect, low, high, width="double",
     ax.set_xlabel(tx(xlabel))
     ax.spines["left"].set_visible(False)
 
+    # x limits first, so the obstacle geometry the verifier sees is final.
+    # On a log axis the padding has to be taken in log space: a linear
+    # subtraction can land on zero or below, which is not a point a log axis
+    # has.
+    xmin = min(r[low] for r in rows)
+    xmax = max(r[high] for r in rows)
+    if logx:
+        import math
+        lo_l, hi_l = math.log10(xmin), math.log10(xmax)
+        pad = 0.05 * max(hi_l - lo_l, 0.1)
+        ax.set_xlim(10 ** (lo_l - pad), 10 ** (hi_l + pad))
+    else:
+        xspan = (xmax - xmin) or 1.0
+        ax.set_xlim(xmin - 0.05 * xspan, xmax + 0.05 * xspan)
+    ax.set_ylim(-1, n)
+
     # register obstacles (CI lines + markers) BEFORE placing labels
     v.auto_obstacles_from_axes(ax)
 
-    # study labels to the left of the lowest CI; placed then collision-checked
-    xmin = min(r[low] for r in rows)
-    xspan = max(r[high] for r in rows) - xmin
-    lx = xmin - 0.04 * xspan
+    # Study labels sit in the left margin, anchored in AXES coordinates - not
+    # in data space. Data space gave the labels no room at all on a log axis
+    # (a 4 % slice of a decade is a hair), so every label ran off the canvas
+    # and the tight bbox silently widened the figure past the journal column
+    # it was built for. The margin is then reserved to fit the widest label,
+    # which keeps the requested physical width honest.
     for y, r in zip(ys, rows):
         name = tx(str(r[label]))
-        t = ax.text(lx, y, name, va="center", ha="right",
+        t = ax.text(-0.012, y, name, va="center", ha="right",
+                    transform=ax.get_yaxis_transform(),
                     fontsize=S.FONT_TICK, clip_on=False)
         v.add_label(t, ax, name=name)
-    ax.set_xlim(lx - 0.02 * xspan, max(r[high] for r in rows) + 0.05 * xspan)
-    ax.set_ylim(-1, n)
+    fig.canvas.draw()
+    rend = fig.canvas.get_renderer()
+    fig_px = fig.get_size_inches()[0] * fig.dpi
+    widest = max((t.get_window_extent(rend).width for t in ax.texts), default=0.0)
+    fig.subplots_adjust(left=min(0.75, widest / fig_px + 0.03), right=0.98)
     if title:
         ax.set_title(tx(title), loc="left", fontweight="bold")
     return fig, v
@@ -183,11 +205,24 @@ def flowchart(spec, *, width="single", title=None):
         patches[nid] = box
 
     # edges first as obstacles, so labels avoid them
+    def _border(nd, tx_, ty_):
+        """Where the segment from a box centre towards (tx_, ty_) leaves the box."""
+        cx, cy = nd["x"], nd["y"]
+        hw, hh = nd.get("w", 26) / 2, nd.get("h", 12) / 2
+        dx, dy = tx_ - cx, ty_ - cy
+        if dx == 0 and dy == 0:
+            return cx, cy
+        t = min(hw / abs(dx) if dx else float("inf"), hh / abs(dy) if dy else float("inf"))
+        return cx + dx * t, cy + dy * t
+
     for e in edges:
         a, b = nodes[e["from"]], nodes[e["to"]]
-        arr = ax.annotate("", xy=(b["x"], b["y"]), xytext=(a["x"], a["y"]),
+        # Border to border. Drawn centre to centre and shrunk by a fixed 14 pt, the heads of
+        # any arrow into a box taller than about 28 pt ended under the box fill, invisible.
+        start, end = _border(a, b["x"], b["y"]), _border(b, a["x"], a["y"])
+        arr = ax.annotate("", xy=end, xytext=start,
                           arrowprops=dict(arrowstyle="-|>", color=S.SPINE,
-                                          lw=0.8, shrinkA=14, shrinkB=14),
+                                          lw=0.8, shrinkA=0, shrinkB=0),
                           zorder=1)
     for p in patches.values():
         v.add_obstacle("patch", p)

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "figure-forge",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "displayName": "Figure Forge",
   "description": "Nature-style scientific figures at 600 dpi with editable-text labels and a self-correcting quality loop that guarantees no label sits outside its box or covers a curve, marker or arrow. Differentiates sign from punctuation — U+2212 minus for negative numbers, en dash for ranges, hyphen for compounds — while leaving identifiers like IL-6, HLA-B27 and COVID-19 alone, and verifies the resolved font can actually draw every character it introduces. Builds box plots, forest plots, flowcharts, panel-flow diagrams and multi-panel composites; exports editable SVG (font fallback stack, human-named layers) plus 600 dpi PNG/TIFF, PDF and PPTX; audits any existing SVG or PDF for whether its text is still text. Writes a QC audit and a visual proof overlay for every figure.",
   "author": {
