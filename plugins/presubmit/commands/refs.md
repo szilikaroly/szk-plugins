@@ -16,3 +16,9 @@ end of the list, and references that are never cited in the text.
 Report every finding with its reference number so the user can jump straight to
 it. Note that the author–year citation style is only partially checked (numeric
 `[n]` cross-checking is exact; author–year is not).
+
+**Journal blacklist.** Every reference is also checked against the MTMT *Norvég
+lista* (`scripts/journal_blacklist.py`, data in `~/.szk-blacklist/`): the user
+has banned those journals as cited sources and as venues. A hit is an error —
+replace the source, do not keep it with a caveat. Refresh the list yearly
+(January–February) with `journal_blacklist.py update`.

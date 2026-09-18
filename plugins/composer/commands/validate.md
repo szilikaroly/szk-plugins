@@ -33,3 +33,8 @@ Then:
    reference to match the bad deposit.
 4. Never silently correct a reference. Show the discrepancy, propose the fix,
    let the user decide.
+
+**Tiltólista.** A 5D-kapu a MTMT *Norvég lista* lapjait (`scripts/journal_blacklist.py`,
+adat: `~/.szk-blacklist/`) automatikusan `elutasitva` állapotba teszi, bármennyire
+egyezik a többi dimenzió — a felhasználó ezeket nem hivatkozza. Az ok a
+`tiltolista` oszlopban. Évente (jan–feb) frissítendő: `journal_blacklist.py update`.

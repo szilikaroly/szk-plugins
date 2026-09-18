@@ -58,6 +58,37 @@ from pathlib import Path
 
 DIMENSIONS = ("doi", "elso_szerzo", "szerzok", "folyoirat", "kotet")
 
+# The MTMT "Norvég lista" (journal_blacklist.py, vendored from ~/.szk-blacklist):
+# the user banned these journals as cited sources, so a paper from one is
+# rejected however well its 5 dimensions agree. Loaded lazily; missing data
+# is reported once and the gate runs without it rather than failing.
+_BLACKLIST: object = False
+
+
+def blacklist_hit(local: dict, canon: dict) -> str:
+    global _BLACKLIST
+    if _BLACKLIST is False:
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            import journal_blacklist
+            _BLACKLIST = journal_blacklist.load()
+        except Exception:
+            _BLACKLIST = None
+        if _BLACKLIST is None:
+            print("  ! tiltólista (Norvég lista) nem elérhető — "
+                  "futtasd: journal_blacklist.py update", file=sys.stderr)
+    if not _BLACKLIST:
+        return ""
+    import journal_blacklist
+    issns = journal_blacklist.issns_in(" ".join((local.get("issn") or []) + (canon.get("issn") or [])))
+    v, j, why = _BLACKLIST.check_issns(issns)
+    if v == "OK" and not issns:
+        for t in (canon.get("folyoirat") or []) + (local.get("folyoirat") or []):
+            v, j, why = _BLACKLIST.check_title(t)
+            if v == "BLOCKED":
+                break
+    return f"{j['title']} ({why})" if v == "BLOCKED" else ""
+
 CROSSREF = "https://api.crossref.org/works/"
 EUTILS = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
 ESEARCH = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
@@ -761,6 +792,9 @@ def validate_row(row: dict, fetcher: Fetcher, require_fulltext: bool,
         ft = bool(f) and Path(f).expanduser().exists()
 
     state, why, dims = verdict_of(dims, ft)
+    tilt = blacklist_hit(local, canon)
+    if tilt:
+        state, why = "elutasitva", f"tiltólistás folyóirat (MTMT Norvég lista): {tilt}"
     out = {
         "pmid": pmid,
         "doi": local["doi"],
@@ -770,6 +804,7 @@ def validate_row(row: dict, fetcher: Fetcher, require_fulltext: bool,
         "indok": why + (f" [{err}]" if err else ""),
         "teljes_szoveg": "" if ft is None else ("van" if ft else "nincs"),
         "megjegyzes": "; ".join(notes),
+        "tiltolista": tilt,
     }
     for d in DIMENSIONS:
         out[f"d_{d}"] = dims[d][0]

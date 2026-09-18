@@ -52,3 +52,8 @@ Run a Composer harvest. What the user asked for: $ARGUMENTS
    If the user is tired of the question, `COMPOSER_SCHOLAR=no` in the
    environment settles it once; `--scholar yes|no` settles a single run.
 7. Offer the PRISMA step next.
+
+**Tiltólista.** A 5D-kapu a MTMT *Norvég lista* lapjait (`scripts/journal_blacklist.py`,
+adat: `~/.szk-blacklist/`) automatikusan `elutasitva` állapotba teszi, bármennyire
+egyezik a többi dimenzió — a felhasználó ezeket nem hivatkozza. Az ok a
+`tiltolista` oszlopban. Évente (jan–feb) frissítendő: `journal_blacklist.py update`.

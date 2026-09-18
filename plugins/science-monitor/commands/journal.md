@@ -45,6 +45,13 @@ manuscript's length; the scope covers the claim; open-access fee and whether the
 user's institution has an agreement; and typical time to first decision if the
 journal publishes it.
 
+**Tiltólista (kötelező):** every candidate must pass
+`python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal_blacklist.py" check <ISSN>` before it
+reaches the table. The user banned all MTMT *Norvég lista* journals as venues
+(Cureus, Molecules, Foods, Oncotarget … — 7600+). A BLOCKED candidate is dropped
+and named among the rejected ones ("tiltólistás — MTMT Norvég lista"); a SUSPECT
+title-only hit is resolved by ISSN before it is proposed.
+
 ## Step 3 — rank and report
 
 Give the user a short table in Hungarian: journal · why it fits · article type

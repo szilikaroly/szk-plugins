@@ -33,6 +33,14 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import sm_lib as L  # noqa: E402
 
+# The user's standing ban on MTMT "Norvég lista" journals (vendored module,
+# data in ~/.szk-blacklist). Missing data degrades to no check, not a crash.
+try:
+    import journal_blacklist as JB  # noqa: E402
+    BLACKLIST = JB.load()
+except Exception:
+    BLACKLIST = None
+
 # Crossref rate-limits anonymous traffic hard. A contact address puts the
 # requests in the polite pool, and 429 still has to be honoured with a wait.
 def _ua():
@@ -172,6 +180,14 @@ def check(ref):
     severity = "error"
     epmc = None  # fetched at most once, lazily
 
+    banned = None
+    if BLACKLIST is not None:
+        v, j, why = BLACKLIST.check_title((cr.get("container-title") or [""])[0],
+                                          JB.issns_in(" ".join(cr.get("ISSN") or [])))
+        if v == "BLOCKED":
+            banned = (f"TILTÓLISTÁS FOLYÓIRAT (MTMT Norvég lista): {j['title']} ({why}) — "
+                      f"nem hivatkozható, cseréld le")
+
     year = reg_year(cr)
     if ref["year"] and year and ref["year"] != year:
         epmc = europepmc(ref["doi"])
@@ -243,6 +259,9 @@ def check(ref):
                             "Europe PMC nem ismeri — ellenőrizd kézzel)")
             severity = "note"
 
+    if banned:
+        problems.insert(0, banned)
+        severity = "error"  # outranks any year/author note
     if not problems:
         return None
     return ref, " · ".join(problems), (cr.get("title") or [""])[0][:70], severity

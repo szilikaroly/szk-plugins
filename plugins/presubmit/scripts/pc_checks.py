@@ -9,6 +9,12 @@ from difflib import SequenceMatcher
 
 from pc_lib import F, ERROR, WARN, INFO, word_count
 
+try:  # vendored from ~/.szk-blacklist; offline — reads a local JSON only
+    import journal_blacklist as _jbl
+    _BL = _jbl.load()
+except Exception:
+    _BL = None
+
 DOI_RE = re.compile(r"10\.\d{4,9}/[-._;()/:A-Za-z0-9]+")
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 YEAR_RE = re.compile(r"\b(1[89]\d\d|20\d\d)\b")
@@ -204,6 +210,8 @@ def check_references(doc, profile):
                              where=f"ref {i+1}/{j+1}",
                              fix="Keep one; delete the other and renumber."))
 
+    out.extend(_blacklist_findings(entries, profile))
+
     # in-text cross-check
     cited = _cited_numbers(doc)
     if cited:
@@ -226,6 +234,37 @@ def check_references(doc, profile):
                      "No numeric [n] in-text citations found — cross-check with "
                      "the reference list was skipped (author–year style?).",
                      where="body"))
+    return out
+
+
+def _blacklist_findings(entries, profile):
+    """The user's standing ban: MTMT "Norvég lista" journals are neither cited
+    nor submitted to. ISSN or NLM-abbreviation hit = ERROR; a bare title match
+    (a namesake is possible) = WARN."""
+    if _BL is None:
+        return [F("references", INFO, "blacklist-unavailable",
+                  "Journal blacklist (MTMT Norvég lista) not found — "
+                  "run journal_blacklist.py update.", where="references")]
+    out = []
+    v, j, why = _BL.check_title(profile.get("name", ""))
+    if v == "BLOCKED" or (v == "SUSPECT" and profile.get("name", "").lower() != "generic"):
+        out.append(F("references", ERROR, "target-journal-blacklisted",
+                     f"Target journal {profile['name']} is on the MTMT Norvég lista "
+                     f"({_jbl.describe(j)}): publications there do not count and "
+                     "must not be used.", where="journal",
+                     fix="Choose a different journal."))
+    for i, e in enumerate(entries, 1):
+        v, j, why = _BL.check_reference(e)
+        if v == "BLOCKED":
+            out.append(F("references", ERROR, "ref-blacklisted-journal",
+                         f"Reference {i} is from a blacklisted journal: "
+                         f"{j['title']} ({why}).", where=f"ref {i}",
+                         fix="Replace with a source from a non-listed journal: " + _snip(e)))
+        elif v == "SUSPECT":
+            out.append(F("references", WARN, "ref-blacklist-suspect",
+                         f"Reference {i} may be from a blacklisted journal: "
+                         f"{j['title']} ({why}).", where=f"ref {i}",
+                         fix="Check the journal's ISSN against the list: " + _snip(e)))
     return out
 
 

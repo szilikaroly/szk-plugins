@@ -69,3 +69,9 @@ a better outcome than a silent wrong edit.
 Errors first with their reference numbers and exact replacement text, then the
 questions, then the notes. Never edit the manuscript without showing the user
 the change first.
+
+**Journal blacklist.** Every reference is also checked against the MTMT *Norvég
+lista* (`scripts/journal_blacklist.py`, data in `~/.szk-blacklist/`): the user
+has banned those journals as cited sources and as venues. A hit is an error —
+replace the source, do not keep it with a caveat. Refresh the list yearly
+(January–February) with `journal_blacklist.py update`.
