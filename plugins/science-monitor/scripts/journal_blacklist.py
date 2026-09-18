@@ -213,14 +213,28 @@ def _report(results):
 
 
 def _read_text(path):
-    if path.lower().endswith((".docx", ".doc", ".pdf", ".odt", ".rtf")):
-        tool = "pdftotext" if path.lower().endswith(".pdf") else "doctotext"
+    """doctotext / pdftotext when on PATH, else pandoc, else the raw .docx XML —
+    Git Bash on Windows has no doctotext, and a crash there hid every result."""
+    low = path.lower()
+    if not low.endswith((".docx", ".doc", ".pdf", ".odt", ".rtf")):
+        return open(path, encoding="utf-8", errors="replace").read()
+    if low.endswith(".pdf"):
+        tools = [["pdftotext", "-layout", path, "-"]]
+    else:
+        tools = [["doctotext", path], ["pandoc", path, "-t", "plain", "--wrap=none"]]
+    for cmd in tools:
         try:
-            return subprocess.run([tool, path], capture_output=True, text=True,
-                                  encoding="utf-8").stdout
+            r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
+            if r.returncode == 0 and r.stdout.strip():
+                return r.stdout
         except FileNotFoundError:
-            sys.exit(f"{tool} not found; extract the text first")
-    return open(path, encoding="utf-8", errors="replace").read()
+            continue
+    if low.endswith(".docx"):
+        import zipfile
+        xml = zipfile.ZipFile(path).read("word/document.xml").decode("utf-8", "replace")
+        xml = xml.replace("</w:p>", "\n")
+        return html.unescape(re.sub(r"<[^>]+>", "", xml))
+    sys.exit(f"cannot extract text from {path}: install doc-tools or pandoc")
 
 
 def _check_query(bl, q):
@@ -235,11 +249,21 @@ def _check_query(bl, q):
 
 
 def _ref_lines(text):
-    """Reference-list entries: text after a References heading, one per line/number."""
+    """Reference-list entries: text after a References heading, one per line.
+    A list flattened into one paragraph is split after every DOI, so no entry
+    hides behind the first DOI on its line."""
     m = list(re.finditer(r"^\s*(references|bibliography|irodalom(jegyz[eé]k)?|literature cited)\s*$",
                          text, re.I | re.M))
     body = text[m[-1].end():] if m else text
-    return [l.strip() for l in body.splitlines() if len(l.strip()) > 20]
+    out = []
+    for l in body.splitlines():
+        l = l.strip()
+        cut = 0
+        for d in DOI_RE.finditer(l):  # Vancouver entries end in their DOI
+            out.append(l[cut:d.end()].strip())
+            cut = d.end()
+        out.append(l[cut:].strip())
+    return [l for l in out if len(l) > 20]
 
 
 def main(argv):
