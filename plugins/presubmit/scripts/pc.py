@@ -23,7 +23,8 @@ from pathlib import Path
 import pc_lib
 import pc_checks as C
 
-CATS = ["structure", "authors", "abstract", "references", "ethics", "format"]
+CATS = ["structure", "authors", "abstract", "references", "ethics", "format",
+        "submission", "claims"]
 SEV_ICON = {pc_lib.ERROR: "✗", pc_lib.WARN: "!", pc_lib.INFO: "·"}
 SEV_LABEL = {pc_lib.ERROR: "ERROR", pc_lib.WARN: "WARN", pc_lib.INFO: "INFO"}
 
@@ -35,6 +36,8 @@ def _run(cats, args):
     findings = []
     for cat in cats:
         findings.extend(C.ALL_CHECKS[cat](doc, profile))
+    if getattr(args, "online", False) and "references" in cats:
+        findings.extend(_online_findings(doc))
     report = _report(doc, profile, findings, args.manuscript)
     _print(report)
     if getattr(args, "json", None):
@@ -42,6 +45,33 @@ def _run(cats, args):
         print(f"\n  audit written: {args.json}")
     # exit non-zero if any ERROR, so it can gate a pipeline
     return 1 if report["counts"]["error"] else 0
+
+
+def _online_findings(doc):
+    """Opt-in PubMed lookup: has a cited paper been corrected or retracted?"""
+    import pc_online
+    from pc_lib import F, ERROR, WARN, INFO
+    entries = C._reference_entries(doc)
+    if not entries:
+        return []
+    results, err = pc_online.check(entries)
+    if err:
+        return [F("references", INFO, "online-check-skipped",
+                  f"Correction/retraction check could not run: {err}.",
+                  fix="Re-run with a working connection, or verify the references by hand.")]
+    out = []
+    for idx, kind, msg, ident in results:
+        where = f"reference {idx}" if idx else ident
+        sev = ERROR if kind == "retraction" else WARN
+        out.append(F("references", sev, f"reference-{kind}", msg, where=where,
+                     fix="Open the notice and check whether it touches the number you "
+                         "quote. Many corrections are bibliographic only — but you have "
+                         "to look before you can say so."))
+    if not out:
+        out.append(F("references", INFO, "online-check-clean",
+                     "No corrections, retractions or expressions of concern found for the "
+                     "references that resolved to a PubMed record."))
+    return out
 
 
 def _report(doc, profile, findings, path):
@@ -133,10 +163,14 @@ def build_parser():
             sp.add_argument("--journal", default="generic",
                             help="profile name (see `pc.py journals`)")
         sp.add_argument("--json", default=None, help="write JSON audit here")
+        sp.add_argument("--online", action="store_true",
+                        help="also ask PubMed whether any cited paper has been "
+                             "corrected or retracted (the only check that uses the network)")
 
     c = sub.add_parser("check", help="run every check")
     add_ms(c); c.set_defaults(func=cmd_check)
-    for cat in ("refs", "ethics", "format", "authors", "abstract"):
+    for cat in ("refs", "ethics", "format", "authors", "abstract",
+                "submission", "claims"):
         key = "references" if cat == "refs" else cat
         sp = sub.add_parser(cat, help=f"{key} check only")
         add_ms(sp); sp.set_defaults(func=cmd_one(key))

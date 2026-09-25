@@ -67,6 +67,16 @@ SECTION_ALIASES = {
 
 _HEADING_MAX_WORDS = 8
 
+# "References: 10" or "Word Count: 998" on a title page is a declaration, not a
+# section heading. Treating it as one makes the whole body look like a reference
+# list. Only these count-style labels are affected, and only when the value on
+# the same line is short — "Keywords: heart, mice" keeps working as a heading
+# with inline content.
+_COUNT_LABELS = {"references", "reference", "figures", "figure", "tables",
+                 "table", "word count", "wordcount", "running head",
+                 "running title", "orcid"}
+_LABEL_VALUE = re.compile(r"^([A-Za-z][A-Za-z ]{0,24})\s*:\s*(\S.*)$")
+
 
 def _norm(s: str) -> str:
     return re.sub(r"[^a-z ]", "", s.strip().lower()).strip()
@@ -76,7 +86,13 @@ def looks_like_heading(line: str, styled=False) -> str | None:
     """Return the normalised section key if `line` is a section heading, else
     None. `styled` is True when the source (docx) already tagged it a heading.
     """
-    raw = line.strip().rstrip(":.").strip()
+    raw = line.strip()
+    m = _LABEL_VALUE.match(raw)
+    if m and not styled:
+        label, value = _norm(m.group(1)), m.group(2).strip()
+        if label in _COUNT_LABELS and len(value.split()) <= 3:
+            return None
+    raw = raw.rstrip(":.").strip()
     if not raw:
         return None
     key = _norm(raw)
@@ -129,7 +145,7 @@ def load_profile(name: str):
     p = here / f"{name.lower()}.json"
     if not p.exists():
         p = here / "generic.json"
-    return json.loads(p.read_text())
+    return json.loads(p.read_text(encoding="utf-8"))
 
 
 def list_profiles():

@@ -1,21 +1,26 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "presubmit",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "displayName": "Presubmit",
-  "description": "Catches the common manuscript submission mistakes before a journal does — missing sections, incomplete author/affiliation/email info, over-long abstracts and bad keyword counts, reference problems (duplicates by DOI or text, missing years, malformed DOIs, in-text citations with no matching reference, references never cited), and missing ethics/disclosure statements (conflict of interest, funding, human subjects, informed consent), plus deterministic language/typography errors. Reads .docx/.pdf/.tex/.txt, applies a journal profile (Cureus built in), and prints a severity-ranked readiness report with fix hints. Offline and deterministic — no language model, no spell dictionary, so no false positives on medical terms.",
+  "description": "Catches the common manuscript submission mistakes before a journal does. Checks sections, author/affiliation/email completeness, abstract length and keyword counts, reference problems (duplicates by DOI or text, missing years, malformed DOIs, citations with no matching reference, references never cited), missing ethics/disclosure statements, and deterministic language/typography errors. Also catches what an editorial round actually flags: placeholders and unresolved tracked changes or comments left in the submitted .docx, a declared word count over the format's limit, more references than the format allows, effect estimates reported without a confidence interval, trials named only by acronym, the same study described twice, and the authors' own ongoing study promoted in the conclusion. Reads .docx/.pdf/.tex/.txt, applies a journal profile (Cureus and Annals Ideas and Opinions built in), and prints a severity-ranked readiness report with fix hints. Offline and deterministic by default — no language model, no spell dictionary, so no false positives on medical terms; an opt-in --online flag additionally asks PubMed whether any cited paper has been corrected or retracted.",
   "author": {
     "name": "Dr. Szili Károly"
   },
   "license": "MIT",
   "keywords": [
+    "annals",
+    "checklist",
+    "confidence-interval",
+    "cureus",
+    "ethics",
     "manuscript",
-    "submission",
+    "peer-review",
     "presubmission",
     "references",
-    "ethics",
-    "cureus",
-    "peer-review",
-    "checklist"
+    "retraction",
+    "submission",
+    "tracked-changes",
+    "word-limit"
   ]
 }

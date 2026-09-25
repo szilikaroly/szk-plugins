@@ -1,0 +1,26 @@
+{
+  "name": "Annals of Internal Medicine — Ideas and Opinions",
+  "article_type": "opinion",
+  "body_max_words": 1000,
+  "references_max": 10,
+  "figures_max": 1,
+  "abstract_required": false,
+  "keywords_required": false,
+  "abstract_max_words": null,
+  "abstract_min_words": null,
+  "reference_style": "AMA / Annals numbered, parenthetical callouts (1)",
+  "required_sections": [],
+  "required_disclosures": [
+    "conflict of interest",
+    "funding"
+  ],
+  "recommended_disclosures": [
+    "author contributions"
+  ],
+  "discouraged_disclosures": [
+    "human subjects",
+    "informed consent"
+  ],
+  "registration_in_text_discouraged": true,
+  "notes": "Ideas and Opinions: a short essay for a general internal-medicine readership — no abstract, no keywords, no IMRaD sections. LIMITS: the 1000-word body cap and the 10-reference cap are author-confirmed from submitted rounds, not scraped from the published instructions for authors; the 1-figure value is observed from one accepted submission and may not be the formal ceiling. Verify against Annals' instructions before relying on figures_max. Ethics approval, informed consent and trial registration belong on the ICMJE disclosure form, which Annals publishes alongside the article, not in the manuscript — an editor will ask for their removal. Every study named by acronym needs a one-line description in the text, and every effect estimate needs its 95% CI."
+}
