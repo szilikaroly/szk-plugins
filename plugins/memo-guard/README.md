@@ -155,9 +155,23 @@ time it changed, autopilot **measures where compaction actually landed** and
 corrects the override toward the target — one proportional step, because both
 sides are a fraction of a fixed window. Verified against a transcription of that
 formula in `selftest.py`: all three rows above reach 70.0% in **at most one
-correction**. `--status` shows every sample. Only *automatic* compactions are
-samples — a manual `/compact` is you choosing a moment, and calibrating on it
-would teach autopilot your habits instead of the product's arithmetic.
+correction**. `--status` shows the last five samples and where their median puts
+the current override. Only *automatic* compactions are samples — a manual
+`/compact` is you choosing a moment, and calibrating on it would teach autopilot
+your habits instead of the product's arithmetic.
+
+One firing is not enough to act on. Where a compaction lands depends on how big
+the last step was, not only on the override, so autopilot corrects from the
+**median of the last five firings** — each one, divided by the override that
+aimed it, measures the same ratio — and moves only when that median misses the
+target. Correcting from the latest firing alone once undid a calibration that
+was on target: fifteen compactions at 68.7–70.5% with override 89.7, then one
+at 65.1%; the override went to the 95 ceiling and the next compaction overshot
+to 73.2%. The median of those firings puts 89.7 at 69.5%, so now nothing moves.
+The price is patience with a genuine change — an edited `autoCompactWindow`, a
+model with a different window — which is corrected after three compactions
+instead of one. A faster trigger, two misses in a row, was considered and
+rejected: two outliers in a row look exactly like that.
 
 **It takes effect in the next session.** The environment is read when the process
 starts, so writing `settings.json` cannot move the running session's threshold.

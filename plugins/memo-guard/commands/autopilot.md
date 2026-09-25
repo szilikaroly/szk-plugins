@@ -26,6 +26,12 @@ What to tell the user, accurately:
   Claude Code measures against an *effective* window that is smaller than the
   model's. memo-guard records where it fired and corrects the override — say
   this up front rather than letting the user discover it as a bug.
+- After that, one compaction that lands far from the others does not move the
+  override: the correction comes from the median of the last five firings, and
+  `--status` shows where that median puts the current override. If the user
+  asks why an off-target compaction was not corrected, this is why. A genuine
+  change (an edited `autoCompactWindow`, a model with a different window) is
+  corrected after three compactions.
 
 If `--status` reports blockers (`DISABLE_AUTO_COMPACT`, `autoCompactEnabled:
 false`, an `autoCompactWindow` setting), name them; the override does nothing

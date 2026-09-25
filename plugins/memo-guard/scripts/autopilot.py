@@ -30,7 +30,9 @@ Two things this deliberately does not assume
    compaction at the 70% this plugin reports. Rather than reimplement the
    product's arithmetic (which would break the first time it changed), autopilot
    measures where compaction actually landed and corrects the override toward
-   the target. One or two compactions and it converges.
+   the target. One or two compactions and it converges. It corrects from the
+   median of the recent firings, so one that lands somewhere odd is outvoted
+   rather than obeyed.
 
 2. **The environment is read at process start.** Writing settings.json cannot
    change the running session's `process.env`; the new value applies from the
@@ -42,6 +44,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import statistics
 import sys
 import time
 from pathlib import Path
@@ -56,6 +59,12 @@ OVERRIDE_MIN, OVERRIDE_MAX = 5.0, 95.0
 # How far off target a firing has to land before the override is moved. Small
 # drifts are noise — the token count at a turn boundary is not continuous.
 TOLERANCE_PCT = 2.5
+# How many recent firings the correction is drawn from. Five, so that one or two
+# that landed somewhere odd are outvoted; the cost is that a genuine change (an
+# edited autoCompactWindow, a different window) needs three firings — a
+# majority — before it is followed. Two misses in a row were considered as the
+# trigger instead and rejected: that is also what two outliers look like.
+MEDIAN_OF = 5
 
 
 def settings_path() -> Path:
@@ -185,15 +194,48 @@ def caveats() -> list[str]:
 
 # --------------------------------------------------------------------------- calibration
 
+def estimate(samples: list) -> tuple[float, int] | None:
+    """(median of measured/override over the last MEDIAN_OF firings, how many).
+
+    The relationship is linear — both sides are a fraction of a fixed window —
+    so every firing measures the same ratio whatever override aimed it, and
+    firings from before a correction are still evidence after it. None when
+    there is nothing usable to go on.
+    """
+    ratios = []
+    for s in samples:
+        try:
+            measured, override = float(s["measured"]), float(s["override"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if measured > 0 and override > 0:
+            ratios.append(measured / override)
+    ratios = ratios[-MEDIAN_OF:]
+    return (statistics.median(ratios), len(ratios)) if ratios else None
+
+
 def record_firing(measured_pct: float, cfg: dict) -> dict:
     """A compaction just fired at `measured_pct` of our window. Learn from it.
 
     Called from the PreCompact hook with trigger=auto. Manual compactions are
     not samples: the user chose the moment, so they say nothing about where the
     threshold sits.
+
+    This firing is one vote, not the verdict. Where a compaction lands depends
+    on how big the last step was, not only on the override, and correcting from
+    the latest firing alone undid a calibration that was on target: override
+    89.7 fired fifteen times between 68.7% and 70.5%, then once at 65.1%; that
+    one was taken at its word (89.7 * 70 / 65.1 = 96.5, clamped to 95), and the
+    next compaction overshot to 73.2%. The median of those firings puts 89.7 at
+    69.5% — nothing to correct.
     """
     st = load_state()
     if not st.get("enabled"):
+        return st
+    # Zero means no usage was read — the last record before compaction can be a
+    # synthetic message with an all-zero usage block. That measures nothing, so
+    # it is neither a sample nor, as it once counted, proof of calibration.
+    if not measured_pct > 0:
         return st
     target = float(st.get("target", cfg.get("auto_compact_at", 70)))
     override = float(st.get("override", target))
@@ -204,15 +246,20 @@ def record_firing(measured_pct: float, cfg: dict) -> dict:
                     "ts": time.strftime("%Y-%m-%dT%H:%M:%S")})
     st["samples"] = samples[-20:]
 
-    drift = measured_pct - target
-    if abs(drift) <= TOLERANCE_PCT or measured_pct <= 0:
+    est = estimate(st["samples"])
+    if est is None:
+        # Only reachable with an unusable override in the state file.
+        save_state(st)
+        return st
+    ratio, n = est
+    expected = ratio * override
+    if abs(expected - target) <= TOLERANCE_PCT:
         st["calibrated"] = True
         save_state(st)
         return st
 
-    # The relationship is linear — both sides are a fraction of a fixed window —
-    # so one proportional step lands on target rather than crawling toward it.
-    new = override * target / measured_pct
+    # One proportional step lands on target rather than crawling toward it.
+    new = target / ratio
     new = max(OVERRIDE_MIN, min(OVERRIDE_MAX, new))
     if abs(new - override) < 0.5:
         st["calibrated"] = True
@@ -224,6 +271,9 @@ def record_firing(measured_pct: float, cfg: dict) -> dict:
     st["last_correction"] = {
         "from": override, "to": st["override"],
         "fired_at_pct": round(measured_pct, 1), "target": target,
+        # What the step was actually taken from. Absent in states written
+        # before 0.14.2, which corrected from fired_at_pct alone.
+        "expected_pct": round(expected, 1), "median_of": n,
         "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
     try:
@@ -287,13 +337,19 @@ def cmd_status(as_json: bool = False) -> int:
     cur = os.environ.get(ENV_KEY)
     data = read_settings()
     in_settings = (data.get("env") or {}).get(ENV_KEY)
+    est = estimate(st.get("samples", []))
+    override = _num(st.get("override"))
     info = {
         "enabled": bool(st.get("enabled")),
         "target_pct": st.get("target"),
         "override_written": in_settings,
         "override_active_in_this_process": cur,
         "calibrated": bool(st.get("calibrated")),
-        "samples": st.get("samples", [])[-5:],
+        # Where the recent firings put the current override. This, not the
+        # latest firing, is what calibration is judged by.
+        "expected_pct": (round(est[0] * override, 1)
+                         if est and override > 0 else None),
+        "samples": st.get("samples", [])[-MEDIAN_OF:],
         "last_correction": st.get("last_correction"),
         "blockers": blockers(),
         "caveats": caveats(),
@@ -309,12 +365,20 @@ def cmd_status(as_json: bool = False) -> int:
     print(f"override written : {in_settings or '(none)'}")
     print(f"override active  : {cur or '(not in this process — set before it started)'}")
     print(f"calibrated       : {'yes' if info['calibrated'] else 'no (learning)'}")
+    if info["expected_pct"] is not None:
+        print(f"expected firing  : {info['expected_pct']:.1f}% at override "
+              f"{override:g} (median of the last {est[1]} "
+              f"firing{'s' if est[1] != 1 else ''})")
     for s in info["samples"]:
         print(f"  fired at {s['measured']:.1f}% with override {s['override']:g} ({s['ts']})")
     lc = info["last_correction"]
     if lc:
-        print(f"last correction  : {lc['from']:g} -> {lc['to']:g} "
-              f"after firing at {lc['fired_at_pct']:.1f}%")
+        if lc.get("median_of", 1) > 1:
+            why = (f"(median of the last {lc['median_of']} firings put "
+                   f"{lc['from']:g} at {lc['expected_pct']:.1f}%)")
+        else:
+            why = f"after firing at {lc['fired_at_pct']:.1f}%"
+        print(f"last correction  : {lc['from']:g} -> {lc['to']:g} {why}")
     for b in info["blockers"]:
         print(f"  ! {b}")
     for c in info["caveats"]:

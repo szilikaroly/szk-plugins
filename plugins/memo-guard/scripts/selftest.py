@@ -182,6 +182,7 @@ def main() -> int:
 
     ap_ok = check_autopilot(home)
     cv_ok = check_calibration_converges()
+    co_ok = check_calibration_outlier(home)
     sb_ok = check_stub_visible(home)
     rc_ok = check_recall(home)
     ev_ok = check_recall_quality()
@@ -189,8 +190,8 @@ def main() -> int:
     dr_ok = check_doctor(home)
     dg_ok = check_degradation(home)
     bw_ok = check_busy_vs_wedged()
-    return 0 if (ok and hit and ap_ok and cv_ok and sb_ok and rc_ok and ev_ok
-                 and mr_ok and dr_ok and dg_ok and bw_ok) else 1
+    return 0 if (ok and hit and ap_ok and cv_ok and co_ok and sb_ok and rc_ok
+                 and ev_ok and mr_ok and dr_ok and dg_ok and bw_ok) else 1
 
 
 def check_doctor(home: Path) -> bool:
@@ -433,6 +434,109 @@ def check_calibration_converges() -> bool:
     for name, val in results.items():
         print(f"   {'ok ' if val else 'FAIL'} {name}")
     return all(results.values())
+
+
+def check_calibration_outlier(home: Path) -> bool:
+    """One odd compaction must not undo a calibration that is on target.
+
+    Replays the sequence that did exactly that under 0.14.1 (target 70, a 1M
+    window with autoCompactWindow 800k): the first firing, at the default
+    override, landed at 54.6% and moved it to 89.7; 89.7 then fired at 69.6,
+    69.5 and 68.7 — on target — and then once at 65.1%. Taken at its word, that
+    one firing gave 89.7 * 70 / 65.1 = 96.5, clamped to 95, and the next
+    compaction overshot to 73.2%.
+
+    Robustness bought by ignoring evidence would be no fix, so the other side is
+    checked too: a genuine change is still followed, and a state file written by
+    0.14.1 still reports and learns.
+    """
+    import importlib, io, math
+    from contextlib import redirect_stdout
+    sys.path.insert(0, str(Path(__file__).parent))
+    cfgdir = home / "outlier-claude"
+    cfgdir.mkdir(parents=True, exist_ok=True)
+    (cfgdir / "settings.json").write_text(json.dumps({"theme": "dark"}))
+    os.environ["CLAUDE_CONFIG_DIR"] = str(cfgdir)
+    import autopilot
+    importlib.reload(autopilot)
+    cfg = mg.load_config()
+
+    def override() -> float:
+        return float(autopilot.load_state()["override"])
+
+    def written() -> float:
+        return float(json.loads((cfgdir / "settings.json").read_text())
+                     ["env"][autopilot.ENV_KEY])
+
+    def calibrated() -> bool:
+        return autopilot.load_state().get("calibrated") is True
+
+    def fires_at(ov, cc_window, real=1_000_000):
+        """Claude Code's trigger, as in check_calibration_converges."""
+        eff = cc_window - 20_000
+        return 100.0 * min(math.floor(eff * ov / 100.0), eff - 13000) / real
+
+    checks = {}
+    autopilot.save_state({})
+    with redirect_stdout(io.StringIO()):
+        autopilot.cmd_enable(70.0)
+    autopilot.record_firing(54.6, cfg)
+    checks["a cold start still corrects on its first firing (70 -> 89.7)"] = (
+        override() == 89.7)
+    for pct in (69.6, 69.5, 68.7):
+        autopilot.record_firing(pct, cfg)
+    checks["89.7 is calibrated after firing at 69.6, 69.5, 68.7"] = calibrated()
+    autopilot.record_firing(65.1, cfg)
+    checks[f"the lone 65.1% firing leaves it at 89.7, not 95 "
+           f"(override {override():g}, settings.json {written():g})"] = (
+        override() == 89.7 and written() == 89.7)
+    checks["...and it is still calibrated"] = calibrated()
+
+    # A genuine change: autoCompactWindow removed, so 89.7 now fires at 87.9%.
+    # The first such firing is a lone high one and is outvoted like the low
+    # one; by the third, three of the last five agree and the median follows.
+    autopilot.record_firing(fires_at(override(), 1_000_000), cfg)
+    checks["a lone high firing is outvoted too"] = override() == 89.7
+    for _ in range(2):
+        autopilot.record_firing(fires_at(override(), 1_000_000), cfg)
+    landed = fires_at(override(), 1_000_000)
+    checks[f"a genuine change is corrected by its third firing "
+           f"(override now {override():g}, which fires at {landed:.1f}%)"] = (
+        abs(landed - 70.0) <= autopilot.TOLERANCE_PCT)
+
+    # The state 0.14.1 left behind on the machine this was found on: thrown to
+    # 95, overshot, corrected to 90.9 — and a last_correction without the keys
+    # this version adds.
+    autopilot.save_state({
+        "enabled": True, "target": 70.0, "override": 90.9, "calibrated": False,
+        "samples": [{"measured": m, "override": o, "ts": ts} for m, o, ts in [
+            (69.6, 89.7, "2026-09-14T11:28:29"),
+            (69.5, 89.7, "2026-09-17T19:32:50"),
+            (68.7, 89.7, "2026-09-21T09:36:26"),
+            (65.1, 89.7, "2026-09-21T11:12:40"),
+            (73.2, 95.0, "2026-09-22T21:12:40")]],
+        "last_correction": {"from": 95.0, "to": 90.9, "fired_at_pct": 73.2,
+                            "target": 70.0, "ts": "2026-09-22T21:12:40"}})
+    autopilot.apply_override(90.9)
+    out = io.StringIO()
+    try:
+        with redirect_stdout(out):
+            autopilot.cmd_status()
+        out = out.getvalue()
+    except Exception as e:
+        out = f"cmd_status raised {e!r}"
+    checks["a 0.14.1 state file still reports its last correction"] = (
+        "after firing at 73.2%" in out)
+    checks["...and the median puts its 90.9 on target (70.0%)"] = (
+        "70.0% at override 90.9" in out)
+    autopilot.record_firing(fires_at(90.9, 800_000), cfg)
+    checks["...and the next firing confirms it rather than moving it"] = (
+        calibrated() and override() == 90.9)
+
+    print("\n6b) CALIBRATION AGAINST ONE ODD FIRING")
+    for name, val in checks.items():
+        print(f"   {'ok ' if val else 'FAIL'} {name}")
+    return all(checks.values())
 
 
 def check_stub_visible(home: Path) -> bool:
