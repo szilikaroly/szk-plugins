@@ -38,7 +38,7 @@ spiral-search for free space → report if still impossible (box too small).
 | `/figure-forge:plot` | line / scatter plot with direct end-of-line labels (no legend clutter) |
 | `/figure-forge:forest` | forest / meta-analysis plot; labels kept off every CI line; `--xmax` clips a runaway interval to an arrowhead |
 | `/figure-forge:flowchart` | node/edge flowchart (CONSORT-friendly); labels kept inside boxes |
-| `/figure-forge:assemble` | combine panel PNGs into a multi-panel figure with bold a, b, c |
+| `/figure-forge:assemble` | combine panel PNGs into a multi-panel figure with bold a, b, c; rows keep each panel's proportions, `--layout 8x1` to force a grid |
 | `/figure-forge:panelflow` | staged pipeline / architecture figure from a column-and-box spec |
 | `/figure-forge:fixsvg` | heuristic label check of an existing external SVG |
 | `/figure-forge:audit` | is this SVG/PDF really editable, and are its signs and dashes right? |
