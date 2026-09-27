@@ -36,12 +36,20 @@ spiral-search for free space → report if still impossible (box too small).
 | `/figure-forge:advise "<goal>"` | recommend a chart type + Nature checklist before you plot |
 | `/figure-forge:boxplot` | grouped box plot with jittered raw points |
 | `/figure-forge:plot` | line / scatter plot with direct end-of-line labels (no legend clutter) |
-| `/figure-forge:forest` | forest / meta-analysis plot; labels kept off every CI line |
+| `/figure-forge:forest` | forest / meta-analysis plot; labels kept off every CI line; `--xmax` clips a runaway interval to an arrowhead |
 | `/figure-forge:flowchart` | node/edge flowchart (CONSORT-friendly); labels kept inside boxes |
 | `/figure-forge:assemble` | combine panel PNGs into a multi-panel figure with bold a, b, c |
 | `/figure-forge:panelflow` | staged pipeline / architecture figure from a column-and-box spec |
 | `/figure-forge:fixsvg` | heuristic label check of an existing external SVG |
 | `/figure-forge:audit` | is this SVG/PDF really editable, and are its signs and dashes right? |
+
+### Clipping a runaway interval
+
+On a linear axis one interval running to 20 pushes every other row into a narrow band on the
+left, where nothing can be compared. `--xmax 3` stops the axis at 3 and ends any longer interval
+in an arrowhead. A **point estimate is never clipped**: if one lies past the cap the axis widens
+to hold it, because an arrow standing in for the result would hide the result. Put the true limit
+in the row label — the figure says the interval continues, the label says how far.
 
 Natural-language requests ("make me a Nature-style forest plot of these ORs")
 trigger the bundled **figure-forge skill**, which drives the same CLI.

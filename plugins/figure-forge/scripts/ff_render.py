@@ -101,18 +101,32 @@ def xy_plot(df, x, y, *, series=None, kind="line", width="single",
 # ============================================================ FOREST PLOT =====
 def forest_plot(df, *, label, effect, low, high, width="double",
                 xlabel="Effect size (95% CI)", ref=1.0, logx=False,
-                weight=None, title=None):
-    """Forest/meta-analysis plot. Study labels must never sit on a CI line."""
+                weight=None, title=None, xmax=None):
+    """Forest/meta-analysis plot. Study labels must never sit on a CI line.
+
+    xmax clips the axis. One very wide interval on a linear axis pushes every other row into a
+    narrow band on the left, where nothing can be compared; with xmax the axis stops at the value
+    given and any interval running past it ends in an arrowhead. A POINT ESTIMATE is never
+    clipped: if one lies beyond xmax the clip is refused for that row and the axis is widened to
+    hold it, because an arrow standing in for a point estimate would hide the result itself. The
+    caller is responsible for putting the true limit in the row label."""
     rows = df.to_dict("records")
     n = len(rows)
     fig, ax = plt.subplots(figsize=S.figsize(width, height_mm=max(45, 12 + 7 * n)))
     ys = list(range(n))[::-1]
 
     v = Verifier(fig)
+    # A clip that would swallow a point estimate is not a clip, it is a deletion.
+    cap = None
+    if xmax is not None:
+        cap = max([float(xmax)] + [float(r[effect]) for r in rows if float(r[effect]) > float(xmax)])
     for y, r in zip(ys, rows):
         e, lo, hi = r[effect], r[low], r[high]
-        ax.plot([lo, hi], [y, y], color=S.INK, lw=0.9, solid_capstyle="round",
-                zorder=2)
+        clipped = cap is not None and hi > cap
+        ax.plot([lo, min(hi, cap) if cap is not None else hi], [y, y], color=S.INK, lw=0.9,
+                solid_capstyle="butt" if clipped else "round", zorder=2)
+        if clipped:
+            ax.scatter([cap], [y], s=16, marker=">", color=S.INK, zorder=3)
         sz = 18
         if weight and weight in r and r[weight] == r[weight]:
             sz = 8 + 42 * float(r[weight]) / max(float(x[weight]) for x in rows)
@@ -131,7 +145,7 @@ def forest_plot(df, *, label, effect, low, high, width="double",
     # subtraction can land on zero or below, which is not a point a log axis
     # has.
     xmin = min(r[low] for r in rows)
-    xmax = max(r[high] for r in rows)
+    xmax = cap if cap is not None else max(r[high] for r in rows)
     if logx:
         import math
         lo_l, hi_l = math.log10(xmin), math.log10(xmax)

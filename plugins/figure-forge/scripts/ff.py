@@ -179,7 +179,7 @@ def cmd_forest(args):
     df = L.load_data(args.data)
     fig, v = R.forest_plot(df, label=args.label, effect=args.effect,
                            low=args.low, high=args.high, width=args.width,
-                           xlabel=args.xlabel, ref=args.ref, logx=args.logx,
+                           xlabel=args.xlabel, ref=args.ref, logx=args.logx, xmax=args.xmax,
                            weight=args.weight, title=args.title)
     _finish(fig, v, args)
 
@@ -388,6 +388,9 @@ def build_parser():
     f.add_argument("--xlabel", default="Effect size (95% CI)")
     f.add_argument("--ref", type=float, default=1.0)
     f.add_argument("--logx", action="store_true")
+    f.add_argument("--xmax", type=float, default=None,
+                   help="clip the axis here; intervals running past it end in an "
+                        "arrowhead. A point estimate is never clipped.")
     f.add_argument("--weight", default=None)
     _common(f)
     f.set_defaults(func=cmd_forest)
