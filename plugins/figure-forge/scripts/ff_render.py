@@ -277,23 +277,38 @@ def _canvas_h(nodes, width):
 # ============================================================ MULTI-PANEL =====
 def assemble(panel_pngs, *, layout=None, width="double", labels=True):
     """Compose pre-rendered panel PNGs into one Nature-format composite.
-    panel_pngs: list of image paths. layout: (rows, cols) or None (auto).
+
+    panel_pngs: list of image paths. layout: (rows, cols), or None to choose one.
+
+    Panels keep their own proportions. Equal grid cells are right for panels that are roughly
+    square, and wrong for a set of forest plots: a 33-row panel and a 3-row panel were given the
+    same cell, which left the short one swimming in white space and squeezed the tall one until
+    its labels were unreadable. Row heights are therefore taken from the images themselves.
     """
     import math
     from PIL import Image
     n = len(panel_pngs)
+    imgs = [Image.open(png) for png in panel_pngs]
+    aspects = [im.height / im.width for im in imgs]
     if layout is None:
-        cols = 1 if n == 1 else (2 if n <= 4 else 3)
+        # Wide panels - forest plots, anything with labels down the left - are unreadable in a
+        # narrow column, so they get one column however many there are.
+        wide = max(aspects) < 0.55
+        cols = 1 if (n == 1 or wide) else (2 if n <= 4 else 3)
         rows = math.ceil(n / cols)
     else:
         rows, cols = layout
-    fig = plt.figure(figsize=S.figsize(width, height_mm=None,
-                                       ratio=0.32 * rows + 0.1))
+    row_asp = [max(aspects[r * cols:(r + 1) * cols] + [0.05]) for r in range(rows)]
+    width_mm = S.WIDTHS.get(str(width), None) if hasattr(S, "WIDTHS") else None
+    fig = plt.figure(figsize=S.figsize(
+        width, height_mm=None, ratio=sum(row_asp) / cols * 1.04 + 0.02 * rows))
+    gs = fig.add_gridspec(rows, cols, height_ratios=row_asp, wspace=0.06, hspace=0.06,
+                          left=0.04, right=0.99, top=0.97, bottom=0.01)
     v = Verifier(fig)
     letters = "abcdefghijklmnop"
-    for i, png in enumerate(panel_pngs):
-        ax = fig.add_subplot(rows, cols, i + 1)
-        ax.imshow(Image.open(png))
+    for i, im in enumerate(imgs):
+        ax = fig.add_subplot(gs[i // cols, i % cols])
+        ax.imshow(im)
         ax.axis("off")
         if labels:
             # inside the panel's top-left corner, so it never crosses the canvas
@@ -301,6 +316,4 @@ def assemble(panel_pngs, *, layout=None, width="double", labels=True):
                         fontsize=S.FONT_PANEL, fontweight="bold",
                         va="top", ha="left")
             v.add_label(t, ax, name=f"panel-{letters[i]}", movable=False)
-    fig.subplots_adjust(wspace=0.06, hspace=0.06, left=0.04, right=0.99,
-                        top=0.95, bottom=0.02)
     return fig, v

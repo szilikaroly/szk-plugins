@@ -107,6 +107,26 @@ def run():
                   f"{fig.axes[0].get_xlim()[1]:.2f})", fig.axes[0].get_xlim()[1] >= 9.0)
     plt.close(fig)
 
+    # 5c) assemble keeps each panel's own proportions --------------------------
+    import ff_export as _E
+    from PIL import Image as _Img
+    # a forest panel is WIDE: labels down the left, a few rows deep
+    _tall, _short = tmp / "tall.png", tmp / "short.png"
+    _Img.new("RGB", (1600, 800), "white").save(_tall)
+    _Img.new("RGB", (1600, 100), "white").save(_short)
+    fig, v = R.assemble([str(_tall), str(_short)], layout=(2, 1))
+    _h = [ax.get_position().height for ax in fig.axes]
+    passed &= _ok(f"assemble gives the taller panel the taller row ({_h[0]/_h[1]:.1f}x)",
+                  _h[0] > 3 * _h[1])
+    plt.close(fig)
+    # wide panels (forest plots) must not be dealt into narrow columns
+    fig, v = R.assemble([str(_tall)] * 6)
+    passed &= _ok("six wide panels stay in one column",
+                  all(abs(ax.get_position().width - fig.axes[0].get_position().width) < 1e-9
+                      for ax in fig.axes) and len({round(ax.get_position().x0, 6)
+                                                   for ax in fig.axes}) == 1)
+    plt.close(fig)
+
     # 6) advisor returns a recommendation -------------------------------------
     import ff_advise as A
     rec = A.advise("forest plot of pooled odds ratios across studies")

@@ -248,7 +248,11 @@ def cmd_assemble(args):
     _typography(args)
     S.apply_style(args.palette, args.dpi)
     import ff_render as R
-    fig, v = R.assemble(args.panels, width=args.width)
+    lay = None
+    if args.layout:
+        r, c = args.layout.lower().split('x')
+        lay = (int(r), int(c))
+    fig, v = R.assemble(args.panels, width=args.width, layout=lay)
     _finish(fig, v, args)
 
 
@@ -408,6 +412,9 @@ def build_parser():
     asm = sub.add_parser("assemble", help="compose panel PNGs into a composite")
     asm.add_argument("panels", nargs="+")
     _common(asm)
+    asm.add_argument("--layout", default=None, metavar="RxC",
+                     help="grid as ROWSxCOLS, e.g. 8x1. Default: one column for wide "
+                          "panels such as forest plots, otherwise 2 or 3 columns.")
     asm.set_defaults(func=cmd_assemble)
 
     fx = sub.add_parser("fixsvg", help="QC labels in an existing SVG")
