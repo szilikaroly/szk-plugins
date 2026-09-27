@@ -87,6 +87,26 @@ def run():
                   len(residual) == 0)
     plt.close(fig)
 
+    # 5b) xmax clips a runaway interval, but never a point estimate -----------
+    cdf = pd.DataFrame({
+        "study": ["Narrow", "Wide", "Point beyond the cap"],
+        "or": [1.0, 2.0, 9.0],
+        "lo": [0.8, 1.1, 4.0],
+        "hi": [1.3, 20.0, 30.0],
+    })
+    fig, v = R.forest_plot(cdf.iloc[:2], label="study", effect="or", low="lo", high="hi", xmax=3.0)
+    passed &= _ok(f"xmax clips the axis (right limit={fig.axes[0].get_xlim()[1]:.2f})",
+                  fig.axes[0].get_xlim()[1] <= 3.2)
+    arrows = [c for c in fig.axes[0].collections if len(c.get_offsets())]
+    passed &= _ok("the clipped interval ends in an arrowhead",
+                  any(abs(o[0] - 3.0) < 1e-6 for c in arrows for o in c.get_offsets()))
+    plt.close(fig)
+    # a point estimate outside the cap widens the axis instead of vanishing behind an arrow
+    fig, v = R.forest_plot(cdf, label="study", effect="or", low="lo", high="hi", xmax=3.0)
+    passed &= _ok(f"a point estimate is never clipped (right limit="
+                  f"{fig.axes[0].get_xlim()[1]:.2f})", fig.axes[0].get_xlim()[1] >= 9.0)
+    plt.close(fig)
+
     # 6) advisor returns a recommendation -------------------------------------
     import ff_advise as A
     rec = A.advise("forest plot of pooled odds ratios across studies")
