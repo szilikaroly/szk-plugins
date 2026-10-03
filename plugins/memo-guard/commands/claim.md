@@ -26,8 +26,13 @@ Parse "$ARGUMENTS" and run the matching form:
 - `list` (or empty arguments) → `--list`
   Show every verdict and its `hits` count — how many times each blocked claim
   tried to come back.
-- `forget <fingerprint>` → `--forget <fp>`
-  Remove a verdict. Only when the verdict itself was wrong.
+- `forget <fingerprint|text>` → `--forget "<fp or text>"`
+  Remove a verdict. Only when the verdict itself was wrong (or was never a real
+  judgement, like a leaked test fixture). Leaves a tombstone, so the deletion
+  reaches every synced machine instead of being undone by the next import. Text
+  that is not on record here is tombstoned by its fingerprint: that removes a
+  verdict that only exists in the sync repo. Report the `text` it matched: a fuzzy
+  match may have caught a neighbouring claim.
 
 If no arguments were given, run `--list` and summarise.
 

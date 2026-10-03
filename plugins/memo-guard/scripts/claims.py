@@ -20,7 +20,7 @@ every time it regenerates.
   claims.py --check "the 2019 PCOS to PMOS rename"      # would this be blocked?
   claims.py --apply --memo-dir sessions/<id>/.memo      # enforce before RESUME
   claims.py --list
-  claims.py --forget <fingerprint>                      # undo a verdict
+  claims.py --forget <fingerprint|text>                 # undo a verdict, on every machine
 
 Why fuzzy matching and not exact hashes: the model writes "n=412 participants"
 one day and "412 subjects were enrolled" the next. An exact hash blocks the
@@ -254,11 +254,17 @@ def _row(row, score: float) -> dict:
 # --------------------------------------------------------------------------- writes
 
 def record(db: sqlite3.Connection, text: str, status: str, note: str = "",
-           replacement: str = "", session_id: str = "", project: str = "") -> dict:
+           replacement: str = "", session_id: str = "", project: str = "",
+           lift_tombstone: bool = True) -> dict:
     norm = normalize(text)
     if not norm:
         raise ValueError("claim text is empty after normalization")
     fp = hashlib.sha256(norm.encode()).hexdigest()[:16]
+    # A deliberate new verdict outranks an older deletion of the same claim. The
+    # sync import passes False: it skips tombstoned verdicts before calling this,
+    # and must not take a write lock on memory.db while it holds its own.
+    if lift_tombstone:
+        _lift_tombstone(fp)
     db.execute(
         "INSERT INTO verdict (fp,text,norm,status,note,replacement,project,session_id,created_at,hits)"
         " VALUES (?,?,?,?,?,?,?,?,?,0)"
@@ -285,6 +291,77 @@ def record(db: sqlite3.Connection, text: str, status: str, note: str = "",
 
 def bump(db: sqlite3.Connection, fp: str) -> None:
     db.execute("UPDATE verdict SET hits=hits+1, last_hit=? WHERE fp=?", (time.time(), fp))
+
+
+# --------------------------------------------------------------------------- deletion
+#
+# Verdict deletions use the fact store's tombstone table: one table, one
+# tombstones.json, so a deleted verdict travels exactly like a deleted fact.
+# Verdict fingerprints are 16 hex characters and fact fingerprints 20, so the two
+# kinds can share the table without ever matching each other.
+
+def _memory_db():
+    import memory          # lazy: memory imports this module
+    return memory.connect()
+
+
+def _lift_tombstone(fp: str) -> None:
+    try:
+        mdb = _memory_db()
+        # Read first: a DELETE that matches nothing still takes the write lock.
+        if mdb.execute("SELECT 1 FROM tombstone WHERE fp=?", (fp,)).fetchone():
+            mdb.execute("DELETE FROM tombstone WHERE fp=?", (fp,))
+            mdb.commit()
+    except Exception:
+        pass
+
+
+def forget(db: sqlite3.Connection, fp_or_text: str) -> dict:
+    """Delete a verdict and record that the deletion happened.
+
+    A local DELETE alone is undone by the next sync: imports are a union, so any
+    machine that still holds the verdict puts it back. That is how a self-test
+    fixture (an invented sample size, "recount gave 389") kept its place in a real
+    store. The tombstone makes the deletion travel.
+
+    Accepts a fingerprint or the claim text. Text that is not on record here is
+    still tombstoned by its fingerprint, which is how a verdict that only exists
+    in the sync repo is removed before it is ever imported. A fuzzy match is
+    reported with the text it matched: forgetting the neighbouring claim would be
+    worse than forgetting nothing.
+    """
+    arg = (fp_or_text or "").strip()
+    if not arg:
+        raise ValueError("nothing to forget")
+    hit, how, score = None, "none", 0.0
+    if re.fullmatch(r"[0-9a-f]{16}", arg):
+        fp, how = arg, "fingerprint"
+        hit = db.execute("SELECT text FROM verdict WHERE fp=?", (fp,)).fetchone()
+    else:
+        fp = fingerprint(arg)
+        hit = db.execute("SELECT text FROM verdict WHERE fp=?", (fp,)).fetchone()
+        if hit:
+            how = "exact"
+        else:
+            v = match(db, arg, allow_semantic=False)
+            if v:
+                fp, how, score = v["fp"], "fuzzy", v["score"]
+                hit = (v["text"],)
+    deleted = db.execute("DELETE FROM verdict WHERE fp=?", (fp,)).rowcount
+    db.execute("DELETE FROM verdict_vec WHERE fp=?", (fp,))
+    db.commit()
+    mdb = _memory_db()
+    mdb.execute("INSERT INTO tombstone (fp,deleted_at,machine) VALUES (?,?,?)"
+                " ON CONFLICT(fp) DO UPDATE SET deleted_at=excluded.deleted_at,"
+                " machine=excluded.machine", (fp, time.time(), mg.machine_name()))
+    mdb.commit()
+    try:
+        import memory
+        memory._request_sync()
+    except Exception:
+        pass
+    return {"fp": fp, "deleted": deleted, "matched": how, "score": round(score, 3),
+            "text": hit[0] if hit else arg}
 
 
 # --------------------------------------------------------------------------- enforcement
@@ -389,14 +466,16 @@ def main() -> int:
         return 0 if v else 1
 
     if args.forget:
-        cur = db.execute("DELETE FROM verdict WHERE fp=?", (args.forget,))
-        if cur.rowcount == 0:
-            v = match(db, args.forget)
-            if v:
-                cur = db.execute("DELETE FROM verdict WHERE fp=?", (v["fp"],))
-        db.commit()
-        print(f"forgotten: {cur.rowcount} verdict(s)")
-        return 0 if cur.rowcount else 1
+        r = forget(db, args.forget)
+        if args.json:
+            print(json.dumps(r, indent=2))
+        else:
+            where = (f"deleted here ({r['matched']} match"
+                     + (f", similarity {r['score']}" if r["matched"] == "fuzzy" else "") + ")"
+                     if r["deleted"] else "not on record here")
+            print(f"forgotten [{r['fp']}] {where}; tombstoned for every synced machine\n"
+                  f"  text: {r['text'][:90]}")
+        return 0
 
     if args.apply:
         md = args.memo_dir

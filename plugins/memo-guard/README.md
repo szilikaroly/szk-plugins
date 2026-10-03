@@ -698,7 +698,11 @@ if you extend it:
   the next pull from any machine that still had it, so `--forget` and
   `memify --hard` were silently undone. Deletions now leave a tombstone, which
   travels with the data. Tombstones store the fingerprint only — never the text,
-  which would re-leak what was removed.
+  which would re-leak what was removed. Since 0.15.1 claim verdicts get the same
+  treatment: `claims.py --forget` tombstones the verdict's fingerprint, export
+  skips it and import deletes it. Before that, a self-test fixture that had leaked
+  into a real store (an invented PMOS sample size, "recount gave 389") could not
+  be removed: every pull restored it.
 - **A brand-new remote has no `main` to pull from,** and treating that as an
   error meant the very first push could never happen. Setup deadlocked
   permanently until the remote was checked before pulling.

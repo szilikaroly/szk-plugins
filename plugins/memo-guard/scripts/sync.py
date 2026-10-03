@@ -120,10 +120,15 @@ def export(db, out: Path) -> dict:
     try:
         import claims as cl
         cdb = cl.connect()
+        # A tombstoned verdict is not exported, even if a stale copy is still in
+        # claims.db: an older version that imported it before the tombstone arrived
+        # must not get it written back into the repo by this machine.
+        dead = {r[0] for r in db.execute("SELECT fp FROM tombstone")}
         vs = [{"fp": r[0], "text": r[1], "status": r[2], "note": r[3] or "",
                "replacement": r[4] or ""}
               for r in cdb.execute(
-                  "SELECT fp,text,status,note,replacement FROM verdict")]
+                  "SELECT fp,text,status,note,replacement FROM verdict")
+              if r[0] not in dead]
         vs.sort(key=lambda d: d["fp"])
         (out / "claims.json").write_text(
             json.dumps(vs, indent=1, sort_keys=True, ensure_ascii=False) + "\n")
@@ -246,17 +251,29 @@ def import_(db, src: Path) -> dict:
             pass
         db.commit()
 
-    cf = src / "claims.json"
-    if cf.exists():
-        try:
-            import claims as cl
-            cdb = cl.connect()
+    # Verdicts honour the same tombstones as facts (claims.forget writes them with
+    # the verdict's 16-character fingerprint): a verdict deleted on another machine
+    # is deleted here, and one listed by an exporter that has not seen the
+    # tombstone yet is not imported.
+    try:
+        import claims as cl
+        cdb = cl.connect()
+        for (vfp,) in list(cdb.execute("SELECT fp FROM verdict")):
+            if vfp in dead:
+                cdb.execute("DELETE FROM verdict WHERE fp=?", (vfp,))
+                cdb.execute("DELETE FROM verdict_vec WHERE fp=?", (vfp,))
+                added["deleted_claims"] = added.get("deleted_claims", 0) + 1
+        cdb.commit()
+        cf = src / "claims.json"
+        if cf.exists():
             for v in json.loads(cf.read_text()):
+                if v.get("fp") in dead or cl.fingerprint(v["text"]) in dead:
+                    continue
                 cl.record(cdb, v["text"], v["status"], v.get("note", ""),
-                          v.get("replacement", ""))
+                          v.get("replacement", ""), lift_tombstone=False)
                 added["claims"] += 1
-        except Exception:
-            pass
+    except Exception:
+        pass
 
     bf = src / "blocks.json"
     if bf.exists():

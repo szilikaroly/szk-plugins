@@ -191,8 +191,91 @@ def main() -> int:
     dg_ok = check_degradation(home)
     bw_ok = check_busy_vs_wedged()
     cp_ok = check_corpus(home)
+    st_ok = check_sync_tombstones(home)
     return 0 if (ok and hit and ap_ok and cv_ok and co_ok and sb_ok and rc_ok
-                 and ev_ok and mr_ok and dr_ok and dg_ok and bw_ok and cp_ok) else 1
+                 and ev_ok and mr_ok and dr_ok and dg_ok and bw_ok and cp_ok
+                 and st_ok) else 1
+
+
+def check_sync_tombstones(home: Path) -> bool:
+    """14) A deleted claim verdict stays deleted on every synced machine.
+
+    Until 0.15.1 `claims --forget` only deleted locally, and the union import put the
+    verdict back from any machine that still held it. That is how a self-test fixture
+    -- an invented sample size, "recount gave 389" -- survived in a real store. Three
+    stores here stand in for three machines; each is its own sandbox directory.
+    """
+    import embed
+    import sync
+    print("\n14) sync: verdict tombstones")
+    ok = True
+
+    def chk(cond, what):
+        nonlocal ok
+        print(f"   {'ok  ' if cond else 'FAIL'} {what}")
+        ok = ok and bool(cond)
+
+    embed.set_timeout(0.5)                  # the server is not what is under test
+    text = "The cohort enrolled 512 participants"
+    saved = os.environ["MEMO_GUARD_HOME"]
+
+    def machine(name: str):
+        os.environ["MEMO_GUARD_HOME"] = str(home / "machines" / name)
+        import claims
+        import memory
+        return memory.connect(), claims.connect(), claims
+
+    try:
+        # machine A records the verdict, B already has it (it synced before)
+        db_b, cdb_b, cl = machine("b")
+        cl.record(cdb_b, text, "REFUTED", note="test fixture")
+        db_a, cdb_a, cl = machine("a")
+        fp = cl.record(cdb_a, text, "REFUTED", note="test fixture")["fp"]
+        r = cl.forget(cdb_a, text)
+        chk(r["deleted"] == 1 and r["matched"] == "exact", "forget deletes the local verdict")
+        chk(db_a.execute("SELECT 1 FROM tombstone WHERE fp=?", (fp,)).fetchone(),
+            "and leaves a tombstone keyed by the verdict's fingerprint")
+        out = home / "machines" / "repo"
+        sync.export(db_a, out)
+        exported = json.loads((out / "claims.json").read_text(encoding="utf-8"))
+        tombs = json.loads((out / "tombstones.json").read_text(encoding="utf-8"))
+        chk(fp not in {v["fp"] for v in exported} and fp in {t["fp"] for t in tombs},
+            "the export drops the verdict and carries the tombstone")
+
+        db_b, cdb_b, cl = machine("b")
+        r = sync.import_(db_b, out)
+        chk(not cdb_b.execute("SELECT 1 FROM verdict WHERE fp=?", (fp,)).fetchone()
+            and r.get("deleted_claims") == 1,
+            "a machine that still had it deletes it on import")
+
+        # an exporter that has not seen the tombstone still lists the verdict
+        stale = home / "machines" / "stale-repo"
+        stale.mkdir(parents=True, exist_ok=True)
+        (stale / "claims.json").write_text(json.dumps(
+            [{"fp": fp, "text": text, "status": "REFUTED", "note": "", "replacement": ""}]),
+            encoding="utf-8")
+        (stale / "tombstones.json").write_text(json.dumps([{"fp": fp, "deleted_at": time.time()}]),
+                                               encoding="utf-8")
+        db_c, cdb_c, cl = machine("c")
+        sync.import_(db_c, stale)
+        chk(not cdb_c.execute("SELECT 1 FROM verdict WHERE fp=?", (fp,)).fetchone(),
+            "a stale export listing it does not bring it back")
+
+        r = cl.forget(cdb_c, "The PMOS registry number nobody ever recorded")
+        chk(r["deleted"] == 0 and db_c.execute("SELECT 1 FROM tombstone WHERE fp=?",
+                                               (r["fp"],)).fetchone(),
+            "a verdict that is only in the sync repo is tombstoned by its text")
+
+        db_a, cdb_a, cl = machine("a")
+        cl.record(cdb_a, text, "REFUTED", note="judged again")
+        sync.export(db_a, out)
+        exported = json.loads((out / "claims.json").read_text(encoding="utf-8"))
+        chk(not db_a.execute("SELECT 1 FROM tombstone WHERE fp=?", (fp,)).fetchone()
+            and fp in {v["fp"] for v in exported},
+            "a deliberate new verdict lifts the tombstone and is exported again")
+    finally:
+        os.environ["MEMO_GUARD_HOME"] = saved
+    return ok
 
 
 def check_corpus(home: Path) -> bool:
