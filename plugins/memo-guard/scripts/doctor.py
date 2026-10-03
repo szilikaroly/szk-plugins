@@ -432,6 +432,15 @@ def maintain(force: bool = False) -> int:
             summary[name] = (r.stdout or r.stderr)[-400:]
         except Exception as e:  # noqa: BLE001
             summary[name] = f"failed: {e}"
+    # The SQLite stores: integrity, index rebuild where it disagrees with its content, FTS
+    # optimize, ANALYZE, VACUUM when fragmented (dbmaint.py). Its own, longer timeout: a
+    # quick_check of a 1.4 GB table store alone takes tens of seconds.
+    try:
+        r = subprocess.run([sys.executable, str(here / "dbmaint.py"), "--heavy", "--json"],
+                           capture_output=True, text=True, timeout=1800)
+        summary["dbmaint"] = (r.stdout or r.stderr)[-600:]
+    except Exception as e:  # noqa: BLE001
+        summary["dbmaint"] = f"failed: {e}"
     p.write_text(json.dumps({"ts": time.time(), "summary": summary}, indent=2))
     print(json.dumps(summary, indent=2)[:1200])
     return 0

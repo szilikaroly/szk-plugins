@@ -277,6 +277,9 @@ def sync_root(root: Path, log=print) -> dict:
             _drop(db, tid)
         db.execute("DELETE FROM tbl WHERE root=? AND path=?", (str(root), rel))
     db.commit()
+    if imported or gone:
+        import dbmaint
+        dbmaint.light_conn(db, ["rows_fts"])
     res = {"root": str(root), "files_imported": imported, "tables": tables_n, "failed": failed,
            "removed": len(gone), "seconds": round(time.time() - t0, 1)}
     mg.append_metrics({"ts": time.time(), **res}, event="tables_sync")

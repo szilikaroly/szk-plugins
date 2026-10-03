@@ -193,9 +193,85 @@ def main() -> int:
     cp_ok = check_corpus(home)
     st_ok = check_sync_tombstones(home)
     tc_ok = check_table_cards(home)
+    dm_ok = check_db_maint(home)
     return 0 if (ok and hit and ap_ok and cv_ok and co_ok and sb_ok and rc_ok
                  and ev_ok and mr_ok and dr_ok and dg_ok and bw_ok and cp_ok
-                 and st_ok and tc_ok) else 1
+                 and st_ok and tc_ok and dm_ok) else 1
+
+
+def check_db_maint(home: Path) -> bool:
+    """16) The store's search index holds only answerable claims, and maintenance keeps it sound.
+
+    v2 indexes claim_live (REFUTED/STALE excluded) through triggers whose WHEN clauses must
+    mirror the view. An external-content FTS5 'delete' of a row that was never indexed
+    corrupts the index without failing, so the integrity-check after the status flips is the
+    real assertion here. Also: a v1 store migrates in place, the pair fallback answers a
+    question no single claim fully matches without dragging in single-word noise, and the
+    daily heavy pass runs clean.
+    """
+    import sqlite3
+    import store
+    import dbmaint
+    print("\n16) store index v2 + db maintenance")
+    ok = True
+
+    def chk(cond, what):
+        nonlocal ok
+        print(f"   {'ok  ' if cond else 'FAIL'} {what}")
+        ok = ok and bool(cond)
+
+    saved = os.environ["MEMO_GUARD_HOME"]
+    os.environ["MEMO_GUARD_HOME"] = str(home / "dbm")
+    try:
+        p = store.db_path()
+        v1 = sqlite3.connect(p)
+        v1.executescript(store.SCHEMA.replace("content='claim_live'", "content='claim'")
+                         .replace("CREATE VIEW IF NOT EXISTS claim_live AS\n  SELECT id, text, keywords"
+                                  " FROM claim WHERE status NOT IN ('REFUTED', 'STALE');", ""))
+        v1.executescript("""
+CREATE TRIGGER claim_ai AFTER INSERT ON claim BEGIN
+  INSERT INTO claim_fts(rowid, text, keywords) VALUES (new.id, new.text, new.keywords); END;
+INSERT INTO meta (k,v) VALUES ('schema_version','1');
+INSERT INTO root (id, path, memo_dir) VALUES (1, '/r', '/r/.memo');
+INSERT INTO doc (id, root_id, memo, path, project) VALUES (1, 1, 'm.memo.md', 'kutatas/p/a.md', 'kutatas/p');
+INSERT INTO claim (doc_id, cid, text, status, utility) VALUES
+  (1, 'C1', 'Alpha beta findings were reported in the cohort study', 'CONFIRMED', 0.8),
+  (1, 'C2', 'Alpha beta gamma delta was refuted by the source text', 'REFUTED', 0.8),
+  (1, 'C3', 'Gamma appears alone in this unrelated noise claim', 'CONFIRMED', 0.8);
+""")
+        v1.commit()
+        v1.close()
+        db = store.connect()
+        ver = db.execute("SELECT v FROM meta WHERE k='schema_version'").fetchone()[0]
+        n_idx = db.execute("SELECT count(*) FROM claim_fts_docsize").fetchone()[0]
+        chk(ver == store.SCHEMA_VERSION and n_idx == 2, f"a v1 store migrates; the index holds {n_idx} of 3 claims")
+        db.execute("UPDATE claim SET status='REFUTED' WHERE cid='C3'")
+        db.execute("UPDATE claim SET status='CONFIRMED' WHERE cid='C2'")
+        db.execute("INSERT INTO claim (doc_id, cid, text, status) VALUES (1, 'C4', 'Stale words here x', 'STALE')")
+        db.execute("DELETE FROM claim WHERE cid IN ('C1', 'C4')")
+        db.commit()
+        try:
+            db.execute("INSERT INTO claim_fts(claim_fts, rank) VALUES('integrity-check', 1)")
+            fine = True
+        except sqlite3.DatabaseError:
+            fine = False
+        chk(fine and db.execute("SELECT count(*) FROM claim_fts_docsize").fetchone()[0] == 1,
+            "status flips, inserts and deletes keep the index exactly in step with claim_live")
+        db.execute("UPDATE claim SET status='CONFIRMED' WHERE cid='C3'")
+        db.execute("INSERT INTO claim (doc_id, cid, text, status, utility) VALUES"
+                   " (1, 'C5', 'Alpha beta findings were reported in the cohort study', 'CONFIRMED', 0.8)")
+        db.commit()
+        db.close()
+        hits = store.search("alpha beta gamma cohort")
+        texts = " | ".join(h["text"] for h in hits)
+        chk("cohort study" in texts and "unrelated noise" not in texts,
+            "the pair fallback finds the claim sharing two terms, not single-word noise")
+        res = dbmaint.heavy_all(["memo"])
+        chk(res and not res[0].get("error") and "claim_fts: integrity ok" in res[0].get("steps", []),
+            "the daily heavy pass checks, optimizes and analyzes without error")
+    finally:
+        os.environ["MEMO_GUARD_HOME"] = saved
+    return ok
 
 
 def check_table_cards(home: Path) -> bool:

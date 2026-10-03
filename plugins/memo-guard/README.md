@@ -415,6 +415,24 @@ keeps the self test hermetic). Everything stays local, in `data_dir()`:
   and gave 268 claims, all CONFIRMED.
 
   A card needs no GPU, so it is written even while ingestion is paused. `0` turns cards off.
+- **The search index holds only claims that can be answers (0.15.3).** `claim_fts` indexes the
+  `claim_live` view: REFUTED and STALE claims are excluded. Triggers keep the index in step on
+  insert, delete and status change; their WHEN clauses mirror the view, because an
+  external-content FTS5 delete of a row that was never indexed corrupts the index silently.
+  - When the all-terms query is thin, the fallback is any **two** terms together, and a single
+    term is tried only if no pair co-occurs.
+  - Measured on 861k claims: the index went from 80 to 49 MB and the query from 61 to 15 ms
+    (median). Answers for a dose/regain question covered 0.60 → 0.76 of the question's terms.
+  - A v1 store migrates on its first write connection, in about 4 s.
+- **Maintenance is continuous (`dbmaint.py`).**
+  - Every store and tables sync ends with a light step: `PRAGMA optimize`, a small FTS
+    `merge` and a passive WAL checkpoint.
+  - The daily `doctor --maintain` runs the heavy pass on all four stores, in this order:
+    `quick_check`, FTS integrity-check against the content, `rebuild` if they disagree, FTS
+    `optimize`, `ANALYZE`, and `VACUUM` above 10% free pages.
+  - It rebuilds only derived indexes; rows are never deleted. A failing `quick_check` is
+    reported, and nothing further is written to that file.
+  - `dbmaint.py --status` shows size, free share, statistics and FTS fragmentation.
 - **Tokenisation is Unicode-aware** (`mg.fold`/`mg.terms`): accents are folded the way FTS5's
   unicode61 tokenizer folds them, so "elhízás" matches "elhizas"; Hungarian function words are
   stop words.

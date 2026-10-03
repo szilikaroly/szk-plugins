@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import glob
 import hashlib
+import itertools
 import json
 import os
 import re
@@ -39,7 +40,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mg_lib as mg  # noqa: E402
 
-SCHEMA_VERSION = "1"
+# 2 (0.15.3): the search index holds only claims that can be answers. REFUTED/STALE rows were
+# 34% of claim_fts and took a third of every query's 300 candidates before Python threw
+# them away (measured 2026-10-03: FTS 80 -> 49 MB, query 61 -> 15 ms with the pair fallback).
+SCHEMA_VERSION = "2"
 BLOCKED = ("REFUTED", "STALE")
 UNPROVEN = ("NEEDS_AGENT", "PENDING", "UNSUPPORTED")
 TRUST = {"CONFIRMED": 1.0, "DRIFTED": 0.9, "NEEDS_AGENT": 0.5, "PENDING": 0.4,
@@ -68,22 +72,32 @@ CREATE TABLE IF NOT EXISTS claim (
   hits INTEGER DEFAULT 0, last_hit REAL);
 CREATE INDEX IF NOT EXISTS claim_doc ON claim(doc_id);
 CREATE INDEX IF NOT EXISTS claim_status ON claim(status);
+CREATE VIEW IF NOT EXISTS claim_live AS
+  SELECT id, text, keywords FROM claim WHERE status NOT IN ('REFUTED', 'STALE');
+""" + """
 CREATE VIRTUAL TABLE IF NOT EXISTS claim_fts USING fts5(
-  text, keywords, content='claim', content_rowid='id',
+  text, keywords, content='claim_live', content_rowid='id',
   tokenize='unicode61 remove_diacritics 2');
 """
+FTS_V1 = "content='claim',"
+# The WHEN clauses must mirror claim_live exactly. An external-content FTS5 'delete' for a row
+# that was never indexed does not fail, it corrupts the index; so a row is only ever deleted
+# from the index if its old status made it indexable, and only inserted if its new one does.
 TRIGGERS = """
-CREATE TRIGGER IF NOT EXISTS claim_ai AFTER INSERT ON claim BEGIN
+CREATE TRIGGER IF NOT EXISTS claim_ai AFTER INSERT ON claim
+  WHEN new.status NOT IN ('REFUTED', 'STALE') BEGIN
   INSERT INTO claim_fts(rowid, text, keywords) VALUES (new.id, new.text, new.keywords);
 END;
-CREATE TRIGGER IF NOT EXISTS claim_ad AFTER DELETE ON claim BEGIN
+CREATE TRIGGER IF NOT EXISTS claim_ad AFTER DELETE ON claim
+  WHEN old.status NOT IN ('REFUTED', 'STALE') BEGIN
   INSERT INTO claim_fts(claim_fts, rowid, text, keywords)
   VALUES ('delete', old.id, old.text, old.keywords);
 END;
-CREATE TRIGGER IF NOT EXISTS claim_au AFTER UPDATE OF text, keywords ON claim BEGIN
+CREATE TRIGGER IF NOT EXISTS claim_au AFTER UPDATE OF text, keywords, status ON claim BEGIN
   INSERT INTO claim_fts(claim_fts, rowid, text, keywords)
-  VALUES ('delete', old.id, old.text, old.keywords);
-  INSERT INTO claim_fts(rowid, text, keywords) VALUES (new.id, new.text, new.keywords);
+  SELECT 'delete', old.id, old.text, old.keywords WHERE old.status NOT IN ('REFUTED', 'STALE');
+  INSERT INTO claim_fts(rowid, text, keywords)
+  SELECT new.id, new.text, new.keywords WHERE new.status NOT IN ('REFUTED', 'STALE');
 END;
 """
 
@@ -105,12 +119,32 @@ def connect(readonly: bool = False, timeout: float = 5.0) -> sqlite3.Connection:
     db = sqlite3.connect(db_path(), timeout=timeout)
     db.execute("PRAGMA journal_mode=WAL")
     db.execute("PRAGMA synchronous=NORMAL")
-    db.executescript(SCHEMA + TRIGGERS)
+    db.executescript(SCHEMA)
     if fresh:
+        db.executescript(TRIGGERS)
         db.execute("INSERT OR REPLACE INTO meta (k,v) VALUES ('schema_version',?)", (SCHEMA_VERSION,))
         db.commit()
+    else:
+        _migrate(db)
     mg.secure_file(db_path())
     return db
+
+
+def _migrate(db: sqlite3.Connection) -> None:
+    """v1 -> v2: rebuild the search index over claim_live. Seconds, not minutes (3.7 s for
+    861k claims): FTS5 'rebuild' streams the view once. The claims themselves are untouched."""
+    ver = (db.execute("SELECT v FROM meta WHERE k='schema_version'").fetchone() or ["1"])[0]
+    sql = (db.execute("SELECT sql FROM sqlite_master WHERE name='claim_fts'").fetchone() or [""])[0]
+    if ver == SCHEMA_VERSION and FTS_V1 not in (sql or "").replace(" ", ""):
+        db.executescript(TRIGGERS)
+        return
+    _drop_triggers(db)
+    db.execute("DROP TABLE IF EXISTS claim_fts")
+    db.executescript(SCHEMA)
+    db.execute("INSERT INTO claim_fts(claim_fts) VALUES('rebuild')")
+    db.executescript(TRIGGERS)
+    db.execute("INSERT OR REPLACE INTO meta (k,v) VALUES ('schema_version',?)", (SCHEMA_VERSION,))
+    db.commit()
 
 
 # --------------------------------------------------------------------------- helpers
@@ -279,6 +313,9 @@ def sync_root(root: Path, full: bool = False, cfg: dict | None = None, log=print
     db.commit()
     if fast:
         fast["conn"].close()
+    if added or changed or gone:
+        import dbmaint
+        dbmaint.light_conn(db, ["claim_fts"])
     res = {"root": str(root), "added": added, "changed": changed, "unchanged_touched": same,
            "removed": len(gone), "claims_written": claims_n, "seconds": round(time.time() - t0, 1)}
     mg.append_metrics({"ts": time.time(), **res}, event="store_sync")
@@ -352,9 +389,20 @@ def search(query: str, project: str | None = None, limit: int = 8, unproven: boo
     try:
         tset = set(terms)
         found: dict[int, tuple] = {}
-        # Precise first: every term must be there. Only if that is thin, any term may.
-        for op in (" AND ", " OR "):
-            q = op.join(f'"{t}"' for t in terms)
+        # Precise first: every term must be there. If that is thin, any TWO terms together;
+        # any single term only when no pair co-occurs at all. A single common term ("weight",
+        # "dose") matched tens of thousands of claims, all of them scored by bm25 and nearly
+        # all of them noise: the pair step is 4x faster and its answers cover more of the
+        # question (measured 2026-10-03: mean coverage 0.60 -> 0.76 on a dose/regain query).
+        exprs = [" AND ".join(f'"{t}"' for t in terms)]
+        if len(terms) > 1:
+            if len(terms) > 2:
+                exprs.append(" OR ".join(f'("{a}" AND "{b}")'
+                                         for a, b in itertools.combinations(terms, 2)))
+            exprs.append(" OR ".join(f'"{t}"' for t in terms))
+        for i, q in enumerate(exprs):
+            if i == len(exprs) - 1 and i > 1 and found:
+                break                      # some pair co-occurred: single terms add only noise
             for row in db.execute(
                     "SELECT c.id, c.text, c.status, c.utility, c.anchor_line, d.path, d.project,"
                     " c.keywords, bm25(claim_fts, 1.0, 0.5) AS b FROM claim_fts"
