@@ -127,7 +127,7 @@ def check_refuted(rows) -> list[Finding]:
     out = []
     for r in rows:
         try:
-            hit = claims.lookup(cdb, r["text"]) if hasattr(claims, "lookup") else None
+            hit = claims.match(cdb, r["text"], allow_semantic=False)   # was claims.lookup, which never existed
         except Exception:
             hit = None
         if hit and str(hit.get("status", "")).upper() == "REFUTED":

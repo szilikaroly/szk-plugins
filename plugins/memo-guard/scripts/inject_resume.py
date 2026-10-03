@@ -85,6 +85,14 @@ def main() -> int:
     cwd = data.get("cwd") or ""
     cfg = mg.load_config()
 
+    # Files changed outside Claude since the last scan get queued for ingestion
+    # (background, rate-limited by ingest_scan_every_min; prints nothing).
+    try:
+        import ingest
+        ingest.maybe_scan(cfg)
+    except Exception:
+        pass
+
     # Core memory goes in first and unconditionally. It is not a summary of past
     # work, so it must not depend on past work existing — a preference or a
     # learned workflow applies to a brand new session too.

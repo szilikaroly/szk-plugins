@@ -111,6 +111,8 @@ The ratio also improves with session size — the resume is a near-constant
 - `/memo-guard:claim` — refute, supersede or pin a claim so it stays judged
 - `/memo-guard:autopilot` — let compaction fire on its own at a chosen context %
 - `/memo-guard:doctor` — what is misconfigured, overlapping, or quietly broken
+- `/memo-guard:corpus` — search the whole indexed workspace: verified claims, concepts, tables as SQL
+- `/memo-guard:ingest` — realtime ingestion: queue status, pause/resume the GPU, scan now
 
 ## Autopilot — archive, compress, compact, without you asking
 
@@ -374,6 +376,32 @@ Measured (`selftest.py`): **74 ms warm**, 672 ms on the first prompt of a sessio
 (interpreter start plus the one health probe). Silence is the correct output for
 most prompts; every miss is written to `metrics.jsonl` so the hit rate is
 measurable rather than anecdotal.
+
+## Corpus store — the whole workspace, queryable (0.15.0)
+
+`config.json` → `"corpus_roots": ["~/Documents/claude"]` turns it on (empty = off, which also
+keeps the self test hermetic). Everything stays local, in `data_dir()`:
+
+| file | what | how it stays current |
+|---|---|---|
+| `memo.db` | every memo-index claim of every root (`store.py`): 856k claims / 20.8k memos measured, 417 MB, search 4–60 ms | incremental by memo mtime/size, then sha256; a changed memo is re-imported, a deleted one removed |
+| `data.db` | every CSV/TSV/XLSX sheet as a real SQL table `t<id>` (`tables.py`), plus full-text over text-table rows | incremental by file mtime/size |
+| `memo.db` → `emb`, `concept`, `concept_member`, `edge` | 256-d nomic embeddings, k-means concepts with keyword labels, `conflict` edges between near-identical claims whose numbers differ (`concepts.py`) | rebuilt in the background when the GPU is free |
+| `ingest/` | queue + worker state (`ingest.py`) | PostToolUse appends one line; SessionStart scans at most every `ingest_scan_every_min` |
+
+- **Recall.** The UserPromptSubmit hook adds up to `corpus_max_claims` (3) corpus claims within
+  `corpus_max_tokens` (300), each with `path:line`, only when ≥60% of the prompt's terms are in
+  the claim. REFUTED/STALE never surface; outside every root nothing is injected. When the
+  words miss (a Hungarian question over English papers) one concept card can stand in, if the
+  query embedding fits the deadline and clears `concept_min_sim`.
+- **Realtime.** A Write/Edit inside a root is queued; a detached single-flight worker makes the
+  memo on the local GPU with the same staging as the batch runs (same staged names, 120-char
+  wrap for tagged/long-line text), verifies anchors while the staged text exists, imports
+  tables, and syncs the store. `/memo-guard:ingest pause` keeps everything queued and the GPU
+  untouched; the first scan of a root only records state, it never queues the whole corpus.
+- **Tokenisation is Unicode-aware** (`mg.fold`/`mg.terms`): accents are folded the way FTS5's
+  unicode61 tokenizer folds them, so "elhízás" matches "elhizas"; Hungarian function words are
+  stop words.
 
 ## Retrieval order (cheapest first)
 

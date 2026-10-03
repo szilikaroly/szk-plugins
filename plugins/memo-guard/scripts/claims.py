@@ -320,7 +320,7 @@ def apply_to_memo_dir(db: sqlite3.Connection, memo_dir: Path) -> dict:
             note = v["note"] or "previously judged in an earlier session"
             if v["status"] == "SUPERSEDED" and v["replacement"]:
                 new_body = v["replacement"]
-                tag = "SUPPORTED"
+                tag = "CONFIRMED"   # memo-index vocabulary; "SUPPORTED" matched nothing downstream
                 note = f"superseded earlier wording; {note}"
             else:
                 new_body = body

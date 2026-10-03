@@ -87,8 +87,38 @@ def sessions_dir() -> Path:
     return p
 
 
+def fold(text: str) -> str:
+    """Lowercase and strip diacritics: "Elhízás" -> "elhizas".
+
+    The same folding SQLite FTS5's default unicode61 tokenizer applies to what it indexes.
+    The lexical paths used [a-z0-9]{3,}, which cut Hungarian words at the first accented
+    letter ("elhízás" -> "elh"), so a query term could never equal the indexed token.
+    """
+    import unicodedata
+    t = unicodedata.normalize("NFKD", (text or "").lower())
+    return "".join(c for c in t if not unicodedata.combining(c))
+
+
+def terms(text: str, stop: set | frozenset = frozenset(), min_len: int = 3) -> list[str]:
+    """Unicode-aware search terms: folded words of >= min_len letters/digits, minus stop."""
+    return [w for w in re.findall(r"[^\W_]{%d,}" % min_len, fold(text)) if w not in stop]
+
+
+# Hungarian function words: the user writes most prompts in Hungarian, and without these
+# "hogy van az, ami nem megy" passes the >=2-term gate on noise alone.
+HU_STOP = frozenset("""hogy nem egy van ami amit azt ezt meg mint csak vagy mar meg kell lesz volt
+ezek azok akkor mert majd itt ott most igen nincs lehet legyen nekem neked nala
+valami minden mindent nagyon tobb kicsit sok is es a az de ha mi ki mit hol mikor miert
+hogyan melyik melyek kerem kerlek szeretnem szeretne tudsz tudod nezd nezzuk legyen""".split())
+
+
 def project_slug(cwd: str) -> str:
-    s = re.sub(r"[^A-Za-z0-9_-]+", "-", (cwd or "").strip("/")).strip("-")
+    # The drive letter is not part of a project's identity. Without dropping it the same
+    # folder was "Users-szili-Documents-claude" on the Mac and "C-Users-szili-Documents-
+    # claude" on Windows, so after the move every stored fact sat under a slug no session
+    # ever produced again: 358 prompts, 0 recalls (2026-08-24 .. 10-03).
+    p = re.sub(r"^[A-Za-z]:", "", (cwd or "").replace("\\", "/"))
+    s = re.sub(r"[^A-Za-z0-9_-]+", "-", p.strip("/")).strip("-")
     return (s[-80:] or "root")
 
 # --------------------------------------------------------------------------- config
@@ -177,6 +207,34 @@ DEFAULTS = {
     "auto_promote": False,
     "auto_promote_utility": 0.75,
     "auto_promote_max": 5,
+    # Global corpus store (store.py, data_dir()/memo.db): every memo-index claim from these
+    # roots, each root's memos in <root>/.memo. Empty = off, which also keeps the self-test
+    # and recall_eval sandboxes hermetic (a default built from Path.home() would make them
+    # read a 1 GB real index and vary by machine).
+    "corpus_roots": [],
+    # Corpus claims as a separately budgeted recall source, next to long-term memory.
+    "corpus_recall": True,
+    "corpus_max_claims": 3,
+    "corpus_max_tokens": 300,
+    # Tables (CSV/XLSX) as real SQL tables in data_dir()/data.db (tables.py).
+    "corpus_tables": True,
+    # Realtime ingestion (ingest.py): files Claude writes are queued by the PostToolUse
+    # hook; a SessionStart scan picks up files changed outside Claude at most this often.
+    "ingest": True,
+    "ingest_scan_every_min": 30,
+    # The ingest worker uses the local GPU through Ollama. "pause" (or /memo-guard:ingest
+    # pause) keeps files queued without touching the GPU.
+    "ingest_model": True,
+    "ingest_prose_model": "llama3.1:8b",
+    "ingest_big_model": "qwen3:14b",
+    # Start `ollama serve` (q8 KV, flash attention) when the worker needs it and it is down.
+    "ingest_start_ollama": True,
+    "ingest_ollama_parallel": 4,
+    # Concept cards (concepts.py) in recall: one card at most, only when the nearest
+    # concept's cosine clears this. Calibrate after the first build; until concepts exist
+    # the path makes no call at all.
+    "concept_recall": True,
+    "concept_min_sim": 0.62,
 }
 
 

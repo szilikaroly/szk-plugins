@@ -190,8 +190,120 @@ def main() -> int:
     dr_ok = check_doctor(home)
     dg_ok = check_degradation(home)
     bw_ok = check_busy_vs_wedged()
+    cp_ok = check_corpus(home)
     return 0 if (ok and hit and ap_ok and cv_ok and co_ok and sb_ok and rc_ok
-                 and ev_ok and mr_ok and dr_ok and dg_ok and bw_ok) else 1
+                 and ev_ok and mr_ok and dr_ok and dg_ok and bw_ok and cp_ok) else 1
+
+
+def check_corpus(home: Path) -> bool:
+    """13) Corpus store, tables, ingest queue, corpus recall - all inside the sandbox.
+
+    Every assertion is a failure that would otherwise be silent: a REFUTED claim served
+    as fact, a staged PDF memo pointing at a .txt nobody has, an incremental sync that
+    re-reads everything, a Hungarian decimal stored as text, a write through the
+    read-only SQL door, a corpus claim leaking into a session outside the root.
+    """
+    import hashlib as _h
+    import store
+    import tables
+    import ingest
+    print("\n13) corpus store / tables / ingest / corpus recall")
+    ok = True
+
+    def chk(cond, what):
+        nonlocal ok
+        print(f"   {'ok  ' if cond else 'FAIL'} {what}")
+        ok = ok and bool(cond)
+
+    root = home / "corpus-root"
+    (root / "kutatas" / "proj").mkdir(parents=True, exist_ok=True)
+    (root / ".memo").mkdir(exist_ok=True)
+    src = root / "kutatas" / "proj" / "notes.md"
+    src.write_text("# notes\n\nDonor exclusion criteria in 34 studies.\n\nexclusion\n", encoding="utf-8")
+    sha = _h.sha256(src.read_bytes()).hexdigest()
+    (root / ".memo" / "kutatas__proj__notes.md-00000001.memo.md").write_text(
+        f"---\nsource: kutatas/proj/notes.md\nsha256: {sha}\nlines: 5\nprofile: prose\n---\n\n"
+        "# kutatas/proj/notes.md\n\n## Claims\n\n"
+        "- [C1] [CONFIRMED] Donor exclusion criteria were reported in 34 studies @L3 `exclusion criteria in 34`\n"
+        "- [C2] [REFUTED] Donor exclusion criteria were reported in 99 studies @L3 `exclusion criteria in 99`\n"
+        "- [C3] [CONFIRMED] @L5 `exclusion` @semantic L1-5\n", encoding="utf-8")
+    (root / ".memo" / "paper_pdf-abcdef12.txt-00000002.memo.md").write_text(
+        "---\nsource: paper_pdf-abcdef12.txt\nsha256: x\nlines: 20\nprofile: prose\n---\n\n## Claims\n\n"
+        "- [C1] [CONFIRMED] Donor exclusion criteria included recent antibiotic use @L10 `recent antibiotic use`\n",
+        encoding="utf-8")
+    (root / ".memo" / "_source_map.tsv").write_text(
+        "staged\toriginal\tmode\npaper_pdf-abcdef12.txt\tkutatas/proj/paper.pdf\tingest\n", encoding="utf-8")
+
+    real_mi = store._memo_index
+    store._memo_index = lambda cfg: (_ for _ in ()).throw(ImportError("hermetic"))
+    try:
+        r1 = store.sync_root(root, cfg={}, log=lambda *a: None)
+        hits = store.search("donor exclusion criteria")
+        texts = " | ".join(h["text"] for h in hits)
+        chk(any("34 studies" in h["text"] and h["path"] == "kutatas/proj/notes.md" and h["line"] == 3
+                for h in hits), "a CONFIRMED claim comes back with its file and line")
+        chk("99 studies" not in texts, "a REFUTED claim never comes back")
+        chk(not any(h["text"].startswith("@L") for h in hits), "an anchor-only claim is not an answer")
+        chk(any(h["path"] == "kutatas/proj/paper.pdf" and h["project"] == "kutatas/proj" for h in hits),
+            "a staged .txt memo resolves to the original PDF and its project")
+        r2 = store.sync_root(root, cfg={}, log=lambda *a: None)
+        chk(r1["added"] == 2 and r2["added"] == 0 and r2["changed"] == 0,
+            f"incremental: second sync touches nothing ({r2['added']} added, {r2['changed']} changed)")
+        mp = root / ".memo" / "paper_pdf-abcdef12.txt-00000002.memo.md"
+        mp.write_text(mp.read_text(encoding="utf-8").replace("recent antibiotic use @L10", "recent antibiotic use within 3 months @L10"), encoding="utf-8")
+        r3 = store.sync_root(root, cfg={}, log=lambda *a: None)
+        mp.unlink()
+        r4 = store.sync_root(root, cfg={}, log=lambda *a: None)
+        chk(r3["changed"] == 1 and r4["removed"] == 1, "an edited memo is re-imported, a deleted one removed")
+        t0 = time.time(); store.search("donor exclusion criteria"); ms = (time.time() - t0) * 1000
+        chk(ms < 200, f"search latency {ms:.0f} ms")
+    finally:
+        store._memo_index = real_mi
+
+    (root / "kutatas" / "proj" / "tabla.csv").write_text(
+        "id;varos;prevalencia\n0123;Szeged;33,2\n0456;Debrecen;22\n", encoding="utf-8")
+    tr = tables.sync_root(root, log=lambda *a: None)
+    chk(tr["tables"] == 1, "one CSV becomes one SQL table")
+    rows = tables.find("Szeged")
+    chk(rows and rows[0]["path"] == "kutatas/proj/tabla.csv", "a row is found by full-text search")
+    name = rows[0]["table"] if rows else "t1"
+    cols, data = tables.sql(f'SELECT "prevalencia", "id" FROM {name} ORDER BY 1 DESC')
+    chk(data and data[0][0] == 33.2 and data[0][1] == "0123",
+        "'33,2' is the number 33.2; '0123' stays an identifier")
+    try:
+        tables.sql(f"DELETE FROM {name}")
+        chk(False, "the SQL door is read-only")
+    except Exception:
+        chk(True, "the SQL door is read-only")
+
+    cfg = {"corpus_roots": [str(root)], "ingest": True}
+    chk(ingest.enqueue(root / "kutatas" / "proj" / "new.md", "test", cfg), "a file inside the root is queued")
+    chk(not ingest.enqueue(home / "elsewhere.md", "test", cfg), "a file outside every root is not")
+    chk(not ingest.enqueue(root / ".memo" / "x.memo.md", "test", cfg), "the memo dir itself is never queued")
+    items = ingest._take_queue()
+    chk(len(items) == 1 and items[0]["rel"] == "kutatas/proj/new.md", "the queue hands over exactly what was queued")
+
+    cfgp = mg.data_dir() / "config.json"
+    saved = cfgp.read_text(encoding="utf-8") if cfgp.exists() else None
+    c = json.loads(saved) if saved else {}
+    c.update({"corpus_roots": [str(root)], "corpus_recall": True})
+    cfgp.write_text(json.dumps(c), encoding="utf-8")
+    try:
+        q = "What were the donor exclusion criteria reported in the studies?"
+        _, out_in = hook("recall.py", {"session_id": "corpus-test", "prompt": q, "cwd": str(root),
+                                       "hook_event_name": "UserPromptSubmit"})
+        _, out_out = hook("recall.py", {"session_id": "corpus-test-2", "prompt": q,
+                                        "cwd": str(home / "fake-projects"),
+                                        "hook_event_name": "UserPromptSubmit"})
+        chk("[memo-guard corpus]" in out_in and "34 studies" in out_in and "99 studies" not in out_in,
+            "inside the root the hook injects the verified claim, never the refuted one")
+        chk("[memo-guard corpus]" not in out_out, "outside the root nothing from the corpus leaks in")
+    finally:
+        if saved is None:
+            cfgp.unlink(missing_ok=True)
+        else:
+            cfgp.write_text(saved, encoding="utf-8")
+    return ok
 
 
 def check_doctor(home: Path) -> bool:

@@ -24,6 +24,14 @@ import mg_lib as mg  # noqa: E402
 
 def main() -> int:
     data = mg.read_stdin_json()
+    # Realtime ingestion: a write inside a corpus root becomes one queued line. The tool
+    # check comes first so the other ~95% of tool calls never import ingest at all.
+    if data.get("tool_name") in ("Write", "Edit", "MultiEdit", "NotebookEdit"):
+        try:
+            import ingest
+            ingest.enqueue_from_hook(data, mg.load_config())
+        except Exception:
+            pass
     tp = data.get("transcript_path")
     if not tp or not Path(tp).exists():
         return 0

@@ -149,6 +149,7 @@ def connect() -> sqlite3.Connection:
     if fresh:
         db.execute("INSERT OR REPLACE INTO meta (k,v) VALUES ('schema_version','1')")
         db.commit()
+    _migrate_norms(db)
     # Owner-only where the OS supports it. secure_file() reports whether it
     # really did — on Windows chmod cannot deliver this, and the store holds
     # material from every project.
@@ -159,8 +160,29 @@ def connect() -> sqlite3.Connection:
 # --------------------------------------------------------------------------- helpers
 
 def _norm(text: str) -> str:
-    t = re.sub(r"\s+", " ", text.strip().lower())
+    # Accents are FOLDED, not deleted: the old version turned "elhízás" into "elhzs",
+    # so two Hungarian facts differing only in their accented words collided on the
+    # UNIQUE(project_id, norm) key. connect() migrates stored norms once (norm_version 2).
+    t = re.sub(r"\s+", " ", mg.fold(text.strip()))
     return re.sub(r"[^a-z0-9\s.%<>=-]", "", t)
+
+
+def _migrate_norms(db: sqlite3.Connection) -> None:
+    """Recompute fact.norm with the accent-folding _norm, once. A row whose new norm
+    would collide with another fact in the same project keeps its old norm (it is a
+    near-duplicate the user can merge; silently dropping either fact would lose data)."""
+    if (db.execute("SELECT v FROM meta WHERE k='norm_version'").fetchone() or [None])[0] == "2":
+        return
+    for fid, pid, text, norm in db.execute("SELECT id, project_id, text, norm FROM fact").fetchall():
+        new = _norm(text or "")
+        if new == norm:
+            continue
+        try:
+            db.execute("UPDATE fact SET norm=? WHERE id=?", (new, fid))
+        except sqlite3.IntegrityError:
+            pass
+    db.execute("INSERT OR REPLACE INTO meta (k,v) VALUES ('norm_version','2')")
+    db.commit()
 
 
 def project_id(db: sqlite3.Connection, cwd: str) -> int:
@@ -408,8 +430,7 @@ def recall(db: sqlite3.Connection, query: str, cwd: str, goal: str | None,
     # "how many people took part in the study" matches any fact containing "the",
     # and a position-based rank then hands that noise a perfect lexical score —
     # which is exactly how an unrelated fact won every query here.
-    terms = [w for w in re.findall(r"[a-z0-9]{3,}", (query or goal or "").lower())
-             if w not in _QUERY_STOP]
+    terms = mg.terms(query or goal or "", _QUERY_STOP | mg.HU_STOP)
     lex_rank: dict[int, float] = {}
     if terms:
         q = " OR ".join(terms[:12])
@@ -440,7 +461,7 @@ def recall(db: sqlite3.Connection, query: str, cwd: str, goal: str | None,
                 norms = dict(db.execute(
                     f"SELECT id,norm FROM fact WHERE id IN ({qmarks})", ids_))
                 for rid in ids_:
-                    words = set(re.findall(r"[a-z0-9]{3,}", norms.get(rid, "")))
+                    words = set(mg.terms(norms.get(rid, "")))
                     cov = len(tset & words) / max(1, len(tset))
                     lex_rank[rid] *= max(0.25, min(1.0, cov * 2.0))
         except sqlite3.OperationalError:
@@ -530,6 +551,11 @@ def recall(db: sqlite3.Connection, query: str, cwd: str, goal: str | None,
     # cheapest way to stop confidently recalling a fact that something else in
     # the store already overturned.
     seen_ids = {r[1] for r in scored}
+    # Built BEFORE the neighbour loop, which records neighbours into it. It used to be
+    # assigned after the loop, so the first neighbour hit `rel_of[...] = None` on an
+    # unbound name -> UnboundLocalError -> recall.py swallowed it and injected nothing
+    # whenever a top-5 hit had an edge to a non-hit fact (2026-10-03, since 6ea1a39).
+    rel_of = {r[1]: r[8] for r in scored}
     neighbours = []
     for score, fid, *_ in scored[:5]:
         for nid, rel, w in db.execute(
@@ -553,7 +579,6 @@ def recall(db: sqlite3.Connection, query: str, cwd: str, goal: str | None,
             # would let the same floor delete graph expansion entirely. It is
             # exempt instead — the edge type is the evidence, not the words.
             rel_of[row[0]] = None
-    rel_of = {r[1]: r[8] for r in scored}
     scored = [(s, i, t, k, a, sl, sa, c, None) for s, i, t, k, a, sl, sa, c, _ in scored]
     scored.extend(neighbours)
     scored.sort(reverse=True, key=lambda r: r[0])

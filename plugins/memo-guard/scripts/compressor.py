@@ -332,7 +332,7 @@ def build_resume(workdir: Path, sid: str, archive: Path, mode: str,
             idx = sqlite3.connect(memo_dir / "index.db")
             rows = idx.execute(
                 "SELECT text, source, anchor_line, utility FROM claims"
-                " WHERE status='SUPPORTED' AND utility>=?"
+                " WHERE status IN ('CONFIRMED','DRIFTED') AND utility>=?"   # schema v2: no 'SUPPORTED' (auto-promote was dead)
                 " ORDER BY utility DESC LIMIT ?", (floor, cap)).fetchall()
             idx.close()
             mdb = ltm.connect()
