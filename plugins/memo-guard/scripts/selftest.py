@@ -269,6 +269,24 @@ INSERT INTO claim (doc_id, cid, text, status, utility) VALUES
         res = dbmaint.heavy_all(["memo"])
         chk(res and not res[0].get("error") and "claim_fts: integrity ok" in res[0].get("steps", []),
             "the daily heavy pass checks, optimizes and analyzes without error")
+
+        # A project whose directory moved keeps its facts recallable after --move-project.
+        import memory
+        mdb = memory.connect()
+        old = "/Users/someone/Documents/claude/thesis_proj"
+        memory.promote(mdb, "Thesis rule: every table carries its source and year", old,
+                       kind="decision", utility=0.8)
+        memory.promote(mdb, "Thesis rule: abbreviations are defined at first use", old,
+                       kind="decision", utility=0.8)
+        new_dir = home / "dbm" / "kutatas" / "thesis_proj"
+        new_dir.mkdir(parents=True, exist_ok=True)
+        before = memory.recall(mdb, "thesis rule table source year", str(new_dir), None)
+        r = memory.move_project(mdb, mg.project_slug(old), str(new_dir))
+        after = memory.recall(mdb, "thesis rule table source year", str(new_dir), None)
+        txt = json.dumps(after, ensure_ascii=False)
+        chk(r["moved"] == 2 and "every table carries its source" in txt
+            and "every table carries its source" not in json.dumps(before, ensure_ascii=False),
+            "after --move-project the moved project's facts are recalled at the new path")
     finally:
         os.environ["MEMO_GUARD_HOME"] = saved
     return ok

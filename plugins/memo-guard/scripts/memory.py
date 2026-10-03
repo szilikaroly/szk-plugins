@@ -271,6 +271,39 @@ def forget(db: sqlite3.Connection, fid: int) -> bool:
     return True
 
 
+def move_project(db: sqlite3.Connection, slug: str, new_cwd: str) -> dict:
+    """Re-point a project at the directory it lives in now.
+
+    Facts are recalled through the project slug of the session's cwd. When the workspace was
+    reorganised (projects moved under kutatas/ on the Windows machine), every fact of a moved
+    project kept its old slug and stopped surfacing anywhere: 21 facts, among them the 17
+    canonical rules of the thesis project. This moves the project row; the facts are not
+    touched. Moving into a project that already exists merges, and a fact whose text that
+    project already holds stays where it was and is reported. Nothing is deleted.
+    """
+    row = db.execute("SELECT id FROM project WHERE slug=?", (slug,)).fetchone()
+    if not row:
+        raise ValueError(f"no project with slug {slug}")
+    old_id = row[0]
+    new_slug = mg.project_slug(new_cwd)
+    tgt = db.execute("SELECT id FROM project WHERE slug=?", (new_slug,)).fetchone()
+    moved, kept = 0, []
+    if not tgt or tgt[0] == old_id:
+        db.execute("UPDATE project SET slug=?, cwd=?, last_seen=? WHERE id=?",
+                   (new_slug, new_cwd, time.time(), old_id))
+        moved = db.execute("SELECT COUNT(*) FROM fact WHERE project_id=?", (old_id,)).fetchone()[0]
+    else:
+        for fid, text in db.execute("SELECT id, text FROM fact WHERE project_id=?",
+                                    (old_id,)).fetchall():
+            try:
+                db.execute("UPDATE fact SET project_id=? WHERE id=?", (tgt[0], fid))
+                moved += 1
+            except sqlite3.IntegrityError:
+                kept.append(fid)
+    db.commit()
+    return {"from": slug, "to": new_slug, "cwd": new_cwd, "moved": moved, "kept_duplicates": kept}
+
+
 def reindex_fts(db: sqlite3.Connection) -> int:
     """Rebuild the search index from `fact`, which is the source of truth.
 
@@ -644,6 +677,8 @@ def main() -> int:
     ap.add_argument("--rel", default="relates_to", choices=RELS)
     ap.add_argument("--weight", type=float, default=1.0)
     ap.add_argument("--neighbors", metavar="ID")
+    ap.add_argument("--move-project", nargs=2, metavar=("SLUG", "NEW_DIR"),
+                    help="re-point a project whose directory moved (facts untouched)")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
 
@@ -662,6 +697,22 @@ def main() -> int:
 
     if args.repair:
         print(f"removed {repair_tombstones(db)} contradicted tombstone(s)")
+        return 0
+
+    if args.move_project:
+        slug, new_dir = args.move_project
+        if not Path(new_dir).is_dir():
+            print(f"not a directory: {new_dir}", file=sys.stderr)
+            return 2
+        try:
+            r = move_project(db, slug, str(Path(new_dir).resolve()))
+        except ValueError as e:
+            print(str(e), file=sys.stderr)
+            return 2
+        _request_sync()
+        print(json.dumps(r) if args.json else
+              f"moved {r['moved']} fact(s): {r['from']} -> {r['to']}"
+              + (f"; {len(r['kept_duplicates'])} duplicate(s) left in place" if r["kept_duplicates"] else ""))
         return 0
 
     if args.reindex:

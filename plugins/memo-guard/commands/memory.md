@@ -30,6 +30,11 @@ Parse "$ARGUMENTS":
 - `disable <slug>` / `enable <slug>` → `--disable <slug>` / `--enable <slug>`
   Disable a project whose facts must never be recalled elsewhere.
 - `forget <id>` → `--forget <id>`
+- `move <slug> <new dir>` → `--move-project <slug> "<new dir>"`
+  When a project's folder moved, its facts are only recalled from the old path. This
+  re-points the project at the new folder. The facts themselves are untouched, and if the
+  new folder already has a project the two are merged. Use `projects` to find the slug,
+  and look for rows whose path no longer exists.
 
 Nothing enters this store by itself. Promote only what would be expensive to
 re-derive and that you would want a future session to know — not narration of what
