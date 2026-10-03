@@ -399,6 +399,22 @@ keeps the self test hermetic). Everything stays local, in `data_dir()`:
   wrap for tagged/long-line text), verifies anchors while the staged text exists, imports
   tables, and syncs the store. `/memo-guard:ingest pause` keeps everything queued and the GPU
   untouched; the first scan of a root only records state, it never queues the whole corpus.
+- **Big tables get a card, not a model pass (0.15.2).** A CSV/TSV whose staged text is
+  `table_card_min_chunks` (100) memo_gen chunks or more gets a computed **table card**
+  (`table_card.py`). The card is written under the memo name memo_gen would have used and
+  covers the whole file. It holds:
+  - the columns and the row count;
+  - each numeric column's range and median, and each categorical column's most frequent values;
+  - the first rows;
+  - the SQL table to query.
+
+  Every claim is anchored to a literal snippet of its staged line, so verify_anchors confirms
+  it. Measured on the workspace, 2026-10-03: 16 such CSVs were ~5000 chunks and 3–8 GPU-hours
+  per shard. The 8B model paraphrased literature-screening titles and authors and said nothing
+  useful about Monte Carlo output, and tables.py already held every row. The cards took 28 s
+  and gave 268 claims, all CONFIRMED.
+
+  A card needs no GPU, so it is written even while ingestion is paused. `0` turns cards off.
 - **Tokenisation is Unicode-aware** (`mg.fold`/`mg.terms`): accents are folded the way FTS5's
   unicode61 tokenizer folds them, so "elhízás" matches "elhizas"; Hungarian function words are
   stop words.

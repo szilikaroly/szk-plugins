@@ -192,9 +192,83 @@ def main() -> int:
     bw_ok = check_busy_vs_wedged()
     cp_ok = check_corpus(home)
     st_ok = check_sync_tombstones(home)
+    tc_ok = check_table_cards(home)
     return 0 if (ok and hit and ap_ok and cv_ok and co_ok and sb_ok and rc_ok
                  and ev_ok and mr_ok and dr_ok and dg_ok and bw_ok and cp_ok
-                 and st_ok) else 1
+                 and st_ok and tc_ok) else 1
+
+
+def check_table_cards(home: Path) -> bool:
+    """15) A big table gets a computed card, never a model pass.
+
+    The 2026-10-03 decision: a CSV of 100+ memo_gen chunks costs GPU-hours, the 8B model
+    paraphrases screening-list titles and authors, and tables.py already holds every row.
+    Checked: every card claim's snippet is literally on the staged line it names (so
+    verify_anchors confirms it), the computed numbers are right, the card covers the whole
+    file (no false "partial memo"), and the ingest worker writes it without starting a
+    model -- even with the pause flag set, because a card needs no GPU.
+    """
+    import re as _re
+    import ingest
+    import table_card
+    print("\n15) table cards")
+    ok = True
+
+    def chk(cond, what):
+        nonlocal ok
+        print(f"   {'ok  ' if cond else 'FAIL'} {what}")
+        ok = ok and bool(cond)
+
+    root = home / "card-root"
+    (root / "data").mkdir(parents=True, exist_ok=True)
+    rel = "data/sim.csv"
+    rows = ["iter;arm;cost;note"] + [f"{i};{'A' if i % 3 else 'B'};{1000 + (i * 37) % 5000};run {i}"
+                                     for i in range(1, 17001)]
+    (root / rel).write_text("\n".join(rows) + "\n", encoding="utf-8")
+    ab = str((root / rel).resolve())
+    chk(table_card.chunks(ab) >= 100, "the fixture is big enough to get a card")
+    mname, text, info = table_card.build(root, rel, "t7")
+    _, _, slines = table_card.staged(ab)
+    claims = _re.findall(r"^- \[C\d+\] \[PENDING\] (.*) @L(\d+) `([^`]*)`$", text, _re.M)
+    chk(claims and all(s and s in slines[int(n) - 1].replace("`", "") for _, n, s in claims),
+        f"every one of {len(claims)} claims is anchored to a literal snippet on its line")
+    chk(f"- L1-{len(slines)}:" in text, "the card covers the whole staged file")
+    chk("'cost' is numeric (17,000 values) and ranges from 1000 to 5999" in text,
+        "a numeric column's range is computed, not guessed")
+    chk("'arm' has 2 distinct values; most frequent: A (11,334), B (5,666)" in text,
+        "a categorical column's counts are exact")
+    chk("17,000 data rows and 4 columns" in text and "SQL table t7" in text,
+        "the card names its size and the SQL table to query")
+
+    cfg = {"corpus_roots": [str(root)], "memo_index_path": "", "table_card_min_chunks": 100,
+           "corpus_tables": False}
+    small = root / "data" / "small.csv"
+    small.write_text("a;b\n1;2\n", encoding="utf-8")
+    chk(ingest._is_card(root / rel, ".csv", cfg) and not ingest._is_card(small, ".csv", cfg)
+        and not ingest._is_card(root / rel, ".csv", dict(cfg, table_card_min_chunks=0)),
+        "only the big table is carded, and 0 turns cards off")
+    calls = []
+    real_run = ingest.subprocess.run
+
+    def no_model(*a, **k):
+        calls.append(a)
+        raise RuntimeError("no model in this test")
+
+    ingest.subprocess.run = no_model
+    flag = ingest.qdir() / "paused"
+    flag.write_text("selftest", encoding="utf-8")
+    try:
+        ingest.enqueue(root / rel, "test", cfg)
+        done = ingest.work(cfg, debounce=0, idle_exit=0)
+        mp = root / ".memo" / mname
+        chk(done.get("cards") == 1 and not done.get("deferred") and not calls,
+            "the worker writes the card while paused, without starting memo_gen")
+        chk(mp.exists() and "generator: table-card" in mp.read_text(encoding="utf-8"),
+            "the card sits where memo_gen's memo would have")
+    finally:
+        ingest.subprocess.run = real_run
+        flag.unlink(missing_ok=True)
+    return ok
 
 
 def check_sync_tombstones(home: Path) -> bool:

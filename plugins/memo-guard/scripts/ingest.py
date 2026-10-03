@@ -296,7 +296,7 @@ def process_doc(root: Path, rel: str, cfg: dict) -> tuple[str, str]:
     ext = os.path.splitext(rel)[1].lower()
     env = dict(os.environ, PYTHONUTF8="1",
                MEMO_MODEL_PROSE=cfg.get("ingest_prose_model", "llama3.1:8b"),
-               MEMO_MODEL_BIG=cfg.get("ingest_big_model", "qwen3:14b"))
+               MEMO_MODEL_BIG=cfg.get("ingest_vision_model", "qwen3-vl:4b"))
     stage = Path(tempfile.mkdtemp(prefix="mgi_"))
     try:
         native = ext in TEXT_EXT and ext not in ALWAYS_PREP and _max_line(ab) <= LONG
@@ -311,6 +311,14 @@ def process_doc(root: Path, rel: str, cfg: dict) -> tuple[str, str]:
         if ext in TEXT_EXT:
             if prep_text(ab, str(stage / name)) < 32:
                 return "empty", "under 32 chars of text"
+            lim = int(cfg.get("table_card_min_chunks", 100) or 0)
+            if lim and ext in (".csv", ".tsv"):
+                with open(stage / name, encoding="utf-8", errors="replace") as fh:
+                    n = sum(1 for _ in fh)
+                if -(-n // 160) >= lim:            # memo_gen chunks of 160 lines
+                    import table_card
+                    done = table_card.write_cards(root, memo_dir, [rel], ms=ms, log=lambda *a: None)
+                    return ("table-card" if done else "convert-error"), f"{-(-n // 160)} chunks"
         else:
             r = subprocess.run([sys.executable, str(ms / "doc_ingest.py"), "--outdir", str(stage),
                                 "--no-images", ab], capture_output=True, text=True,
@@ -335,6 +343,19 @@ def process_doc(root: Path, rel: str, cfg: dict) -> tuple[str, str]:
 
 def paused() -> bool:
     return (qdir() / "paused").exists()
+
+
+def _is_card(p: Path, ext: str, cfg: dict) -> bool:
+    """Will this file get a computed table card rather than a model pass? Decided on the
+    staged size, the same measure process_doc uses, so the two can never disagree."""
+    lim = int(cfg.get("table_card_min_chunks", 100) or 0)
+    if not lim or ext not in (".csv", ".tsv"):
+        return False
+    try:
+        import table_card
+        return table_card.chunks(str(p.resolve())) >= lim
+    except Exception:
+        return False
 
 
 def _beat(**extra) -> None:
@@ -372,7 +393,7 @@ def work(cfg: dict, debounce: float = 8.0, idle_exit: float = 30.0) -> dict:
         return {"skipped": "another worker is running"}
     _beat(state="debounce")
     time.sleep(debounce)                      # a burst of edits becomes one pass
-    done = {"tables": 0, "memos": 0, "no_claims": 0, "errors": 0, "deferred": 0}
+    done = {"tables": 0, "memos": 0, "cards": 0, "no_claims": 0, "errors": 0, "deferred": 0}
     sdb = state_db()
     idle_since = time.time()
     touched_roots = set()
@@ -403,21 +424,27 @@ def work(cfg: dict, debounce: float = 8.0, idle_exit: float = 30.0) -> dict:
                     tdb.commit(); tdb.close()
                     done["tables"] += len(res)
                     outcome = "table"
-                if paused() or not cfg.get("ingest_model", True):
-                    deferred.append(it); done["deferred"] += 1
-                    continue
-                if gpu_ok is None:
-                    gpu_ok = ensure_ollama(cfg)
-                if not gpu_ok:
-                    deferred.append(it); done["deferred"] += 1
-                    continue
-                outcome, detail = process_doc(root, rel, cfg)
-                if outcome == "memo":
-                    done["memos"] += 1
-                elif outcome in ("no-claims", "empty"):
-                    done["no_claims"] += 1
+                if _is_card(p, ext, cfg):
+                    # A table card is computed, not generated: no GPU, so neither the pause
+                    # flag nor a missing Ollama holds it back -- same as the SQL import above.
+                    outcome, detail = process_doc(root, rel, cfg)
+                    done["cards" if outcome == "table-card" else "errors"] += 1
                 else:
-                    done["errors"] += 1
+                    if paused() or not cfg.get("ingest_model", True):
+                        deferred.append(it); done["deferred"] += 1
+                        continue
+                    if gpu_ok is None:
+                        gpu_ok = ensure_ollama(cfg)
+                    if not gpu_ok:
+                        deferred.append(it); done["deferred"] += 1
+                        continue
+                    outcome, detail = process_doc(root, rel, cfg)
+                    if outcome == "memo":
+                        done["memos"] += 1
+                    elif outcome in ("no-claims", "empty"):
+                        done["no_claims"] += 1
+                    else:
+                        done["errors"] += 1
             except Exception as e:
                 outcome, detail = "error", f"{type(e).__name__}: {e}"[:200]
                 done["errors"] += 1
