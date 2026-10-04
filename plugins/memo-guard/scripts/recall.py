@@ -218,7 +218,7 @@ def corpus_select(prompt: str, cwd: str, cfg: dict, done: set, spent0: int = 0,
             import concepts
             left = 1.0 if deadline is None else max(0.3, deadline - time.time() - 0.15)
             for c in concepts.search(prompt, top=1, claims_per=2, timeout=left):
-                if c["sim"] < float(cfg.get("concept_min_sim", 0.62)):
+                if c["sim"] < float(cfg.get("concept_min_sim", 0.78)):
                     break
                 cl = [x for x in c["claims"] if x["id"] not in done and x["id"] not in ids
                       and x["status"] in ("CONFIRMED", "DRIFTED")]

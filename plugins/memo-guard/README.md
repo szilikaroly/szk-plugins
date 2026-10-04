@@ -478,6 +478,20 @@ keeps the self test hermetic). Everything stays local, in `data_dir()`:
 
   Selftest section 17 was mutation-checked: without the fix, its orphan, reused-id and
   status checks fail.
+- **Concept recall threshold calibrated (0.15.11).** The first full build on the workspace
+  produced 2,898 concepts from 434,856 claims (k-means took 6 s). Twenty real questions,
+  half Hungarian, were compared with ten off-topic ones:
+  - English questions hit the right concept at a cosine of 0.80–0.90.
+  - Hungarian ones reached only 0.70–0.80 and often a wrong concept. nomic-embed-text
+    groups Hungarian by language, not meaning.
+  - Off-topic questions peaked at 0.730, and the highest wrong match was 0.750.
+
+  `concept_min_sim` is now 0.78. Every card above it was right (12/12). The old 0.62 would
+  have attached a card, often a wrong one, to almost any question. A Hungarian question
+  that misses falls back to lexical search, which is the honest outcome.
+
+  `--conflicts` is not part of the build. It gave 1.35M edges, at least 99% of them false:
+  rows of one table template, and different arms, timepoints or studies phrased alike.
 - **Embedding no longer locks out the store (0.15.10).** `concepts.py --embed` commits after
   every batch. An INSERT opens a write transaction that stays open until the commit, and
   each embedding call takes seconds. Committing every 20 batches therefore held memo.db's

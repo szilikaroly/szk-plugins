@@ -17,6 +17,13 @@ can, and it costs a few dozen tokens instead of the claims it stands for.
   4. --conflicts  near-identical claims (cosine >= 0.93) inside a concept whose numbers
                 differ: "33,2% elhizas-prevalencia" vs "22%-os elhizas-prevalencia".
                 Stored as `conflict` edges for review, never resolved automatically.
+                NOT part of the standard build. Measured 2026-10-04 on the workspace:
+                1,351,336 edges, at least 99% false. 1.18M were rows of one table
+                template, and the rest mostly different arms, timepoints or studies
+                phrased alike. Even "identical wording, same source file stem" left
+                7,576 candidates, still mostly arms and timepoints. Telling "same fact,
+                another value" from "same template, another fact" takes a judgement
+                this rule cannot make, so the edges were deleted and nothing reads them.
   5. --search   query embedding ("search_query: ") -> nearest concepts -> their best
                 verified claims.
 

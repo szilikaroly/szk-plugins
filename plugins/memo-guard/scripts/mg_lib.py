@@ -240,10 +240,17 @@ DEFAULTS = {
     "ingest_start_ollama": True,
     "ingest_ollama_parallel": 4,
     # Concept cards (concepts.py) in recall: one card at most, only when the nearest
-    # concept's cosine clears this. Calibrate after the first build; until concepts exist
-    # the path makes no call at all.
+    # concept's cosine clears this; until concepts exist the path makes no call at all.
+    # Calibrated 2026-10-04 on the workspace (2,898 concepts, 434,856 claims), 20 real HU/EN
+    # questions vs 10 off-topic ones:
+    #   - English on-topic hit the right concept at 0.80-0.90.
+    #   - Hungarian reached only 0.70-0.80, often the WRONG concept: nomic-embed-text groups
+    #     Hungarian by language, not meaning.
+    #   - Off-topic peaked at 0.730; the highest wrong on-topic match was 0.750.
+    # At 0.78 every card above the line was right (12/12). The old 0.62 would have attached
+    # a card, often a wrong one, to almost any question.
     "concept_recall": True,
-    "concept_min_sim": 0.62,
+    "concept_min_sim": 0.78,
 }
 
 
