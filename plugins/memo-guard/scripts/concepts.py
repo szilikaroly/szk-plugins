@@ -139,7 +139,11 @@ def _content_ok_sql() -> str:
             " (length(c.text) - length(replace(c.text, ' ', ''))) >= 2")
 
 
-def build_embeddings(limit: int | None = None, batch: int = 256, log=print) -> dict:
+def _say(*a) -> None:
+    print(*a, flush=True)       # a long background job's log must show progress as it goes
+
+
+def build_embeddings(limit: int | None = None, batch: int = 256, log=_say) -> dict:
     np = _np()
     db = connect()
     pruned = _prune(db)
@@ -155,9 +159,13 @@ def build_embeddings(limit: int | None = None, batch: int = 256, log=print) -> d
         db.executemany("INSERT OR REPLACE INTO emb (claim_id, model, dim, vec, sha) VALUES (?,?,?,?,?)",
                        [(cid, MODEL, DIM, vec[j].astype(np.float16).tobytes(), _sha(t))
                         for j, (cid, t) in enumerate(part)])
+        # Commit every batch. The INSERT opens a write transaction that stays open until the
+        # commit, and the embedding call for the next batch takes seconds: committing every 20
+        # batches held memo.db's write lock for minutes, and the store sync running beside it
+        # failed with "database is locked" (2026-10-04). In WAL mode a commit is cheap.
+        db.commit()
         done += len(part)
         if (i // batch) % 20 == 0:
-            db.commit()
             el = time.time() - t0
             log(f"  {done}/{len(todo)}  ({done / max(el, 1e-9):.0f} claim/s)")
     db.commit()

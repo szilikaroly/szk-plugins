@@ -693,6 +693,33 @@ def check_concepts(home: Path) -> bool:
         got = concepts.search(ytext, top=3, claims_per=60, db=db)
         served = {c["id"] for g in got for c in g["claims"]}
         chk(got and y not in served, "a claim verified away after the clustering is no answer")
+
+        # A long embedding run must not hold the write lock between batches: committing every
+        # 20 batches kept it for minutes and the store sync beside it hit "database is locked".
+        import sqlite3 as _sq
+        import threading
+        db.execute("DELETE FROM emb")
+        db.commit()
+
+        def slow_embed(texts, prefix, timeout=120.0, retries=3):
+            time.sleep(0.5)
+            return fake_embed(texts, prefix)
+
+        concepts.embed_batch = slow_embed
+        th = threading.Thread(target=lambda: concepts.build_embeddings(batch=8, log=lambda *a: None))
+        th.start()
+        time.sleep(1.2)                               # mid-run, between two batches
+        wrote = False
+        try:
+            w = _sq.connect(str(store.db_path()), timeout=0.3)
+            w.execute("UPDATE doc SET memo_mtime = memo_mtime")
+            w.commit()
+            w.close()
+            wrote = True
+        except _sq.OperationalError:
+            pass
+        th.join()
+        chk(wrote, "a writer gets in between embedding batches: no lock is held across them")
         db.close()
     finally:
         concepts.embed_batch, store._memo_index = real_embed, real_mi

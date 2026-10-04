@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "memo-guard",
-      "version": "0.15.9",
+      "version": "0.15.10",
       "source": "./plugins/memo-guard",
       "description": "Monitors the context window, archives the original losslessly at 70%/80%, compresses it into a queryable memo, and re-injects a ~500-token resume after /compact or /clear.",
       "author": {

@@ -478,6 +478,12 @@ keeps the self test hermetic). Everything stays local, in `data_dir()`:
 
   Selftest section 17 was mutation-checked: without the fix, its orphan, reused-id and
   status checks fail.
+- **Embedding no longer locks out the store (0.15.10).** `concepts.py --embed` commits after
+  every batch. An INSERT opens a write transaction that stays open until the commit, and
+  each embedding call takes seconds. Committing every 20 batches therefore held memo.db's
+  write lock for minutes, and a store sync running beside it failed with "database is
+  locked" (2026-10-04). Selftest section 17 checks that a writer with a 300 ms busy timeout
+  gets in between batches. With the old cadence that check fails.
 - **The search index holds only claims that can be answers (0.15.3).** `claim_fts` indexes the
   `claim_live` view: REFUTED and STALE claims are excluded. Triggers keep the index in step on
   insert, delete and status change; their WHEN clauses mirror the view, because an
