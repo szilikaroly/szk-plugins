@@ -45,6 +45,25 @@ Optional live counter in the footer — add to `~/.claude/settings.json`:
 (Shells expand the `*`; if yours doesn't, run `/memo-guard:status` once and use
 the concrete cache path it prints.)
 
+**On Windows (0.15.12).** Without UTF-8 mode, Windows gives Python the ANSI code page
+(cp1250 on a Hungarian system) as its default file encoding. Before 0.15.12 every hook ran
+that way, and the background compressor died on the first `→` it wrote into the session's
+`conversation.md`. Measured 2026-10-04: all 13 `RESUME.md` files written on Windows since
+2026-08-25 were empty, with 198 `UnicodeEncodeError`s in `logs/compressor.log`. The same
+default also read and rewrote `~/.claude/settings.json` and the memory export that goes to the
+other machine.
+
+The fix has four parts:
+- Every hook starts Python with `-X utf8`.
+- `mg_lib` hands UTF-8 mode on to every child process.
+- `mg_lib` switches a redirected stdout to UTF-8.
+- Every text read or write names `encoding="utf-8"`.
+
+Selftest section 18 checks all four, and the selftest now passes without `PYTHONUTF8` too.
+
+A running Claude Code session keeps the hooks of the plugin version it started with. A
+session open since before an update still runs the old scripts until it is restarted.
+
 ---
 
 ## What it does
@@ -443,6 +462,49 @@ keeps the self test hermetic). Everything stays local, in `data_dir()`:
 
   A value that has to be cut ends on a whole token. A PMID list cut mid-number ("4239616…")
   would read as a different identifier.
+
+  **A list of publications gets a card at any size (0.15.12).** This was the user's
+  decision, 2026-10-04. It covers screening decisions, reference lists, corpus lists and
+  evidence maps. A model memo of such rows pairs a title, an author, a year and a PMID from
+  neighbouring rows: the shape of a fabricated reference. The verifier cannot see it, because
+  every number does occur in the section, only in another row.
+
+  `table_card.bibliographic_header` decides from the header alone. A table qualifies when it
+  names a publication and says one more thing about it:
+  - with an identifier (PMID, PMCID or DOI): a title, author, journal, year, citation, or a
+    screening decision;
+  - without one: a title plus an author, journal, citation or decision.
+
+  The workspace scan (1,020 tables) turned up false positives the rule now excludes:
+  - a data dictionary's `cim`/`ev_tol` (a title and a year alone);
+  - TRIPOD's `*_ev` evidence columns (a short word only counts as a column name's first token);
+  - `study_type`;
+  - analytic tables that only cite their source PMID.
+
+  Result: 447 of the workspace's 921 tables are publication lists. 405 had model memos (370
+  under the staged name, 35 older ones written on the CSV itself). They became cards with
+  8,492 claims, all CONFIRMED, and the model memos were kept in a backup folder.
+
+  A list of 60 rows or fewer gets every row as a claim. A longer one gets its column
+  statistics and first rows, and its exact rows stay one SQL query away. This was chosen over
+  putting every row in the claim store. That would have meant 222k rows, 29% of the store,
+  and title-dense rows would have crowded real findings out of automatic recall.
+
+  `table_card_bibliographic: false` turns the rule off. `table_card.py --why REL` tells
+  whether a file would get a card, and why.
+
+  The first column of a CSV saved with a byte-order mark no longer carries the invisible
+  U+FEFF into the card (`﻿pmid`). 272 cards had it and were rewritten.
+- **The ingest model is qwen3:14b (0.15.12).** This was the user's decision, 2026-10-04, on
+  this workspace's verified claims:
+  - `llama3.2:3b`: 32% CONFIRMED, 36% REFUTED (380k claims);
+  - `llama3.1:8b`: 55% CONFIRMED, 29% REFUTED (374k claims);
+  - `qwen3:14b`: 82% CONFIRMED, 6% REFUTED. This sample is small (49 claims) and not like
+    for like: it came from the 7 files both 8B models had returned nothing for.
+
+  At memo_gen's num_ctx of 8192 it takes 11.9 GB of VRAM (measured). On a 16 GB unified-memory Mac set
+  `ingest_prose_model` back to `llama3.1:8b`. The broker's prose and code routes and the
+  compressor's fallback name the same model, so a slot evicts the right neighbour.
 - **Installed R libraries are not corpus (0.15.7).** Ingestion and the table store skip
   `rlib/`, `renv/library/`, `site-library/` and `win-library/`, as they already skipped
   `site-packages/` and `node_modules/`. Those folders hold third-party vignettes, help pages
@@ -492,6 +554,21 @@ keeps the self test hermetic). Everything stays local, in `data_dir()`:
 
   `--conflicts` is not part of the build. It gave 1.35M edges, at least 99% of them false:
   rows of one table template, and different arms, timepoints or studies phrased alike.
+- **A verifier pass no longer costs the vectors (0.15.12).** The store used to re-import a
+  changed memo by deleting all its claims and inserting them again. Since 0.15.9 a deleted
+  claim takes its vector with it. So a pass that only changes statuses threw away every
+  vector of every memo it touched, along with the recall hit counts. On 2026-10-04 a full
+  re-verification rewrote 18,833 memos without changing any claim text. That would have
+  meant about 450k vectors and 1.5 GPU-hours of re-embedding.
+
+  Re-import now works in place:
+  - a claim whose memo id and text are unchanged keeps its row, and only its status,
+    anchor and scores are updated;
+  - a new or reworded claim is inserted;
+  - a claim that is gone is deleted.
+
+  Selftest section 17 checks that a status change keeps the row, the vector and the hits.
+  Against the old store its checks fail.
 - **Embedding no longer locks out the store (0.15.10).** `concepts.py --embed` commits after
   every batch. An INSERT opens a write transaction that stays open until the commit, and
   each embedding call takes seconds. Committing every 20 batches therefore held memo.db's

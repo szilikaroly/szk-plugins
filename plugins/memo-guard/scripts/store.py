@@ -272,8 +272,12 @@ def sync_root(root: Path, full: bool = False, cfg: dict | None = None, log=print
             path = source.replace("\\", "/")
         else:
             path = smap.get(source, source).replace("\\", "/")
+        old: dict = {}
         if k:
-            db.execute("DELETE FROM claim WHERE doc_id=?", (k[0],))
+            for row in db.execute(
+                    "SELECT id, cid, text, status, anchor_line, anchor_snip, region_lo, region_hi,"
+                    " specificity, utility, keywords FROM claim WHERE doc_id=?", (k[0],)):
+                old.setdefault((row[1], row[2]), []).append((row[0], row[3:]))
             db.execute("UPDATE doc SET memo_sha=?, memo_mtime=?, memo_size=?, source=?, path=?,"
                        " project=?, src_sha=?, profile=?, synced_at=? WHERE id=?",
                        (sha, st.st_mtime, st.st_size, source, path, project_of(path),
@@ -292,10 +296,31 @@ def sync_root(root: Path, full: bool = False, cfg: dict | None = None, log=print
             rows = _claims_from_index(fast["conn"], name)
         if rows is None:
             rows = _claims_from_memo(md, raw)
+        # Re-import in place. A claim whose memo id and text are unchanged keeps its row, so
+        # its vector, concept membership and recall hits survive a pass that only changed
+        # statuses or anchors. Deleting and re-inserting every claim, as before, would have
+        # thrown away about 450k vectors after the 2026-10-04 re-verification (18,833
+        # memos rewritten, texts untouched): 1.5 GPU-hours of re-embedding unchanged text.
+        new_rows, upd = [], []
+        for r in rows:
+            prev = old.get((r[0], r[1]))
+            if prev:
+                cl_id, vals = prev.pop()
+                if tuple(vals) != tuple(r[2:]):
+                    upd.append(tuple(r[2:]) + (cl_id,))
+            else:
+                new_rows.append(r)
+        gone_ids = [cl_id for prev in old.values() for cl_id, _ in prev]
+        for i in range(0, len(gone_ids), 500):
+            part = gone_ids[i:i + 500]
+            db.execute(f"DELETE FROM claim WHERE id IN ({','.join('?' * len(part))})", part)
+        db.executemany(
+            "UPDATE claim SET status=?, anchor_line=?, anchor_snip=?, region_lo=?, region_hi=?,"
+            " specificity=?, utility=?, keywords=? WHERE id=?", upd)
         db.executemany(
             "INSERT INTO claim (doc_id, cid, text, status, anchor_line, anchor_snip, region_lo,"
             " region_hi, specificity, utility, keywords) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-            [(did,) + r for r in rows])
+            [(did,) + r for r in new_rows])
         db.execute("UPDATE doc SET claims_n=? WHERE id=?", (len(rows), did))
         claims_n += len(rows)
         if (added + changed) % 2000 == 0:

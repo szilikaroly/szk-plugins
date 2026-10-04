@@ -266,8 +266,10 @@ def run_memo_pipeline(workdir: Path, cfg: dict, log) -> bool:
         # Naming the model lets the broker evict what is in the way before the
         # load, rather than letting it land half on the CPU and run the next
         # several minutes at a twentieth of the speed with nothing reporting it.
+        # The fallback must be memo_gen.py's own default, or the broker clears room for a
+        # model that never loads.
         prose_model = os.environ.get("MEMO_MODEL") or \
-            os.environ.get("MEMO_MODEL_PROSE") or "llama3.1:8b"
+            os.environ.get("MEMO_MODEL_PROSE") or "qwen3:14b"
         with broker.slot("model", deadline_s=float(cfg.get("model_wait_s", 300)),
                          owner=f"compressor/{workdir.name[:8]}",
                          model=prose_model) as got:
@@ -290,7 +292,7 @@ def run_memo_pipeline(workdir: Path, cfg: dict, log) -> bool:
         if failed:
             (workdir / "PARTIAL.json").write_text(json.dumps(
                 {"modelled": sorted(done), "not_modelled": sorted(failed)},
-                indent=2))
+                indent=2), encoding="utf-8")
         else:
             (workdir / "PARTIAL.json").unlink(missing_ok=True)
         return True
@@ -365,7 +367,7 @@ def build_resume(workdir: Path, sid: str, archive: Path, mode: str,
     # distillation, so nothing is missing — but it is lossier there, and the
     # reader needs to know which ones to grep rather than trust.
     try:
-        pj = json.loads((workdir / "PARTIAL.json").read_text())
+        pj = json.loads((workdir / "PARTIAL.json").read_text(encoding="utf-8", errors="replace"))
         if pj.get("not_modelled"):
             L += ["> **Thinner than the rest:** the model did not reach "
                   + ", ".join(f"`{n}`" for n in pj["not_modelled"][:6])
@@ -424,7 +426,7 @@ def write_stub(workdir: Path, sid: str, archive: Path, cwd: str) -> None:
     checkpoint."""
     workdir.mkdir(parents=True, exist_ok=True)
     resume = workdir / "RESUME.md"
-    if resume.exists() and len(resume.read_text()) > 400:
+    if resume.exists() and len(resume.read_text(encoding="utf-8", errors="replace")) > 400:
         return
     resume.write_text(
         f"# memo-guard \u25b8 resume of session {sid[:8]} "
@@ -435,9 +437,9 @@ def write_stub(workdir: Path, sid: str, archive: Path, cwd: str) -> None:
         f"the next injection. Until then, if you need a detail from before the "
         f"compaction, do NOT re-read the archive whole \u2014 run:\n\n"
         f"```bash\ngunzip -c '{archive}' | grep -n '<term>' | head\n```\n\n"
-        f"Working directory: {cwd or '(unknown)'}\n")
+        f"Working directory: {cwd or '(unknown)'}\n", encoding="utf-8")
     (workdir / "STATE.json").write_text(json.dumps(
-        {"phase": "stub", "archive": str(archive), "cwd": cwd}))
+        {"phase": "stub", "archive": str(archive), "cwd": cwd}), encoding="utf-8")
 
 
 def main() -> int:
@@ -464,7 +466,7 @@ def main() -> int:
     logf.parent.mkdir(parents=True, exist_ok=True)
 
     def log(msg: str) -> None:
-        with logf.open("a") as f:
+        with logf.open("a", encoding="utf-8", errors="replace") as f:
             f.write(f"[{time.strftime('%H:%M:%S')} {sid[:8]}] {msg}\n")
 
     # Single-flight per session — but WAIT, do not skip. The old code returned
@@ -495,7 +497,7 @@ def main() -> int:
             "skipping to avoid piling up")
         return 0
     (workdir / "STATE.json").write_text(json.dumps(
-        {"phase": "running", "archive": str(archive)}))
+        {"phase": "running", "archive": str(archive)}), encoding="utf-8")
 
     try:
         turns, sources = harvest(archive, cfg["source_cap_chars"])
@@ -503,22 +505,22 @@ def main() -> int:
         (workdir / "distilled").mkdir(exist_ok=True)
 
         conv = conversation_doc(turns, sid)
-        (workdir / "sources" / "conversation.md").write_text(conv)
+        (workdir / "sources" / "conversation.md").write_text(conv, encoding="utf-8")
         # The dialogue is already compressed by construction (tool noise
         # stripped, long turns trimmed), but it must sit on the SAME retrieval
         # path as tool output — decisions live here, and a grep that only
         # covers distilled/ would miss every one of them.
-        (workdir / "distilled" / "conversation.md").write_text(conv)
+        (workdir / "distilled" / "conversation.md").write_text(conv, encoding="utf-8")
 
         distilled: dict[str, Path] = {}
         kept_chars = len(conv)
         for label, body in sources.items():
             name = slugify(label) + ".md"
             (workdir / "sources" / name).write_text(
-                f"# {label}\n\n{body}")
+                f"# {label}\n\n{body}", encoding="utf-8")
             d = distill(body)
             dp = workdir / "distilled" / name
-            dp.write_text(f"# {label} (distilled)\n\n{d}")
+            dp.write_text(f"# {label} (distilled)\n\n{d}", encoding="utf-8")
             distilled[label] = dp
             kept_chars += len(d)
 
@@ -533,7 +535,7 @@ def main() -> int:
                 # session reads, to the next context, exactly like one that
                 # modelled all of it.
                 try:
-                    pj = json.loads((workdir / "PARTIAL.json").read_text())
+                    pj = json.loads((workdir / "PARTIAL.json").read_text(encoding="utf-8", errors="replace"))
                     n_ok, n_no = len(pj["modelled"]), len(pj["not_modelled"])
                     mode = (f"local-model (partial: {n_ok} of {n_ok + n_no} "
                             f"sources modelled)")
@@ -546,7 +548,7 @@ def main() -> int:
         kept_tok = mg.est_tokens("x" * kept_chars)
         resume = build_resume(workdir, sid, archive, mode, turns, distilled,
                               raw_tok, kept_tok, cfg, args.cwd)
-        (workdir / "RESUME.md").write_text(resume)
+        (workdir / "RESUME.md").write_text(resume, encoding="utf-8")
         resume_tok = mg.est_tokens(resume)
 
         # Tagged mg.COMPRESS by append_metrics: metrics.jsonl is a mixed log
@@ -566,13 +568,13 @@ def main() -> int:
         (workdir / "STATE.json").write_text(json.dumps(
             {"phase": "done", "mode": mode, "archive": str(archive),
              "resume_tokens_est": resume_tok, "raw_tokens_est": raw_tok,
-             "cwd": args.cwd, "finished": time.strftime("%Y-%m-%dT%H:%M:%S")}))
+             "cwd": args.cwd, "finished": time.strftime("%Y-%m-%dT%H:%M:%S")}), encoding="utf-8")
         log(f"done mode={mode} raw~{raw_tok:,} resume~{resume_tok:,} "
             f"({time.time() - t0:.1f}s)")
         return 0
     except Exception as e:  # noqa: BLE001
         (workdir / "STATE.json").write_text(json.dumps(
-            {"phase": "error", "error": str(e)}))
+            {"phase": "error", "error": str(e)}), encoding="utf-8")
         log(f"ERROR: {e!r}")
         return 1
     finally:

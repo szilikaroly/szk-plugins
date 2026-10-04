@@ -126,7 +126,7 @@ def main() -> int:
     print(f"\nresumes ready: {len(resumes)}")
     for r in resumes[:5]:
         try:
-            st = json.loads((r.parent / "STATE.json").read_text())
+            st = json.loads((r.parent / "STATE.json").read_text(encoding="utf-8"))
             print(f"  {r.parent.name[:8]}  mode={st.get('mode', '?'):13} "
                   f"~{st.get('resume_tokens_est', '?')} tok "
                   f"(raw ~{st.get('raw_tokens_est', '?')})")

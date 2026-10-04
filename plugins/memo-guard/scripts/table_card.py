@@ -19,8 +19,15 @@ snippet of the staged text, the same staging memo_gen would have read, so
 verify_anchors checks a card exactly like any other memo. The card replaces the
 model's memo under the same name.
 
+A list of publications gets a card at any size (the user's decision, 2026-10-04).
+Screening decisions, reference lists, corpus lists and evidence maps all qualify. A
+model reading such rows pairs a title, an author, a year and a PMID from neighbouring
+rows. The verifier cannot catch that: every number does occur in the section, just in
+another row. bibliographic() decides from the header alone.
+
   table_card.py --root ROOT --memo-dir DIR [--backup DIR] REL [REL ...]
   table_card.py --root ROOT --chunks REL [REL ...]    # staged size only, nothing written
+  table_card.py --root ROOT --why REL [REL ...]       # would it get a card, and why
 """
 from __future__ import annotations
 
@@ -96,6 +103,111 @@ def file_chunks(path) -> int:
         return math.ceil(len(fh.read().decode("utf-8", errors="replace").splitlines()) / CHUNK_LINES)
 
 
+# Header words that mark a column as bibliographic, matched on the column name's first token,
+# or on its last when that word cannot be mistaken ('first_author', 'cr_folyoirat'). The short
+# ones count only first: '3c_inequalities_ev' is TRIPOD evidence, not a year.
+_TOKEN_RE = re.compile(r"[^\W_]+")
+_BIB_WORDS = {
+    "id": {"pmid", "pmcid", "pmc", "doi", "pubmed"},
+    "title": {"title", "cím", "cim", "ti"},
+    "author": {"author", "authors", "szerző", "szerzo", "szerzők", "szerzok", "au"},
+    "journal": {"journal", "folyóirat", "folyoirat", "venue", "so"},
+    "year": {"year", "év", "ev", "py"},
+    "cite": {"citation", "citations", "cit", "cited", "reference", "references", "ref", "refs",
+             "hivatkozás", "hivatkozas"},
+}
+_BIB_FIRST_ONLY = {"ti", "au", "so", "ev", "év", "py", "cim", "cím", "cit", "ref", "refs"}
+# A screening decision, anywhere in the name ('reason for exclusion at full text').
+_SCREEN_WORDS = {"decision", "decisions", "döntés", "dontes", "include", "included", "inclusion",
+                 "exclude", "excluded", "exclusion", "exclusions", "kizárás", "kizaras", "kizárt",
+                 "kizart", "kizárva", "kizarva", "bevont", "bevonva", "bevonás", "bevonas",
+                 "screen", "screened", "screening"}
+
+
+def _col_kinds(name) -> set:
+    toks = _TOKEN_RE.findall(str(name).casefold())
+    if not toks:
+        return set()
+    kinds = {k for k, words in _BIB_WORDS.items()
+             if toks[0] in words or (toks[-1] in words and toks[-1] not in _BIB_FIRST_ONLY)}
+    if toks == ["study"]:              # 'Smith 2020'; but 'study_type' is a design
+        kinds.add("cite")
+    if any(t in _SCREEN_WORDS for t in toks):
+        kinds.add("screen")
+    return kinds
+
+
+def bibliographic_header(header: list) -> list[str]:
+    """The columns that make a header a list of publications, or [] when it is not one.
+
+    Rows are publication records when the table names a publication (PMID/PMCID/DOI) and
+    says one more thing about it (title, author, journal, year, citation, or a screening
+    decision), or, with no identifier, has a title plus author, journal, citation or a
+    decision. Measured 2026-10-04 on the workspace's 1,020 tables, a title and a year
+    alone also matched a data dictionary ('cim', 'ev_tol'), and a PMID alone matches
+    analytic tables that only cite their source, so neither is enough."""
+    found: dict = {}
+    for h in header:
+        for k in _col_kinds(h):
+            found.setdefault(k, str(h).strip())
+    order = ("id", "title", "author", "journal", "year", "cite", "screen")
+    if "id" in found:
+        ok = len(found) >= 2
+    else:
+        ok = "title" in found and bool({"author", "journal", "cite", "screen"} & found.keys())
+    return [found[k] for k in order if k in found] if ok else []
+
+
+def _header(ab: str) -> list[str]:
+    """First non-empty row of a CSV/TSV, split the way _rows() splits the whole file."""
+    with open(ab, "rb") as fh:
+        text = fh.read(65536).decode("utf-8", errors="replace").lstrip("﻿")
+    delim = "\t" if ab.lower().endswith(".tsv") else None
+    if delim is None:
+        try:
+            delim = csv.Sniffer().sniff(text[:20000], delimiters=",;\t|").delimiter
+        except csv.Error:
+            delim = ","
+    for r in csv.reader(text.splitlines()[:50], delimiter=delim):
+        if any(c.strip() for c in r):
+            return r
+    return []
+
+
+def bibliographic(ab: str, slines: list[str] | None = None) -> list[str]:
+    """bibliographic_header() of a CSV/TSV, or of the first workbook sheet that is one (a
+    workbook needs its staged text, which is staged here when not given)."""
+    if not ab.lower().endswith(".xlsx"):
+        return bibliographic_header(_header(ab))
+    if slines is None:
+        slines = staged(ab)[2]
+    for sh in _md_sheets(slines):
+        cols = bibliographic_header(sh["header"])
+        if cols:
+            return cols
+    return []
+
+
+def card_reason(ab: str, lim: int, bib: bool, slines: list[str] | None = None) -> str:
+    """Why this table gets a computed card rather than a model pass; '' when it does not.
+    lim is the size threshold in memo_gen chunks (0: no size cards), bib turns the
+    publication-list rule on. slines: the staged text when the caller already has it."""
+    ext = os.path.splitext(ab)[1].lower()
+    if ext not in CARD_EXT or not (lim or bib):
+        return ""
+    if slines is None and (lim or ext == ".xlsx"):
+        slines = staged(ab)[2]
+    if lim:
+        n = math.ceil(len(slines) / CHUNK_LINES)
+        if n >= lim:
+            return f"{n} chunks"
+    if bib:
+        cols = bibliographic(ab, slines)
+        if cols:
+            return "a list of publications (" + ", ".join(cols) + ")"
+    return ""
+
+
 def _line_map(phys: list[str]) -> tuple[list[int | None], int]:
     """For each physical line of the source: the 1-based staged line it starts on (None for a
     blank line prep_text collapsed), and the staged line count. Mirrors prep_text's loop for
@@ -140,6 +252,11 @@ def _rows(ab: str):
             starts.append(s)
     if not rows:
         return [], [], [], phys
+    # A byte-order mark (Excel's "CSV UTF-8") would ride into the first column's name as an
+    # invisible U+FEFF ('﻿pmid'). Only the parsed name loses it: phys keeps it, because
+    # prep_text measured the line with it when deciding where to wrap.
+    if rows[0] and rows[0][0].startswith("﻿"):
+        rows[0][0] = rows[0][0][1:]
     return rows[0], rows[1:], starts[1:], phys
 
 
@@ -333,7 +450,8 @@ def build(root: Path, rel: str, sql_table="") -> tuple[str, str, dict]:
         if not (0 <= i < len(lmap)):
             return None
         ln = lmap[i]
-        s = snip_lines[ln - 1].strip()[:SNIP].strip()
+        # without the BOM the snippet is still a substring of the staged line
+        s = snip_lines[ln - 1].strip().lstrip("﻿")[:SNIP].strip()
         return (ln, s) if s else None
 
     width = max([len(header)] + [len(r) for r in data[:5000]]) if header else 0
@@ -428,6 +546,8 @@ def main() -> int:
     ap.add_argument("--memo-dir", type=Path)
     ap.add_argument("--backup", type=Path, help="copy a model-written memo here before replacing it")
     ap.add_argument("--chunks", action="store_true", help="only print the staged size in memo_gen chunks")
+    ap.add_argument("--why", action="store_true",
+                    help="only say whether each file would get a card under the config, and why")
     ap.add_argument("rels", nargs="+")
     a = ap.parse_args()
     root = a.root.resolve()
@@ -436,6 +556,12 @@ def main() -> int:
             print(f"{chunks(str((root / rel).resolve())):>6}  {rel}")
         return 0
     cfg = mg.load_config()
+    if a.why:
+        lim = int(cfg.get("table_card_min_chunks", MIN_CHUNKS) or 0)
+        bib = bool(cfg.get("table_card_bibliographic", True))
+        for rel in a.rels:
+            print(f"{card_reason(str((root / rel).resolve()), lim, bib) or '-'}\t{rel}")
+        return 0
     ms = Path(os.path.expanduser(cfg.get("memo_index_path", ""))) / "scripts"
     res = write_cards(root, a.memo_dir or root / ".memo", a.rels, ms=ms, backup=a.backup)
     print(json.dumps({"cards": len(res), "backed_up": sum(1 for r in res if r.get("backed_up"))}))

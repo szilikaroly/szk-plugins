@@ -294,7 +294,7 @@ def main(argv=None) -> int:
     if args.json:
         args.json.write_text(json.dumps(
             {"facts": total, "findings": [f.as_dict() for f in findings]},
-            indent=2, ensure_ascii=False))
+            indent=2, ensure_ascii=False), encoding="utf-8")
         print(f"report: {args.json}")
     return 1 if errors else 0
 

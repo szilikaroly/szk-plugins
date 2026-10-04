@@ -274,7 +274,7 @@ def main() -> int:
     if a.no_embed:
         os.environ["OLLAMA_HOST"] = "http://127.0.0.1:1"
         a.mode = "lexical"
-    corpus = json.loads(a.corpus.read_text())
+    corpus = json.loads(a.corpus.read_text(encoding="utf-8"))
     home = Path(tempfile.mkdtemp(prefix="mg-eval-"))
     try:
         # Probe BEFORE seeding: the answer decides how long seeding is allowed

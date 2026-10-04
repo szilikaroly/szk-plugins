@@ -139,7 +139,7 @@ def _alive(pid: int) -> bool:
 
 def worker_alive() -> bool:
     try:
-        w = json.loads((qdir() / "worker.json").read_text())
+        w = json.loads((qdir() / "worker.json").read_text(encoding="utf-8"))
         return _alive(int(w["pid"])) and time.time() - float(w["hb"]) < HEARTBEAT_S
     except Exception:
         return False
@@ -156,11 +156,11 @@ def maybe_scan(cfg: dict) -> None:
         return
     stamp = qdir() / "scan.json"
     try:
-        last = json.loads(stamp.read_text()).get("t", 0)
+        last = json.loads(stamp.read_text(encoding="utf-8")).get("t", 0)
     except Exception:
         last = 0
     if time.time() - last >= 60 * float(cfg.get("ingest_scan_every_min", 30)):
-        stamp.write_text(json.dumps({"t": time.time(), "state": "spawned"}))
+        stamp.write_text(json.dumps({"t": time.time(), "state": "spawned"}), encoding="utf-8")
         mg.spawn_background(Path(__file__), ["--scan"])
 
 
@@ -210,7 +210,7 @@ def scan(cfg: dict, log=print) -> dict:
             db.executemany("INSERT OR REPLACE INTO filestate VALUES (?,?,?,?,?,?)", rows)
             db.commit()
         out[str(root)] = {"files": seen, "queued": queued, "bootstrap": bootstrap}
-    (qdir() / "scan.json").write_text(json.dumps({"t": time.time(), "state": "done", "roots": out}))
+    (qdir() / "scan.json").write_text(json.dumps({"t": time.time(), "state": "done", "roots": out}), encoding="utf-8")
     if any(v["queued"] for v in out.values()):
         ensure_worker()
     mg.append_metrics({"ts": time.time(), "roots": out}, event="ingest_scan")
@@ -266,7 +266,7 @@ def ensure_ollama(cfg: dict) -> bool:
         return False
     env = dict(os.environ, OLLAMA_KV_CACHE_TYPE="q8_0", OLLAMA_FLASH_ATTENTION="1",
                OLLAMA_NUM_PARALLEL=str(cfg.get("ingest_ollama_parallel", 4)))
-    log = open(qdir() / "ollama_serve.log", "a")
+    log = open(qdir() / "ollama_serve.log", "a", encoding="utf-8")
     subprocess.Popen([exe, "serve"], stdout=log, stderr=log, env=env, **mg.detached_kwargs())
     for _ in range(20):
         time.sleep(1)
@@ -304,7 +304,7 @@ def process_doc(root: Path, rel: str, cfg: dict) -> tuple[str, str]:
     ab = str((root / rel).resolve())
     ext = os.path.splitext(rel)[1].lower()
     env = dict(os.environ, PYTHONUTF8="1",
-               MEMO_MODEL_PROSE=cfg.get("ingest_prose_model", "llama3.1:8b"),
+               MEMO_MODEL_PROSE=cfg.get("ingest_prose_model", "qwen3:14b"),
                MEMO_MODEL_BIG=cfg.get("ingest_vision_model", "qwen3-vl:4b"))
     stage = Path(tempfile.mkdtemp(prefix="mgi_"))
     try:
@@ -338,12 +338,14 @@ def process_doc(root: Path, rel: str, cfg: dict) -> tuple[str, str]:
             if "error" in rec:
                 return "convert-error", str(rec["error"])[:200]
         lim = int(cfg.get("table_card_min_chunks", 100) or 0)
-        if lim and ext in (".csv", ".tsv", ".xlsx") and (stage / name).exists():
+        bib = bool(cfg.get("table_card_bibliographic", True))
+        if (lim or bib) and ext in (".csv", ".tsv", ".xlsx") and (stage / name).exists():
             import table_card
-            n = table_card.file_chunks(stage / name)
-            if n >= lim:
+            slines = (stage / name).read_bytes().decode("utf-8", errors="replace").splitlines()
+            why = table_card.card_reason(ab, lim, bib, slines)
+            if why:
                 done = table_card.write_cards(root, memo_dir, [rel], ms=ms, log=lambda *a: None)
-                return ("table-card" if done else "convert-error"), f"{n} chunks"
+                return ("table-card" if done else "convert-error"), why
         r = subprocess.run([sys.executable, str(ms / "memo_gen.py"), "--root", str(stage),
                             "--include", "*.txt", "--memo-dir", str(memo_dir)],
                            capture_output=True, text=True, encoding="utf-8", env=env, timeout=3600)
@@ -368,20 +370,21 @@ def paused() -> bool:
 
 
 def _is_card(p: Path, ext: str, cfg: dict) -> bool:
-    """Will this file get a computed table card rather than a model pass? Decided on the
-    staged size, the same measure process_doc uses, so the two can never disagree."""
+    """Will this file get a computed table card rather than a model pass? Decided by
+    table_card.card_reason, the same call process_doc makes, so the two can never disagree."""
     lim = int(cfg.get("table_card_min_chunks", 100) or 0)
-    if not lim or ext not in (".csv", ".tsv", ".xlsx"):
+    bib = bool(cfg.get("table_card_bibliographic", True))
+    if not (lim or bib) or ext not in (".csv", ".tsv", ".xlsx"):
         return False
     try:
         import table_card
-        return table_card.chunks(str(p.resolve())) >= lim
+        return bool(table_card.card_reason(str(p.resolve()), lim, bib))
     except Exception:
         return False
 
 
 def _beat(**extra) -> None:
-    (qdir() / "worker.json").write_text(json.dumps({"pid": os.getpid(), "hb": time.time(), **extra}))
+    (qdir() / "worker.json").write_text(json.dumps({"pid": os.getpid(), "hb": time.time(), **extra}), encoding="utf-8")
 
 
 def _take_queue() -> list[dict]:
@@ -496,7 +499,7 @@ def status() -> dict:
     q = qdir() / "queue.jsonl"
     n = len(q.read_text(encoding="utf-8").splitlines()) if q.exists() else 0
     try:
-        last = json.loads((qdir() / "scan.json").read_text())
+        last = json.loads((qdir() / "scan.json").read_text(encoding="utf-8"))
     except Exception:
         last = {}
     db = state_db()
@@ -518,7 +521,7 @@ def main() -> int:
     a = ap.parse_args()
     cfg = mg.load_config()
     if a.pause:
-        (qdir() / "paused").write_text(time.strftime("%Y-%m-%d %H:%M"))
+        (qdir() / "paused").write_text(time.strftime("%Y-%m-%d %H:%M"), encoding="utf-8")
         print("ingest paused: documents stay queued, the GPU is not touched")
         return 0
     if a.resume:

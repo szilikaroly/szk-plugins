@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}\"/scripts/ctx_monitor.py",
+            "command": "python3 -X utf8 \"${CLAUDE_PLUGIN_ROOT}\"/scripts/ctx_monitor.py",
             "timeout": 25
           }
         ]
@@ -17,12 +17,12 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}\"/scripts/ctx_monitor.py",
+            "command": "python3 -X utf8 \"${CLAUDE_PLUGIN_ROOT}\"/scripts/ctx_monitor.py",
             "timeout": 25
           },
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}\"/scripts/recall.py",
+            "command": "python3 -X utf8 \"${CLAUDE_PLUGIN_ROOT}\"/scripts/recall.py",
             "timeout": 10
           }
         ]
@@ -34,7 +34,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}\"/scripts/archive_now.py",
+            "command": "python3 -X utf8 \"${CLAUDE_PLUGIN_ROOT}\"/scripts/archive_now.py",
             "timeout": 60
           }
         ]
@@ -46,7 +46,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}\"/scripts/inject_resume.py",
+            "command": "python3 -X utf8 \"${CLAUDE_PLUGIN_ROOT}\"/scripts/inject_resume.py",
             "timeout": 20
           }
         ]
@@ -57,7 +57,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}\"/scripts/archive_now.py",
+            "command": "python3 -X utf8 \"${CLAUDE_PLUGIN_ROOT}\"/scripts/archive_now.py",
             "timeout": 60
           }
         ]

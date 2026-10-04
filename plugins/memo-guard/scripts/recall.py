@@ -66,7 +66,7 @@ def _cached_health(probe, ttl: float = HEALTH_TTL_S) -> bool:
     """
     path = mg.data_dir() / "recall_health.json"
     try:
-        d = json.loads(path.read_text())
+        d = json.loads(path.read_text(encoding="utf-8"))
         if time.time() - d.get("ts", 0) < ttl:
             return bool(d.get("ok"))
     except Exception:
@@ -77,7 +77,7 @@ def _cached_health(probe, ttl: float = HEALTH_TTL_S) -> bool:
     except Exception:
         ok = False
     try:
-        path.write_text(json.dumps({"ok": ok, "ts": time.time()}))
+        path.write_text(json.dumps({"ok": ok, "ts": time.time()}), encoding="utf-8")
     except OSError:
         pass
     return ok

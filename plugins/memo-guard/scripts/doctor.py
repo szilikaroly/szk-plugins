@@ -115,7 +115,7 @@ def check_handoff_litter(root: Path, limit: int = 400) -> list[Finding]:
         if scanned > limit:
             break
         try:
-            body = p.read_text()
+            body = p.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
         # An unfilled template is the tell: the section that only a human can
@@ -267,7 +267,7 @@ def reap_stale_lock() -> bool:
 def check_installed_version() -> list[Finding]:
     src = Path(__file__).resolve().parents[1] / ".claude-plugin" / "plugin.json"
     try:
-        want = json.loads(src.read_text())["version"]
+        want = json.loads(src.read_text(encoding="utf-8"))["version"]
     except Exception:
         return []
     cache = Path.home() / ".claude" / "plugins" / "cache"
@@ -306,7 +306,7 @@ def check_autopilot_state() -> list[Finding]:
 def check_maintenance() -> list[Finding]:
     p = mg.data_dir() / "maintenance.json"
     try:
-        d = json.loads(p.read_text())
+        d = json.loads(p.read_text(encoding="utf-8"))
     except Exception:
         return [Finding("info", "memory maintenance has never run",
                         "cognify extracts structure from facts; memify prunes,\n"
@@ -373,7 +373,7 @@ def clean_handoffs(root: Path) -> int:
     removed = 0
     for p in root.rglob(".memo/HANDOFF.md"):
         try:
-            if "Fill this in before /clear" not in p.read_text():
+            if "Fill this in before /clear" not in p.read_text(encoding="utf-8", errors="replace"):
                 continue          # someone wrote in it; it is not litter
             p.unlink()
             removed += 1
@@ -399,7 +399,7 @@ def maintain(force: bool = False) -> int:
     every = float(cfg.get("maintain_every_h", 24))
     p = mg.data_dir() / "maintenance.json"
     try:
-        last = json.loads(p.read_text()).get("ts", 0)
+        last = json.loads(p.read_text(encoding="utf-8")).get("ts", 0)
     except Exception:
         last = 0
     if not force and (time.time() - last) < every * 3600:
@@ -441,7 +441,7 @@ def maintain(force: bool = False) -> int:
         summary["dbmaint"] = (r.stdout or r.stderr)[-600:]
     except Exception as e:  # noqa: BLE001
         summary["dbmaint"] = f"failed: {e}"
-    p.write_text(json.dumps({"ts": time.time(), "summary": summary}, indent=2))
+    p.write_text(json.dumps({"ts": time.time(), "summary": summary}, indent=2), encoding="utf-8")
     print(json.dumps(summary, indent=2)[:1200])
     return 0
 

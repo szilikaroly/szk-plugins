@@ -108,7 +108,7 @@ def _trip(reason: str) -> None:
     _BREAKER["reason"] = reason
     try:
         (_state_path()).write_text(json.dumps(
-            {"until": _BREAKER["until"], "reason": reason}))
+            {"until": _BREAKER["until"], "reason": reason}), encoding="utf-8")
     except OSError:
         pass
 
@@ -122,7 +122,7 @@ def _breaker_open() -> bool:
     if _BREAKER["until"] > time.time():
         return True
     try:
-        d = json.loads(_state_path().read_text())
+        d = json.loads(_state_path().read_text(encoding="utf-8"))
         if float(d.get("until", 0)) > time.time():
             _BREAKER.update(until=float(d["until"]), reason=d.get("reason", ""))
             return True

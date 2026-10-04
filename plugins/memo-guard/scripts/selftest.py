@@ -53,7 +53,7 @@ def build_transcript(path: Path, big_files=14, lines_each=900) -> None:
                      f"switch module_{i} to exponential backoff."}],
             "usage": {"input_tokens": ctx, "cache_read_input_tokens": 0,
                       "cache_creation_input_tokens": 0, "output_tokens": 120}}})
-    path.write_text("\n".join(json.dumps(r) for r in recs))
+    path.write_text("\n".join(json.dumps(r) for r in recs), encoding="utf-8")
 
 
 def hook(script: str, payload: dict) -> tuple[int, str]:
@@ -109,11 +109,11 @@ def main() -> int:
     wd = home / "sessions" / sid
     for _ in range(120):
         st = wd / "STATE.json"
-        if st.exists() and json.loads(st.read_text()).get("phase") in (
+        if st.exists() and json.loads(st.read_text(encoding="utf-8")).get("phase") in (
                 "done", "error"):
             break
         time.sleep(0.5)
-    state = json.loads((wd / "STATE.json").read_text())
+    state = json.loads((wd / "STATE.json").read_text(encoding="utf-8"))
     print(f"\n2) compressor phase={state.get('phase')} "
           f"mode={state.get('mode')}")
     if state.get("phase") != "done":
@@ -171,7 +171,7 @@ def main() -> int:
           f"{'PASS' if ok else 'FAIL'}")
 
     # the compression must not lose the decisions
-    resume = (wd / "RESUME.md").read_text()
+    resume = (wd / "RESUME.md").read_text(encoding="utf-8")
     hit = subprocess.run(
         ["grep", "-ril", "exponential backoff", str(wd / "sources")],
         capture_output=True, text=True).stdout.strip()
@@ -195,11 +195,14 @@ def main() -> int:
     tc_ok = check_table_cards(home)
     tx_ok = check_table_cards_xlsx(home)
     tf_ok = check_table_card_fallback(home)
+    tb_ok = check_table_card_bibliographic(home)
     dm_ok = check_db_maint(home)
     cc_ok = check_concepts(home)
+    en_ok = check_text_encoding()
     return 0 if (ok and hit and ap_ok and cv_ok and co_ok and sb_ok and rc_ok
                  and ev_ok and mr_ok and dr_ok and dg_ok and bw_ok and cp_ok
-                 and st_ok and tc_ok and tx_ok and tf_ok and dm_ok and cc_ok) else 1
+                 and st_ok and tc_ok and tx_ok and tf_ok and tb_ok and dm_ok and cc_ok
+                 and en_ok) else 1
 
 
 def check_db_maint(home: Path) -> bool:
@@ -507,6 +510,151 @@ def check_table_cards_xlsx(home: Path) -> bool:
     return ok
 
 
+def check_text_encoding() -> bool:
+    """18) No text file is read or written in the platform's code page.
+
+    Windows hands Python the ANSI code page (cp1250 here) unless UTF-8 mode is on, and the
+    hooks ran without it: from 2026-08-25 every RESUME.md on the Windows machine was empty,
+    because the compressor died writing '→' into conversation.md (198 tracebacks). The same
+    default read and rewrote ~/.claude/settings.json and the memory export pushed to the
+    other machine. Checked: every hook starts Python in UTF-8 mode; a child of any script
+    inherits it; and no text-mode open/read_text/write_text in the scripts omits encoding=
+    (the selftest's own fixtures included), so running one by hand is safe too.
+    """
+    import ast
+    import json as _json
+    import subprocess as _sp
+    print("\n18) text encoding")
+    ok = True
+
+    def chk(cond, what):
+        nonlocal ok
+        print(f"   {'ok  ' if cond else 'FAIL'} {what}")
+        ok = ok and bool(cond)
+
+    here = Path(__file__).resolve().parent
+    hooks = _json.loads((here.parent / "hooks" / "hooks.json").read_text(encoding="utf-8"))["hooks"]
+    cmds = [h["command"] for groups in hooks.values() for g in groups for h in g["hooks"]]
+    chk(cmds and all(c.startswith("python3 -X utf8 ") for c in cmds),
+        f"all {len(cmds)} hook commands start Python in UTF-8 mode")
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONUTF8"}
+    probe = ("import sys, subprocess; sys.path.insert(0, sys.argv[1]); import mg_lib; "
+             "print(subprocess.run([sys.executable, '-c', 'import sys; print(sys.flags.utf8_mode)'], "
+             "capture_output=True, text=True).stdout.strip())")
+    r = _sp.run([sys.executable, "-X", "utf8=0", "-c", probe, str(here)], capture_output=True,
+                text=True, env=env, timeout=60)
+    chk(r.stdout.strip() == "1", "a child of a script that imports mg_lib runs in UTF-8 mode")
+
+    bad = []
+    for p in sorted(here.glob("*.py")):
+        for n in ast.walk(ast.parse(p.read_text(encoding="utf-8"))):
+            if not isinstance(n, ast.Call):
+                continue
+            f = n.func
+            name = f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", "")
+            owner = f.value.id if isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name) else ""
+            if name not in ("write_text", "read_text", "open") or owner in ("os", "zipfile", "z", "zf"):
+                continue
+            if any(k.arg == "encoding" for k in n.keywords):
+                continue
+            mode = next((k.value for k in n.keywords if k.arg == "mode"), None)
+            if mode is None and name == "open":
+                # open(file, mode) and gzip/io.open(file, mode), but Path(...).open(mode): the
+                # mode is the first argument of a method call, whatever the object expression
+                i = 1 if isinstance(f, ast.Name) or owner in ("gzip", "io", "codecs") else 0
+                mode = n.args[i] if len(n.args) > i else None
+            m = mode.value if isinstance(mode, ast.Constant) and isinstance(mode.value, str) else ""
+            if "b" in m or (name == "open" and owner == "gzip" and "t" not in m):
+                continue
+            bad.append(f"{p.name}:{n.lineno}")
+    chk(not bad, "every text-mode read/write names its encoding"
+        + (f" (missing: {', '.join(bad[:6])}{' ...' if len(bad) > 6 else ''})" if bad else ""))
+    return ok
+
+
+def check_table_card_bibliographic(home: Path) -> bool:
+    """15d) A list of publications gets a card at any size, and nothing else does on that ground.
+
+    Decided 2026-10-04: a model memo of a screening list or reference list pairs titles,
+    authors, years and PMIDs across rows, the shape of a fabricated reference, which the
+    verifier cannot see. Checked: the header rule against the false positives the workspace
+    scan turned up (a data dictionary's 'cim'/'ev_tol', TRIPOD's '_ev' evidence columns,
+    'study_type', an analytic table that only cites a PMID); a 5-row screening list is carded
+    by the worker while paused and without memo_gen, every row a claim with its exact
+    values; and the config switch turns the rule off.
+    """
+    import ingest
+    import table_card
+    print("\n15d) publication lists get cards")
+    ok = True
+
+    def chk(cond, what):
+        nonlocal ok
+        print(f"   {'ok  ' if cond else 'FAIL'} {what}")
+        ok = ok and bool(cond)
+
+    bh = table_card.bibliographic_header
+    yes = [["pmid", "cim", "decision"], ["pmid", "decision", "reason", "phase"],
+           ["doi", "first_author", "journal", "year"], ["title", "author_or_body", "year"],
+           ["pmid", "study", "d1"], ["PMID", "Reason for exclusion at full text"]]
+    no = [["exposure", "current_rr", "achievable_rr", "pmid", "evidence"],
+          ["valtozo", "cim", "ev_tol"], ["pmid", "3c_inequalities", "3c_inequalities_ev"],
+          ["title", "study_type", "n"], ["a", "b"]]
+    chk(all(bh(h) for h in yes), "screening, reference and evidence headers are publication lists")
+    chk(not any(bh(h) for h in no),
+        "a data dictionary, TRIPOD evidence, 'study_type' and a PMID-citing analytic table are not")
+
+    root = home / "card-root-b"
+    (root / "lit").mkdir(parents=True, exist_ok=True)
+    rel = "lit/dontesek.csv"
+    rows = [("38012345", "Semaglutide in pregnancy: a cohort", "exclude", "no comparator"),
+            ("37123456", "GLP-1 receptor agonists and congenital malformations", "include", ""),
+            ("36234567", "Liraglutide exposure in early gestation", "exclude", "case report"),
+            ("35345678", "Incretin therapy and fertility outcomes", "include", ""),
+            ("34456789", "Tirzepatide: a narrative review", "exclude", "review")]
+    # Saved as Excel's "CSV UTF-8", with a byte-order mark: 272 of the workspace's cards had
+    # carried it into the first column's name ('﻿pmid').
+    (root / rel).write_text("﻿pmid,cim,decision,reason\n"
+                            + "".join(f'{p},"{t}",{d},{r}\n' for p, t, d, r in rows), encoding="utf-8")
+    other = root / "lit" / "prevention.csv"
+    other.write_text("exposure,rr,pmid\nsmoking,1.3,31234567\nobesity,1.8,32345678\n", encoding="utf-8")
+    cfg = {"corpus_roots": [str(root)], "memo_index_path": "", "table_card_min_chunks": 100,
+           "corpus_tables": False}
+    chk(ingest._is_card(root / rel, ".csv", cfg) and not ingest._is_card(other, ".csv", cfg),
+        "a 5-row screening list is carded; an analytic table citing PMIDs is not")
+    chk(not ingest._is_card(root / rel, ".csv", dict(cfg, table_card_bibliographic=False)),
+        "table_card_bibliographic: false turns the rule off")
+    mname = ingest.memo_name(ingest.staged_stem(str((root / rel).resolve())) + ".txt")
+    calls = []
+    real_run = ingest.subprocess.run
+
+    def no_model(*a, **k):
+        calls.append(a)
+        raise RuntimeError("no model in this test")
+
+    ingest.subprocess.run = no_model
+    flag = ingest.qdir() / "paused"
+    flag.write_text("selftest", encoding="utf-8")
+    try:
+        ingest.enqueue(root / rel, "test", cfg)
+        done = ingest.work(cfg, debounce=0, idle_exit=0)
+        mp = root / ".memo" / mname
+        text = mp.read_text(encoding="utf-8") if mp.exists() else ""
+        chk(done.get("cards") == 1 and not done.get("deferred") and not calls
+            and "generator: table-card" in text,
+            "the worker writes the card while paused, without starting memo_gen")
+        chk(all(f"pmid={p}; cim={t}; decision={d}" + (f"; reason={r}" if r else "") in text
+                for p, t, d, r in rows),
+            "every row is a claim carrying its PMID, title and decision verbatim")
+        claim_lines = [l for l in text.splitlines() if l.startswith("- [C")]
+        chk(claim_lines and not any("﻿" in l for l in claim_lines),
+            "a byte-order mark reaches no claim, neither its text nor its snippet")
+    finally:
+        ingest.subprocess.run = real_run
+        flag.unlink(missing_ok=True)
+    return ok
+
+
 def check_table_card_fallback(home: Path) -> bool:
     """15c) A small table the model says nothing about still gets a card, every row a claim.
 
@@ -655,15 +803,36 @@ def check_concepts(home: Path) -> bool:
         db.commit()
         chk(c1.get("claims") == 65, "the clustering holds exactly the embedded claims")
 
-        write([lines[0].replace("finding number 1 ", "finding number one ")] + lines[1:])
-        store.sync_root(root, cfg={}, log=lambda *a: None)          # deletes and re-inserts
+        def ids_of():
+            return dict(db.execute("SELECT c.cid, c.id FROM claim c JOIN doc d ON d.id = c.doc_id"
+                                   " WHERE d.memo = 'notes.md-00000001.memo.md'"))
+
+        before = ids_of()
+        lines[0] = lines[0].replace("finding number 1 ", "finding number one ")
+        write(lines)
+        store.sync_root(root, cfg={}, log=lambda *a: None)
         orphans = {t: db.execute(f"SELECT COUNT(*) FROM {t} WHERE {c} NOT IN (SELECT id FROM claim)")
                    .fetchone()[0] for t, c in (("emb", "claim_id"), ("concept_member", "claim_id"),
                                                ("edge", "src"))}
         chk(not any(orphans.values()), f"a re-imported memo leaves no orphans {orphans}")
+        after = ids_of()
+        chk(after["1"] != before["1"] and all(after[c] == before[c] for c in before if c != "1"),
+            "re-imported in place: only the claim whose text changed gets a new row")
         e2 = concepts.build_embeddings(log=lambda *a: None)
-        chk(e2["embedded"] == 60, "its 60 claims are embedded afresh under their new ids, "
-            "the later memo's 5 keep theirs")
+        chk(e2["embedded"] == 1, "so only it is embedded again; the other 59 keep their vectors")
+
+        # A verifier pass changes statuses, not texts: nothing may be lost to it.
+        db.execute("UPDATE claim SET hits = 7 WHERE id=?", (after["3"],))
+        db.commit()
+        lines[1] = lines[1].replace("[CONFIRMED]", "[DRIFTED]")
+        write(lines)
+        store.sync_root(root, cfg={}, log=lambda *a: None)
+        c2 = db.execute("SELECT id, status FROM claim WHERE id=?", (after["2"],)).fetchone()
+        kept = db.execute("SELECT COUNT(*) FROM emb WHERE claim_id=?", (after["2"],)).fetchone()[0]
+        hits = db.execute("SELECT hits FROM claim WHERE id=?", (after["3"],)).fetchone()
+        chk(c2 == (after["2"], "DRIFTED") and kept == 1 and hits == (7,)
+            and concepts.build_embeddings(log=lambda *a: None)["embedded"] == 0,
+            "a status change keeps the claim's row, its vector and its recall hits")
 
         x = db.execute("SELECT id FROM claim WHERE status='CONFIRMED' ORDER BY id LIMIT 1").fetchone()[0]
         db.execute("UPDATE claim SET text = text || ' (revised)' WHERE id=?", (x,))
@@ -947,26 +1116,26 @@ def check_doctor(home: Path) -> bool:
                  "command": "python3 $HOME/.claude/skills/memo-index/scripts/ctx_watch.py --hook"},
                 {"type": "command", "command": "echo someone-elses-hook"}]}],
         },
-    }, indent=2))
+    }, indent=2), encoding="utf-8")
 
     doctor.apply_fix()
-    got = json.loads((cfgdir / "settings.json").read_text())
+    got = json.loads((cfgdir / "settings.json").read_text(encoding="utf-8"))
     post = got.get("hooks", {}).get("PostToolUse", [])
     remaining = [h["command"] for g in post for h in g["hooks"]]
 
     # Running it again must be a no-op, not a second round of edits.
-    before = (cfgdir / "settings.json").read_text()
+    before = (cfgdir / "settings.json").read_text(encoding="utf-8")
     doctor.apply_fix()
-    idempotent = (cfgdir / "settings.json").read_text() == before
+    idempotent = (cfgdir / "settings.json").read_text(encoding="utf-8") == before
 
     # Handoff litter: one unfilled template, one someone actually wrote in.
     root = home / "litter"
     (root / "a" / ".memo").mkdir(parents=True, exist_ok=True)
     (root / "b" / ".memo").mkdir(parents=True, exist_ok=True)
     (root / "a" / ".memo" / "HANDOFF.md").write_text(
-        "# Handoff\n<!-- Fill this in before /clear: the question -->\n")
+        "# Handoff\n<!-- Fill this in before /clear: the question -->\n", encoding="utf-8")
     (root / "b" / ".memo" / "HANDOFF.md").write_text(
-        "# Handoff\nWe decided to switch module_13 to exponential backoff.\n")
+        "# Handoff\nWe decided to switch module_13 to exponential backoff.\n", encoding="utf-8")
     doctor.clean_handoffs(root)
 
     print("\n11) DOCTOR")
@@ -1028,22 +1197,22 @@ def check_map_reduce(home: Path) -> bool:
     for name, size in [("conversation.md", 5000), ("aaa_big.md", 9000),
                        ("bbb_small.md", 100), ("ccc_mid.md", 2000),
                        ("ddd_tiny.md", 50)]:
-        (wd / "sources" / name).write_text("x" * size)
+        (wd / "sources" / name).write_text("x" * size, encoding="utf-8")
     skill = home / "stubskill"
     skill.mkdir(parents=True, exist_ok=True)
-    (skill / "memo_gen.py").write_text(STUB_MEMO_GEN)
+    (skill / "memo_gen.py").write_text(STUB_MEMO_GEN, encoding="utf-8")
 
     order_file = home / "stub_order.txt"
 
     def run(fail="", slow="", total=900.0, step=240.0):
-        order_file.write_text("")
+        order_file.write_text("", encoding="utf-8")
         for f in (wd / ".memo").glob("*"):
             f.unlink()
         os.environ.update({"STUB_FAIL": fail, "STUB_SLOW": slow,
                            "STUB_ORDER": str(order_file)})
         done, failed = compressor.map_sources(wd, skill, step, total,
                                               lambda m: None)
-        seen = order_file.read_text().split()
+        seen = order_file.read_text(encoding="utf-8").split()
         return done, failed, seen
 
     done, failed, seen = run()
@@ -1180,7 +1349,7 @@ def check_calibration_outlier(home: Path) -> bool:
     sys.path.insert(0, str(Path(__file__).parent))
     cfgdir = home / "outlier-claude"
     cfgdir.mkdir(parents=True, exist_ok=True)
-    (cfgdir / "settings.json").write_text(json.dumps({"theme": "dark"}))
+    (cfgdir / "settings.json").write_text(json.dumps({"theme": "dark"}), encoding="utf-8")
     os.environ["CLAUDE_CONFIG_DIR"] = str(cfgdir)
     import autopilot
     importlib.reload(autopilot)
@@ -1190,7 +1359,7 @@ def check_calibration_outlier(home: Path) -> bool:
         return float(autopilot.load_state()["override"])
 
     def written() -> float:
-        return float(json.loads((cfgdir / "settings.json").read_text())
+        return float(json.loads((cfgdir / "settings.json").read_text(encoding="utf-8"))
                      ["env"][autopilot.ENV_KEY])
 
     def calibrated() -> bool:
@@ -1272,10 +1441,10 @@ def check_stub_visible(home: Path) -> bool:
     def mk(name, phase, cwd, age_h, body):
         d = sd / name
         d.mkdir(parents=True, exist_ok=True)
-        (d / "RESUME.md").write_text(body)
+        (d / "RESUME.md").write_text(body, encoding="utf-8")
         (d / "STATE.json").write_text(json.dumps(
             {"phase": phase, "cwd": cwd, "resume_tokens_est": 400,
-             "raw_tokens_est": 80000}))
+             "raw_tokens_est": 80000}), encoding="utf-8")
         t = time.time() - age_h * 3600
         os.utime(d / "RESUME.md", (t, t))
 
@@ -1697,7 +1866,7 @@ def check_autopilot(home: Path) -> bool:
     cfgdir = home / "fake-claude"
     cfgdir.mkdir(parents=True, exist_ok=True)
     keep = {"env": {"KEEP_ME": "1"}, "hooks": {"X": []}, "theme": "dark"}
-    (cfgdir / "settings.json").write_text(json.dumps(keep, indent=2))
+    (cfgdir / "settings.json").write_text(json.dumps(keep, indent=2), encoding="utf-8")
     os.environ["CLAUDE_CONFIG_DIR"] = str(cfgdir)
 
     sys.path.insert(0, str(Path(__file__).parent))
@@ -1706,7 +1875,7 @@ def check_autopilot(home: Path) -> bool:
 
     print("\n5) AUTOPILOT")
     autopilot.cmd_enable(70.0)
-    got = json.loads((cfgdir / "settings.json").read_text())
+    got = json.loads((cfgdir / "settings.json").read_text(encoding="utf-8"))
     wrote = got.get("env", {}).get(autopilot.ENV_KEY) == "70"
     kept = (got.get("theme") == "dark" and got.get("hooks") == {"X": []}
             and got.get("env", {}).get("KEEP_ME") == "1")
@@ -1715,17 +1884,17 @@ def check_autopilot(home: Path) -> bool:
     # DOWN, not up. Getting this sign wrong would drive the threshold to the
     # ceiling and compaction would stop happening at all.
     autopilot.record_firing(88.6, mg.load_config())
-    after = float(json.loads((cfgdir / "settings.json").read_text())
+    after = float(json.loads((cfgdir / "settings.json").read_text(encoding="utf-8"))
                   ["env"][autopilot.ENV_KEY])
     direction = after < 70
 
     # Inside tolerance nothing should move.
     autopilot.record_firing(70.0 + autopilot.TOLERANCE_PCT / 2, mg.load_config())
-    stable = float(json.loads((cfgdir / "settings.json").read_text())
+    stable = float(json.loads((cfgdir / "settings.json").read_text(encoding="utf-8"))
                    ["env"][autopilot.ENV_KEY]) == after
 
     autopilot.cmd_disable()
-    final = json.loads((cfgdir / "settings.json").read_text())
+    final = json.loads((cfgdir / "settings.json").read_text(encoding="utf-8"))
     removed = autopilot.ENV_KEY not in final.get("env", {})
     restored = (final.get("theme") == "dark"
                 and final.get("env", {}).get("KEEP_ME") == "1")

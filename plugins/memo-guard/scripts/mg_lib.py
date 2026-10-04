@@ -21,6 +21,23 @@ import sys
 import time
 from pathlib import Path
 
+# Windows gives Python the ANSI code page (cp1250 here) as its default file encoding unless
+# UTF-8 mode is on, so every open() without an encoding died on the first '→'. Measured
+# 2026-10-04: all 13 sessions' RESUME.md since 2026-08-25 were empty, because the background
+# compressor crashed writing conversation.md (198 UnicodeEncodeErrors in compressor.log).
+# The hooks start in UTF-8 mode (-X utf8 in
+# hooks.json); this hands the mode down to every child -- the compressor, the ingest worker,
+# memo_gen -- since spawn_background and subprocess pass os.environ on.
+os.environ.setdefault("PYTHONUTF8", "1")
+# A script run by hand with its output redirected still writes the code page to stdout and
+# dies on the first '▸' it prints; Claude Code reads hook output as UTF-8 anyway.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        if _stream is not None and (_stream.encoding or "").lower().replace("-", "") != "utf8":
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 # --------------------------------------------------------------------------- paths
 
 def data_dir() -> Path:
@@ -225,7 +242,12 @@ DEFAULTS = {
     # The ingest worker uses the local GPU through Ollama. "pause" (or /memo-guard:ingest
     # pause) keeps files queued without touching the GPU.
     "ingest_model": True,
-    "ingest_prose_model": "llama3.1:8b",
+    # qwen3:14b since 0.15.12 (the user's decision, 2026-10-04): in this workspace its claims
+    # verified 82% CONFIRMED (a small sample, 49 claims) against 55% for llama3.1:8b and 32%
+    # for llama3.2:3b (each over 370k claims). It takes 11.9 GB of VRAM at memo_gen's
+    # num_ctx 8192 (measured); on a 16 GB unified-memory Mac set this to "llama3.1:8b" in
+    # config.json.
+    "ingest_prose_model": "qwen3:14b",
     # memo_gen reads MEMO_MODEL_BIG as its VISION model, so this must be able to see. It
     # was "qwen3:14b" (text-only) in 0.15.0-0.15.1, harmless only because the worker runs
     # doc_ingest with --no-images and never queues an image.
@@ -236,6 +258,12 @@ DEFAULTS = {
     # paraphrases screening-list titles and authors (a fabricated-reference risk) and says
     # nothing about simulation output, and tables.py already holds every row as SQL.
     "table_card_min_chunks": 100,
+    # A list of publications gets a card at any size (0.15.12; the user's decision,
+    # 2026-10-04): screening decisions, reference lists, corpus lists, evidence maps. Rows are
+    # publication records when the header names a publication (PMID/PMCID/DOI, or a title)
+    # and says more about it (table_card.bibliographic_header). A model memo of such rows
+    # pairs titles, authors, years and PMIDs across rows, and no verifier rule catches it.
+    "table_card_bibliographic": True,
     # Start `ollama serve` (q8 KV, flash attention) when the worker needs it and it is down.
     "ingest_start_ollama": True,
     "ingest_ollama_parallel": 4,
@@ -259,12 +287,12 @@ def load_config() -> dict:
     cfg_path = data_dir() / "config.json"
     if cfg_path.exists():
         try:
-            cfg.update(json.loads(cfg_path.read_text()))
+            cfg.update(json.loads(cfg_path.read_text(encoding="utf-8")))
         except Exception:
             pass
     else:
         try:
-            cfg_path.write_text(json.dumps(DEFAULTS, indent=2) + "\n")
+            cfg_path.write_text(json.dumps(DEFAULTS, indent=2) + "\n", encoding="utf-8")
         except OSError:
             pass
     # env overrides
@@ -422,14 +450,14 @@ def _state_path(sid: str) -> Path:
 
 def load_state(sid: str) -> dict:
     try:
-        return json.loads(_state_path(sid).read_text())
+        return json.loads(_state_path(sid).read_text(encoding="utf-8"))
     except Exception:
         return {}
 
 
 def save_state(sid: str, st: dict) -> None:
     try:
-        _state_path(sid).write_text(json.dumps(st, indent=2))
+        _state_path(sid).write_text(json.dumps(st, indent=2), encoding="utf-8")
     except OSError:
         pass
 
@@ -455,7 +483,7 @@ def archive_transcript(tp: Path, sid: str, cwd: str, tag: str,
         "transcript": str(tp),
     }
     dst.with_name(dst.name.replace(".jsonl.gz", ".meta.json")).write_text(
-        json.dumps(meta, indent=2))
+        json.dumps(meta, indent=2), encoding="utf-8")
     _prune_archives(out, cfg.get("keep_archives", 40))
     return dst
 
@@ -533,7 +561,7 @@ def append_metrics(row: dict, event: str = COMPRESS) -> None:
     row = dict(row)
     row.setdefault("event", event)
     row["ts"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-    with (data_dir() / "metrics.jsonl").open("a") as f:
+    with (data_dir() / "metrics.jsonl").open("a", encoding="utf-8") as f:
         f.write(json.dumps(row) + "\n")
 
 
@@ -550,7 +578,7 @@ def read_metrics(event: str | None = None, session: str | None = None,
     out: list[dict] = []
     if not mf.exists():
         return out
-    for ln in mf.read_text(errors="replace").splitlines():
+    for ln in mf.read_text(errors="replace", encoding="utf-8").splitlines():
         ln = ln.strip()
         if not ln:
             continue

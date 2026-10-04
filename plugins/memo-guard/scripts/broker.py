@@ -121,7 +121,7 @@ def probe_hardware() -> dict:
     for p in Path("/sys/class/drm").glob("card*/device/mem_info_vram_total"):
         try:
             return {"vendor": "amd", "device": "radeon", "backend": "rocm",
-                    "vram_mb": int(p.read_text().strip()) // (1024 * 1024)}
+                    "vram_mb": int(p.read_text(encoding="utf-8").strip()) // (1024 * 1024)}
         except (OSError, ValueError):
             continue
 
@@ -176,10 +176,12 @@ def capacity(hw: dict | None = None) -> int:
 # lesser answer, it is the only answer on a machine that cannot hold the first
 # one: a model that does not fit runs on the CPU at roughly a twentieth of the
 # speed, so "smaller and resident" beats "larger and spilled" every time.
+# "prose" and "code" name what memo-index's memo_gen.py loads by default (qwen3:14b for
+# both since 2026-10-04), so a slot taken for memo generation evicts the right neighbour.
 ROUTES = {
     "extract":  ("llama3.1:8b",      "llama3.2:3b"),      # cognify entity pull
-    "prose":    ("llama3.1:8b",      "llama3.2:3b"),      # memo generation
-    "code":     ("qwen2.5-coder:7b", "qwen2.5-coder:3b"),
+    "prose":    ("qwen3:14b",        "llama3.1:8b"),      # memo generation
+    "code":     ("qwen3:14b",        "qwen2.5-coder:7b"),
     "reason":   ("gemma4:12b",       "llama3.1:8b"),      # escalation
     "embed":    ("nomic-embed-text", "nomic-embed-text"),
     "embed_hq": ("mxbai-embed-large", "nomic-embed-text"),
@@ -595,7 +597,7 @@ def recover(level: int = 1, hw: dict | None = None) -> dict:
 
 def _read(p: Path) -> dict:
     try:
-        return json.loads(p.read_text())
+        return json.loads(p.read_text(encoding="utf-8"))
     except Exception:
         return {}
 
@@ -692,7 +694,7 @@ def slot(name: str = "model", deadline_s: float = 90.0, owner: str = "",
                 try:
                     tmp.write_text(json.dumps(
                         {"pid": os.getpid(), "owner": owner,
-                         "since": time.time(), "heartbeat": time.time()}))
+                         "since": time.time(), "heartbeat": time.time()}), encoding="utf-8")
                     os.link(tmp, p)
                     held = True
                     break
@@ -743,7 +745,7 @@ def beat(name: str = "model") -> None:
     if d.get("pid") == os.getpid():
         d["heartbeat"] = time.time()
         try:
-            p.write_text(json.dumps(d))
+            p.write_text(json.dumps(d), encoding="utf-8")
         except OSError:
             pass
 

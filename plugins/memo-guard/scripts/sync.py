@@ -103,7 +103,7 @@ def export(db, out: Path) -> dict:
         (out / "facts" / f"{slug}.json").write_text(
             json.dumps({"project": slug, "cwd": cwd_of.get(slug, ""),
                         "facts": items}, indent=1,
-                       sort_keys=True, ensure_ascii=False) + "\n")
+                       sort_keys=True, ensure_ascii=False) + "\n", encoding="utf-8")
         written["projects"] += 1
         written["facts"] += len(items)
 
@@ -114,7 +114,7 @@ def export(db, out: Path) -> dict:
                           "weight": round(w or 1.0, 3)})
     edges.sort(key=lambda d: (d["src"], d["dst"], d["rel"]))
     (out / "edges.json").write_text(
-        json.dumps(edges, indent=1, sort_keys=True) + "\n")
+        json.dumps(edges, indent=1, sort_keys=True) + "\n", encoding="utf-8")
     written["edges"] = len(edges)
 
     try:
@@ -131,7 +131,7 @@ def export(db, out: Path) -> dict:
               if r[0] not in dead]
         vs.sort(key=lambda d: d["fp"])
         (out / "claims.json").write_text(
-            json.dumps(vs, indent=1, sort_keys=True, ensure_ascii=False) + "\n")
+            json.dumps(vs, indent=1, sort_keys=True, ensure_ascii=False) + "\n", encoding="utf-8")
         written["claims"] = len(vs)
     except Exception:
         pass
@@ -146,7 +146,7 @@ def export(db, out: Path) -> dict:
                   " WHERE TRIM(content)<>''")]
         bs.sort(key=lambda d: (d["scope"], d["label"]))
         (out / "blocks.json").write_text(
-            json.dumps(bs, indent=1, sort_keys=True, ensure_ascii=False) + "\n")
+            json.dumps(bs, indent=1, sort_keys=True, ensure_ascii=False) + "\n", encoding="utf-8")
         written["blocks"] = len(bs)
     except Exception:
         pass
@@ -158,14 +158,14 @@ def export(db, out: Path) -> dict:
               for r in db.execute("SELECT fp,deleted_at FROM tombstone")]
         ts.sort(key=lambda d: d["fp"])
         (out / "tombstones.json").write_text(
-            json.dumps(ts, indent=1, sort_keys=True) + "\n")
+            json.dumps(ts, indent=1, sort_keys=True) + "\n", encoding="utf-8")
         written["tombstones"] = len(ts)
     except Exception:
         pass
 
     (out / "sync-meta.json").write_text(json.dumps(
         {"schema": 1, "machine": mg.machine_name(), "written": written},
-        indent=1, sort_keys=True) + "\n")
+        indent=1, sort_keys=True) + "\n", encoding="utf-8")
     return written
 
 
@@ -195,7 +195,7 @@ def import_(db, src: Path) -> dict:
     tf = src / "tombstones.json"
     if tf.exists():
         try:
-            for t in json.loads(tf.read_text()):
+            for t in json.loads(tf.read_text(encoding="utf-8")):
                 dead.add(t["fp"])
                 db.execute("INSERT INTO tombstone (fp,deleted_at,machine)"
                            " VALUES (?,?,'remote') ON CONFLICT(fp) DO NOTHING",
@@ -215,7 +215,7 @@ def import_(db, src: Path) -> dict:
 
     for f in sorted((src / "facts").glob("*.json")) if (src / "facts").exists() else []:
         try:
-            data = json.loads(f.read_text())
+            data = json.loads(f.read_text(encoding="utf-8"))
         except Exception:
             continue
         slug = data.get("project") or f.stem
@@ -238,7 +238,7 @@ def import_(db, src: Path) -> dict:
     ef = src / "edges.json"
     if ef.exists():
         try:
-            for e in json.loads(ef.read_text()):
+            for e in json.loads(ef.read_text(encoding="utf-8")):
                 a, b = local_fp.get(e["src"]), local_fp.get(e["dst"])
                 if not a or not b:
                     continue        # an edge to a fact we do not have is not an edge
@@ -266,7 +266,7 @@ def import_(db, src: Path) -> dict:
         cdb.commit()
         cf = src / "claims.json"
         if cf.exists():
-            for v in json.loads(cf.read_text()):
+            for v in json.loads(cf.read_text(encoding="utf-8")):
                 if v.get("fp") in dead or cl.fingerprint(v["text"]) in dead:
                     continue
                 cl.record(cdb, v["text"], v["status"], v.get("note", ""),
@@ -280,7 +280,7 @@ def import_(db, src: Path) -> dict:
         try:
             import blocks as bl
             bdb = bl.connect()
-            for b in json.loads(bf.read_text()):
+            for b in json.loads(bf.read_text(encoding="utf-8")):
                 row = bdb.execute("SELECT content,updated_at FROM block"
                                   " WHERE label=? AND scope=?",
                                   (b["label"], b["scope"])).fetchone()
@@ -326,7 +326,7 @@ def setup(slug: str) -> int:
     if not (d / ".git").exists():
         _git("init", "-q", "-b", "main")
     # The data repo must never accept the raw databases, only the JSON.
-    (d / ".gitignore").write_text("*.db\n*.db-wal\n*.db-shm\n*.jsonl*\n")
+    (d / ".gitignore").write_text("*.db\n*.db-wal\n*.db-shm\n*.jsonl*\n", encoding="utf-8")
     (d / "README.md").write_text(
         "# memo-guard knowledge base\n\n"
         "Exported facts, claim verdicts and core-memory blocks. **Private on "
@@ -334,7 +334,7 @@ def setup(slug: str) -> int:
         "seen. The plugin's code lives elsewhere; nothing here is code.\n\n"
         "One JSON file per project so two machines editing different projects "
         "never touch the same file. Everything is keyed by content fingerprint, "
-        "not by local row id.\n")
+        "not by local row id.\n", encoding="utf-8")
     _git("add", "-A")
     _git("commit", "-q", "-m", "init knowledge base")
     print(f"ready: {d}  ->  {slug}")
@@ -395,11 +395,11 @@ def request() -> int:
     a detached worker does the git work after the coalescing window.
     """
     d = mg.data_dir()
-    (d / "sync.dirty").write_text(str(time.time()))
+    (d / "sync.dirty").write_text(str(time.time()), encoding="utf-8")
     marker = d / "sync.worker"
     if marker.exists() and time.time() - marker.stat().st_mtime < DEBOUNCE_S * 4:
         return 0                      # a worker is already pending
-    marker.write_text(str(time.time()))
+    marker.write_text(str(time.time()), encoding="utf-8")
     subprocess.Popen([sys.executable, str(Path(__file__)), "--worker"],
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                      **mg.detached_kwargs())

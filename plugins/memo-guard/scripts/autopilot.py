@@ -78,14 +78,14 @@ def state_path() -> Path:
 
 def load_state() -> dict:
     try:
-        return json.loads(state_path().read_text())
+        return json.loads(state_path().read_text(encoding="utf-8"))
     except Exception:
         return {}
 
 
 def save_state(st: dict) -> None:
     try:
-        state_path().write_text(json.dumps(st, indent=2) + "\n")
+        state_path().write_text(json.dumps(st, indent=2) + "\n", encoding="utf-8")
     except OSError:
         pass
 
@@ -97,7 +97,7 @@ def read_settings() -> dict:
     if not p.exists():
         return {}
     try:
-        return json.loads(p.read_text())
+        return json.loads(p.read_text(encoding="utf-8"))
     except Exception as e:
         raise SystemExit(f"memo-guard: {p} is not valid JSON ({e}); "
                          "refusing to touch it")
@@ -113,9 +113,9 @@ def write_settings(data: dict) -> Path:
     p.parent.mkdir(parents=True, exist_ok=True)
     if p.exists():
         bak = p.with_suffix(".json.memo-guard.bak")
-        bak.write_text(p.read_text())
+        bak.write_bytes(p.read_bytes())
     tmp = p.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     os.replace(tmp, p)
     return p
 
