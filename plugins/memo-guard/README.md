@@ -415,6 +415,22 @@ keeps the self test hermetic). Everything stays local, in `data_dir()`:
   and gave 268 claims, all CONFIRMED.
 
   A card needs no GPU, so it is written even while ingestion is paused. `0` turns cards off.
+
+  **Workbooks too (0.15.5).** An `.xlsx` is staged by memo-index's `doc_ingest`, one markdown
+  table per sheet, and the same chunk threshold applies. Its card gives:
+  - each sheet's row and column count, its columns, and its SQL table;
+  - for the largest sheet, the column statistics and the first rows.
+
+  Both markdown dialects are parsed: doc_ingest's stdlib reader, and doc-tools' `xlstotext`
+  where that is on PATH. `xlstotext` leaves a lone sheet unnamed; the card then says
+  "sheet 1" and does not invent a name.
+
+  Measured 2026-10-04 on two OGDOC code registries (71,223 and 24,474 rows): 21 and 17
+  claims, all CONFIRMED, and all 7 sheet row counts equal to their SQL tables. Each replaced
+  memo had held tens of thousands of deterministic row claims that only repeated `data.db`.
+
+  The card decision now uses one measure everywhere: memo_gen's own `splitlines` count of
+  the staged file. Counting file lines instead would disagree on a stray `\r` or `\x0c`.
 - **The search index holds only claims that can be answers (0.15.3).** `claim_fts` indexes the
   `claim_live` view: REFUTED and STALE claims are excluded. Triggers keep the index in step on
   insert, delete and status change; their WHEN clauses mirror the view, because an

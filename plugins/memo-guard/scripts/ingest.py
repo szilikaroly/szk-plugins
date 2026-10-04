@@ -301,9 +301,16 @@ def process_doc(root: Path, rel: str, cfg: dict) -> tuple[str, str]:
     try:
         native = ext in TEXT_EXT and ext not in ALWAYS_PREP and _max_line(ab) <= LONG
         if native:
-            r = subprocess.run([sys.executable, str(ms / "memo_gen.py"), "--root", str(root),
-                                "--include", rel, "--memo-dir", str(memo_dir)],
-                               capture_output=True, text=True, encoding="utf-8", env=env, timeout=3600)
+            # The file was already chosen (inside a root, indexable, not under SKIP); memo_gen's
+            # generic "build/*", "dist/*", "vendor/*" excludes would silently drop real source
+            # such as a project's build-chain scripts. Older memo-index lacks the flag: retry.
+            cmd = [sys.executable, str(ms / "memo_gen.py"), "--root", str(root),
+                   "--include", rel, "--memo-dir", str(memo_dir)]
+            r = subprocess.run(cmd + ["--no-default-excludes"], capture_output=True, text=True,
+                               encoding="utf-8", env=env, timeout=3600)
+            if r.returncode != 0 and "unrecognized arguments" in (r.stderr or ""):
+                r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                                   env=env, timeout=3600)
             name = memo_name(rel)
             _verify(memo_dir, [name], root, ms)
             return ("memo" if (memo_dir / name).exists() else "no-claims"), r.stderr[-200:]
@@ -311,14 +318,6 @@ def process_doc(root: Path, rel: str, cfg: dict) -> tuple[str, str]:
         if ext in TEXT_EXT:
             if prep_text(ab, str(stage / name)) < 32:
                 return "empty", "under 32 chars of text"
-            lim = int(cfg.get("table_card_min_chunks", 100) or 0)
-            if lim and ext in (".csv", ".tsv"):
-                with open(stage / name, encoding="utf-8", errors="replace") as fh:
-                    n = sum(1 for _ in fh)
-                if -(-n // 160) >= lim:            # memo_gen chunks of 160 lines
-                    import table_card
-                    done = table_card.write_cards(root, memo_dir, [rel], ms=ms, log=lambda *a: None)
-                    return ("table-card" if done else "convert-error"), f"{-(-n // 160)} chunks"
         else:
             r = subprocess.run([sys.executable, str(ms / "doc_ingest.py"), "--outdir", str(stage),
                                 "--no-images", ab], capture_output=True, text=True,
@@ -329,6 +328,13 @@ def process_doc(root: Path, rel: str, cfg: dict) -> tuple[str, str]:
                 return "convert-error", r.stderr[-200:]
             if "error" in rec:
                 return "convert-error", str(rec["error"])[:200]
+        lim = int(cfg.get("table_card_min_chunks", 100) or 0)
+        if lim and ext in (".csv", ".tsv", ".xlsx") and (stage / name).exists():
+            import table_card
+            n = table_card.file_chunks(stage / name)
+            if n >= lim:
+                done = table_card.write_cards(root, memo_dir, [rel], ms=ms, log=lambda *a: None)
+                return ("table-card" if done else "convert-error"), f"{n} chunks"
         r = subprocess.run([sys.executable, str(ms / "memo_gen.py"), "--root", str(stage),
                             "--include", "*.txt", "--memo-dir", str(memo_dir)],
                            capture_output=True, text=True, encoding="utf-8", env=env, timeout=3600)
@@ -349,7 +355,7 @@ def _is_card(p: Path, ext: str, cfg: dict) -> bool:
     """Will this file get a computed table card rather than a model pass? Decided on the
     staged size, the same measure process_doc uses, so the two can never disagree."""
     lim = int(cfg.get("table_card_min_chunks", 100) or 0)
-    if not lim or ext not in (".csv", ".tsv"):
+    if not lim or ext not in (".csv", ".tsv", ".xlsx"):
         return False
     try:
         import table_card

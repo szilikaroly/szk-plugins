@@ -193,10 +193,11 @@ def main() -> int:
     cp_ok = check_corpus(home)
     st_ok = check_sync_tombstones(home)
     tc_ok = check_table_cards(home)
+    tx_ok = check_table_cards_xlsx(home)
     dm_ok = check_db_maint(home)
     return 0 if (ok and hit and ap_ok and cv_ok and co_ok and sb_ok and rc_ok
                  and ev_ok and mr_ok and dr_ok and dg_ok and bw_ok and cp_ok
-                 and st_ok and tc_ok and dm_ok) else 1
+                 and st_ok and tc_ok and tx_ok and dm_ok) else 1
 
 
 def check_db_maint(home: Path) -> bool:
@@ -359,6 +360,145 @@ def check_table_cards(home: Path) -> bool:
             "the worker writes the card while paused, without starting memo_gen")
         chk(mp.exists() and "generator: table-card" in mp.read_text(encoding="utf-8"),
             "the card sits where memo_gen's memo would have")
+    finally:
+        ingest.subprocess.run = real_run
+        flag.unlink(missing_ok=True)
+    return ok
+
+
+def _write_xlsx(path: Path, sheets: list) -> None:
+    """A minimal real workbook -- inline strings, numbers as <v> -- written with the stdlib,
+    so the test needs no openpyxl."""
+    import zipfile
+    from xml.sax.saxutils import escape, quoteattr
+
+    def ref(ci: int, ri: int) -> str:
+        s, ci = "", ci + 1
+        while ci:
+            ci, r = divmod(ci - 1, 26)
+            s = chr(65 + r) + s
+        return f"{s}{ri}"
+
+    ns = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"'
+    rel_ns = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    pkg_ns = "http://schemas.openxmlformats.org/package/2006/relationships"
+    ct = ("application/vnd.openxmlformats-officedocument.spreadsheetml.")
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml",
+                   '<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/'
+                   'package/2006/content-types"><Default Extension="rels" ContentType="application/'
+                   'vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" '
+                   'ContentType="application/xml"/><Override PartName="/xl/workbook.xml" '
+                   f'ContentType="{ct}sheet.main+xml"/>'
+                   + "".join(f'<Override PartName="/xl/worksheets/sheet{k}.xml" ContentType="{ct}'
+                             f'worksheet+xml"/>' for k in range(1, len(sheets) + 1)) + "</Types>")
+        z.writestr("_rels/.rels", f'<Relationships xmlns="{pkg_ns}"><Relationship Id="rId1" '
+                   f'Type="{rel_ns}/officeDocument" Target="xl/workbook.xml"/></Relationships>')
+        z.writestr("xl/workbook.xml", f'<workbook {ns} xmlns:r="{rel_ns}"><sheets>'
+                   + "".join(f'<sheet name={quoteattr(n)} sheetId="{k}" r:id="rId{k}"/>'
+                             for k, (n, _) in enumerate(sheets, 1)) + "</sheets></workbook>")
+        z.writestr("xl/_rels/workbook.xml.rels", f'<Relationships xmlns="{pkg_ns}">'
+                   + "".join(f'<Relationship Id="rId{k}" Type="{rel_ns}/worksheet" '
+                             f'Target="worksheets/sheet{k}.xml"/>' for k in range(1, len(sheets) + 1))
+                   + "</Relationships>")
+        for k, (_, rows) in enumerate(sheets, 1):
+            body = []
+            for ri, row in enumerate(rows, 1):
+                cells = [f'<c r="{ref(ci, ri)}"><v>{v}</v></c>' if isinstance(v, (int, float)) else
+                         f'<c r="{ref(ci, ri)}" t="inlineStr"><is><t>{escape(str(v))}</t></is></c>'
+                         for ci, v in enumerate(row)]
+                body.append(f'<row r="{ri}">{"".join(cells)}</row>')
+            z.writestr(f"xl/worksheets/sheet{k}.xml",
+                       f"<worksheet {ns}><sheetData>{''.join(body)}</sheetData></worksheet>")
+
+
+def check_table_cards_xlsx(home: Path) -> bool:
+    """15b) A big workbook gets a card too, built from the staged markdown tables.
+
+    The 2026-10-04 extension of the card decision: two OGDOC code-registry workbooks
+    (71,223 and 24,474 rows) had memos of row-level claims that only duplicated their SQL
+    tables. Checked: both markdown dialects parse (doc_ingest's stdlib reader, and
+    doc-tools' xlstotext where it is on PATH -- a lone sheet there has no name, and the card
+    must not invent one); every claim sits literally on the staged line it names; the
+    numbers are exact; and the paused worker writes and verifies the card without memo_gen.
+    """
+    import re as _re
+    import ingest
+    import table_card
+    print("\n15b) workbook table cards")
+    ok = True
+
+    def chk(cond, what):
+        nonlocal ok
+        print(f"   {'ok  ' if cond else 'FAIL'} {what}")
+        ok = ok and bool(cond)
+
+    xt = ["=== Codes (3 rows) ===", "code | label", "--- | ---", "A1 | first", "A2 | second", "",
+          "=== Doses (2 rows) ===", "id | dose", "--- | ---", "1 | 5"]
+    sh = table_card._md_sheets(xt)
+    chk([s["name"] for s in sh] == ["Codes", "Doses"] and sh[0]["rows"] == [["A1", "first"], ["A2", "second"]]
+        and sh[0]["lines"] == [4, 5] and sh[1]["head_line"] == 8,
+        "xlstotext's dialect parses: sheet names, rows, 1-based line numbers")
+    lone = table_card._md_sheets(["code | label", "--- | ---", "A1 | first"])
+    chk(len(lone) == 1 and lone[0]["name"] == "" and lone[0]["rows"] == [["A1", "first"]],
+        "a lone unnamed sheet parses, and gets no invented name")
+
+    ms = Path(os.path.expanduser(mg.load_config().get("memo_index_path", ""))) / "scripts"
+    if not (ms / "doc_ingest.py").exists():
+        print("   skip workbook staging: memo-index's doc_ingest.py is not installed")
+        return ok
+    root = home / "card-root-x"
+    (root / "data").mkdir(parents=True, exist_ok=True)
+    rel = "data/codes.xlsx"
+    beta = [["id", "dose", "unit"]] + [[i, 5 + (i * 7) % 95, "mg" if i % 4 else "ml"] for i in range(1, 16501)]
+    _write_xlsx(root / rel, [("alpha", [["code", "label"], ["A1", "first"], ["A2", "second"], ["A3", "third"]]),
+                             ("beta", beta)])
+    _write_xlsx(root / "data" / "small.xlsx", [("only", [["a", "b"], [1, 2]])])
+    ab = str((root / rel).resolve())
+    chk(table_card.chunks(ab) >= 100, "the workbook fixture is big enough to get a card")
+    mname, text, info = table_card.build(root, rel, {"alpha": "t3", "beta": "t4"})
+    _, _, slines = table_card.staged(ab)
+    claims = _re.findall(r"^- \[C\d+\] \[PENDING\] (.*) @L(\d+) `([^`]*)`$", text, _re.M)
+    chk(claims and all(s and s in slines[int(n) - 1].replace("`", "") for _, n, s in claims),
+        f"every one of {len(claims)} claims is anchored to a literal snippet on its line")
+    chk(f"- L1-{len(slines)}:" in text, "the card covers the whole staged workbook")
+    chk("codes.xlsx, sheet 'alpha', is a table of 3 data rows and 2 columns: code, label; "
+        "the full sheet is SQL table t3" in text
+        and "codes.xlsx, sheet 'beta', is a table of 16,500 data rows and 3 columns: id, dose, unit; "
+        "the full sheet is SQL table t4" in text,
+        "each sheet's size, columns and SQL table are named")
+    chk("column 'dose' is numeric (16,500 values) and ranges from 5 to 99" in text
+        and "column 'unit' has 2 distinct values; most frequent: mg (12,375), ml (4,125)" in text,
+        "the largest sheet's column statistics are exact")
+
+    cfg = {"corpus_roots": [str(root)], "memo_index_path": str(ms.parent), "table_card_min_chunks": 100,
+           "corpus_tables": False}
+    chk(ingest._is_card(root / rel, ".xlsx", cfg)
+        and not ingest._is_card(root / "data" / "small.xlsx", ".xlsx", cfg),
+        "only the big workbook is carded")
+    calls = []
+    real_run = ingest.subprocess.run
+
+    def no_model(*a, **k):
+        cmd = a[0] if a else k.get("args", [])
+        if any("memo_gen" in str(x) for x in cmd):
+            calls.append(cmd)
+            raise RuntimeError("no model in this test")
+        return real_run(*a, **k)               # staging and verify_anchors run for real
+
+    ingest.subprocess.run = no_model
+    flag = ingest.qdir() / "paused"
+    flag.write_text("selftest", encoding="utf-8")
+    try:
+        ingest.enqueue(root / rel, "test", cfg)
+        done = ingest.work(cfg, debounce=0, idle_exit=0)
+        mp = root / ".memo" / mname
+        card = mp.read_text(encoding="utf-8") if mp.exists() else ""
+        chk(done.get("cards") == 1 and not done.get("deferred") and not calls,
+            "the worker writes the workbook card while paused, without starting memo_gen")
+        m = _re.search(r"^verified: (\d+) confirmed\s*$", card, _re.M)
+        chk(m and int(m.group(1)) == len(claims) and "[PENDING]" not in card,
+            f"verify_anchors confirms all {len(claims)} card claims against freshly staged text")
     finally:
         ingest.subprocess.run = real_run
         flag.unlink(missing_ok=True)

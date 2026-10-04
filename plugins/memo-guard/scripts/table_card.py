@@ -46,7 +46,7 @@ from ingest import memo_name, prep_text, staged_stem  # noqa: E402
 
 CHUNK_LINES = 160      # memo_gen's MAX_CHUNK_LINES
 MIN_CHUNKS = 100       # default threshold: at or above it a table gets a card, not a model pass
-CARD_EXT = {".csv", ".tsv"}
+CARD_EXT = {".csv", ".tsv", ".xlsx"}
 MAX_COLS = 15
 SAMPLE_ROWS = 3
 SNIP = 60
@@ -54,19 +54,45 @@ SNIP = 60
 csv.field_size_limit(min(sys.maxsize, 2 ** 31 - 1))
 
 
+def _memo_index_scripts() -> Path:
+    return Path(os.path.expanduser(mg.load_config().get("memo_index_path", ""))) / "scripts"
+
+
+def _stage_into(ab: str, outdir: str) -> str:
+    """Write the staged text exactly as the batch runs do: prep_text for CSV/TSV, memo-index's
+    doc_ingest for a workbook (one markdown table per sheet). Returns the staged file path."""
+    name = staged_stem(ab) + ".txt"
+    if ab.lower().endswith(".xlsx"):
+        import subprocess
+        subprocess.run([sys.executable, str(_memo_index_scripts() / "doc_ingest.py"), "--outdir",
+                        outdir, "--no-images", ab], capture_output=True, text=True, encoding="utf-8",
+                       env=dict(os.environ, PYTHONUTF8="1"), timeout=1800)
+    else:
+        prep_text(ab, os.path.join(outdir, name))
+    return os.path.join(outdir, name)
+
+
 def staged(ab: str) -> tuple[str, str, list[str]]:
     """(staged name, sha256, lines) of the staged text, exactly as memo_gen would read it:
-    written by the same prep_text, hashed from the bytes on disk, split the same way."""
+    written by the same staging, hashed from the bytes on disk, split the same way."""
     name = staged_stem(ab) + ".txt"
     with tempfile.TemporaryDirectory(prefix="mgtc_") as td:
-        dst = os.path.join(td, name)
-        prep_text(ab, dst)
+        dst = _stage_into(ab, td)
+        if not os.path.exists(dst):
+            raise RuntimeError(f"staging produced nothing for {ab}")
         data = open(dst, "rb").read()
     return name, hashlib.sha256(data).hexdigest(), data.decode("utf-8", errors="replace").splitlines()
 
 
 def chunks(ab: str) -> int:
     return math.ceil(len(staged(ab)[2]) / CHUNK_LINES)
+
+
+def file_chunks(path) -> int:
+    """memo_gen chunks in an already staged file, split as memo_gen splits it (splitlines,
+    not file iteration: the two disagree on a stray \\r or \\x0c)."""
+    with open(path, "rb") as fh:
+        return math.ceil(len(fh.read().decode("utf-8", errors="replace").splitlines()) / CHUNK_LINES)
 
 
 def _line_map(phys: list[str]) -> tuple[list[int | None], int]:
@@ -133,8 +159,140 @@ def _n(k: int, word: str) -> str:
     return f"{k:,} {word}" + ("" if k == 1 else "s")
 
 
-def build(root: Path, rel: str, sql_table: str = "") -> tuple[str, str, dict]:
-    """(memo file name, memo text, summary) for one CSV/TSV."""
+_SEP_RE = re.compile(r"^\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)*\|?$")
+# '## name' (doc_ingest's stdlib reader), '=== name (N rows) ===' (doc-tools' xlstotext -f md,
+# which names sheets only when there are several), or any other '#' heading.
+_SHEET_HEAD_RE = re.compile(r"^(?:#{1,6}\s+(?P<h>.+?)|===\s*(?P<x>.*?)\s*\(\d+ rows\)\s*===)\s*$")
+
+
+def _cells(line: str) -> list[str]:
+    return [c.strip() for c in line.strip().strip("|").split("|")]
+
+
+def _md_sheets(slines: list[str]) -> list[dict]:
+    """The markdown tables of a staged workbook: header, separator, then one data row per
+    line up to the next blank line. Two dialects reach here: doc_ingest's stdlib reader
+    ('| a | b |', '|---|---|'; '|' in a cell already turned into '/') and, where doc-tools
+    is on PATH, xlstotext ('a | b', '--- | ---'). A sheet's name is the heading just above
+    its table, '' when there is none. Line numbers are 1-based staged lines, so a row's
+    anchor is its own line."""
+    out, i, n = [], 0, len(slines)
+    while i < n:
+        if slines[i].strip() and i + 1 < n and _SEP_RE.match(slines[i + 1].strip()):
+            name = ""
+            for k in range(i - 1, max(-1, i - 3), -1):
+                if slines[k].strip():
+                    m = _SHEET_HEAD_RE.match(slines[k].strip())
+                    name = (m.group("h") or m.group("x") or "").strip() if m else ""
+                    break
+            sh = {"name": name, "head_line": i + 1, "header": _cells(slines[i]), "rows": [], "lines": []}
+            j = i + 2
+            while j < n and slines[j].strip():
+                sh["rows"].append(_cells(slines[j]))
+                sh["lines"].append(j + 1)
+                j += 1
+            out.append(sh)
+            i = j
+        else:
+            i += 1
+    return out
+
+
+def _column_claims(base: str, heads: list[str], data: list[list[str]], anchor_row, add) -> None:
+    """Range/median for a numeric column, frequent values for a categorical one, an example
+    for free text; each anchored to the row it speaks about."""
+    for ci, h in enumerate(heads[:MAX_COLS]):
+        col = [(ri, r[ci].strip()) for ri, r in enumerate(data) if ci < len(r) and r[ci].strip()]
+        if not col:
+            continue
+        vals = [(ri, tables._value(v)) for ri, v in col]
+        num = [(ri, v) for ri, v in vals if isinstance(v, (int, float)) and not isinstance(v, bool)]
+        if len(num) >= 0.9 * len(col):
+            lo = min(num, key=lambda t: t[1])
+            hi = max(num, key=lambda t: t[1])
+            med = statistics.median(v for _, v in num)
+            add(f"In {base}, column '{h}' is numeric ({len(num):,} values) and ranges from "
+                f"{_fmt(lo[1])} to {_fmt(hi[1])}, median {_fmt(med)}", anchor_row(lo[0]))
+            continue
+        cnt = collections.Counter(v for _, v in col)
+        top = cnt.most_common(3)
+        first_row = {}
+        for ri, v in col:
+            first_row.setdefault(v, ri)
+        if len(cnt) <= 50 or top[0][1] >= 0.05 * len(col):
+            add(f"In {base}, column '{h}' has {_n(len(cnt), 'distinct value')}; most frequent: "
+                + ", ".join(f"{_clean(v, 60)} ({c:,})" for v, c in top),
+                anchor_row(first_row[top[0][0]]))
+        else:
+            ri, v = col[0]
+            add(f"In {base}, column '{h}' is free text with {len(cnt):,} distinct values, "
+                f"e.g. \"{_clean(v, 100)}\"", anchor_row(ri))
+
+
+def build_xlsx(root: Path, rel: str, sql: dict) -> tuple[str, str, dict]:
+    """Card for a workbook: per sheet its size and columns, column statistics and first rows
+    of the largest sheet, every claim anchored to its own markdown row in the staged text."""
+    ab = str((root / rel).resolve())
+    base = os.path.basename(rel.replace("\\", "/"))
+    name, digest, slines = staged(ab)
+    sheets = _md_sheets(slines)
+    if not sheets:
+        raise RuntimeError("no markdown table found in the staged workbook")
+    snip = [l.replace("`", "") for l in slines]
+    claims = []
+
+    def add(text, anchor):
+        if anchor:
+            claims.append({"text": _clean(text, 400), "line": anchor[0], "snip": anchor[1]})
+
+    def at(line):
+        s = snip[line - 1].strip()[:SNIP].strip()
+        return (line, s) if s else None
+
+    for k, sh in enumerate(sheets, 1):
+        # xlstotext leaves a lone sheet unnamed: say "sheet 1" rather than invent a name
+        sh["label"] = f"sheet '{sh['name']}'" if sh["name"] else f"sheet {k}"
+    for sh in sheets[:8]:
+        heads = tables._headers(sh["header"], max([len(sh["header"])] + [len(r) for r in sh["rows"][:5000]]))
+        tname = sql.get(sh["name"], "") if sh["name"] else \
+            (next(iter(sql.values())) if len(sql) == 1 and len(sheets) == 1 else "")
+        add(f"{base}, {sh['label']}, is a table of {len(sh['rows']):,} data rows and {len(heads)} "
+            f"columns: {', '.join(heads[:MAX_COLS])}"
+            + (f", and {len(heads) - MAX_COLS} more" if len(heads) > MAX_COLS else "")
+            + (f"; the full sheet is SQL table {tname} in the memo-guard table store" if tname else ""),
+            at(sh["head_line"]))
+    big = max(sheets, key=lambda s: len(s["rows"]))
+    heads = tables._headers(big["header"], max([len(big["header"])] + [len(r) for r in big["rows"][:5000]]))
+    _column_claims(f"{base} ({big['label']})", heads, big["rows"], lambda ri: at(big["lines"][ri]), add)
+    for k in range(min(SAMPLE_ROWS, len(big["rows"]))):
+        pairs = [f"{heads[i] if i < len(heads) else f'col{i + 1}'}={_clean(v, 40)}"
+                 for i, v in enumerate(big["rows"][k]) if v.strip()][:8]
+        if pairs:
+            add(f"In {base} ({big['label']}), data row {k + 1}: " + "; ".join(pairs), at(big["lines"][k]))
+    nl = len(slines)
+    nrows = sum(len(s["rows"]) for s in sheets)
+    topic = f"Table card (computed, no model): {base}, {len(sheets)} sheet(s), {nrows:,} rows"
+    return memo_name(name), _render(name, digest, slines, topic, claims), {
+        "staged": name, "rows": nrows, "cols": len(heads), "claims": len(claims), "lines": nl}
+
+
+def _render(name: str, digest: str, slines: list[str], topic: str, claims: list[dict]) -> str:
+    nl = len(slines)
+    out = ["---", f"source: {name}", f"sha256: {digest}", f"lines: {nl}", "profile: table",
+           "generator: table-card", f"cache_key: table-card-{digest[:12]}",
+           f"raw_tokens_est: {max(1, sum(len(l) + 1 for l in slines) // 4)}", "verified: pending",
+           "---", "", f"# {name}", "", "## Topics", f"- L1-{max(nl, 1)}: {topic}", "", "## Claims", ""]
+    for i, c in enumerate(claims, 1):
+        out.append(f"- [C{i}] [PENDING] {c['text']} @L{c['line']} `{c['snip']}`")
+    out.append("")
+    return "\n".join(out)
+
+
+def build(root: Path, rel: str, sql_table="") -> tuple[str, str, dict]:
+    """(memo file name, memo text, summary) for one CSV/TSV, or a workbook (sql_table is then
+    a {sheet: table} dict)."""
+    if rel.lower().endswith(".xlsx"):
+        return build_xlsx(root, rel, sql_table if isinstance(sql_table, dict) else {})
     ab = str((root / rel).resolve())
     base = os.path.basename(rel.replace("\\", "/"))
     name, digest, slines = staged(ab)
@@ -167,32 +325,7 @@ def build(root: Path, rel: str, sql_table: str = "") -> tuple[str, str, dict]:
     add(f"{base} is a table of {len(data):,} data rows and {len(heads)} columns: "
         f"{', '.join(shown)}{more}{where}", anchor_of_phys(0))
 
-    for ci, h in enumerate(shown):
-        col = [(ri, r[ci].strip()) for ri, r in enumerate(data) if ci < len(r) and r[ci].strip()]
-        if not col:
-            continue
-        vals = [(ri, tables._value(v)) for ri, v in col]
-        num = [(ri, v) for ri, v in vals if isinstance(v, (int, float)) and not isinstance(v, bool)]
-        if len(num) >= 0.9 * len(col):
-            lo = min(num, key=lambda t: t[1])
-            hi = max(num, key=lambda t: t[1])
-            med = statistics.median(v for _, v in num)
-            add(f"In {base}, column '{h}' is numeric ({len(num):,} values) and ranges from "
-                f"{_fmt(lo[1])} to {_fmt(hi[1])}, median {_fmt(med)}", anchor_of_phys(starts[lo[0]]))
-            continue
-        cnt = collections.Counter(v for _, v in col)
-        top = cnt.most_common(3)
-        first_row = {}
-        for ri, v in col:
-            first_row.setdefault(v, ri)
-        if len(cnt) <= 50 or top[0][1] >= 0.05 * len(col):
-            add(f"In {base}, column '{h}' has {_n(len(cnt), 'distinct value')}; most frequent: "
-                + ", ".join(f"{_clean(v, 60)} ({c:,})" for v, c in top),
-                anchor_of_phys(starts[first_row[top[0][0]]]))
-        else:
-            ri, v = col[0]
-            add(f"In {base}, column '{h}' is free text with {len(cnt):,} distinct values, "
-                f"e.g. \"{_clean(v, 100)}\"", anchor_of_phys(starts[ri]))
+    _column_claims(base, heads, data, lambda ri: anchor_of_phys(starts[ri]), add)
 
     for k in range(min(SAMPLE_ROWS, len(data))):
         pairs = [f"{heads[i] if i < len(heads) else f'col{i + 1}'}={_clean(v, 40)}"
@@ -203,25 +336,25 @@ def build(root: Path, rel: str, sql_table: str = "") -> tuple[str, str, dict]:
     nl = len(slines)
     topic = (f"Table card (computed, no model): {base}, {len(data):,} rows x {len(heads)} columns"
              + (f", SQL table {sql_table}" if sql_table else ""))
-    out = ["---", f"source: {name}", f"sha256: {digest}", f"lines: {nl}", "profile: table",
-           "generator: table-card", f"cache_key: table-card-{digest[:12]}",
-           f"raw_tokens_est: {max(1, sum(len(l) + 1 for l in slines) // 4)}", "verified: pending",
-           "---", "", f"# {name}", "", "## Topics", f"- L1-{max(nl, 1)}: {topic}", "", "## Claims", ""]
-    for i, c in enumerate(claims, 1):
-        out.append(f"- [C{i}] [PENDING] {c['text']} @L{c['line']} `{c['snip']}`")
-    out.append("")
-    return memo_name(name), "\n".join(out), {"staged": name, "rows": len(data), "cols": len(heads),
-                                             "claims": len(claims), "lines": nl}
+    return memo_name(name), _render(name, digest, slines, topic, claims), {
+        "staged": name, "rows": len(data), "cols": len(heads), "claims": len(claims), "lines": nl}
 
 
-def sql_tables(root: Path) -> dict[str, str]:
-    """posix rel path -> SQL table name, from the data.db registry (empty if there is none)."""
+def sql_tables(root: Path) -> dict:
+    """posix rel path -> SQL table name for a CSV/TSV, or {sheet: name} for a workbook, from
+    the data.db registry (empty if there is none)."""
+    out: dict = {}
     try:
         db = tables.connect(readonly=True)
-        return {p.replace("\\", "/"): (n or f"t{i}") for i, p, n in
-                db.execute("SELECT id, path, name FROM tbl WHERE sheet=''")}
+        for i, p, sheet, n in db.execute("SELECT id, path, sheet, name FROM tbl"):
+            key = p.replace("\\", "/")
+            if sheet:
+                out.setdefault(key, {})[sheet] = n or f"t{i}"
+            else:
+                out[key] = n or f"t{i}"
     except Exception:
-        return {}
+        pass
+    return out
 
 
 def write_cards(root: Path, memo_dir: Path, rels: list[str], ms: Path | None = None,
@@ -239,7 +372,7 @@ def write_cards(root: Path, memo_dir: Path, rels: list[str], ms: Path | None = N
     try:
         for rel in rels:
             relp = rel.replace("\\", "/")
-            mname, text, info = build(root, rel, reg.get(relp, ""))
+            mname, text, info = build(root, rel, reg.get(relp, {} if relp.lower().endswith(".xlsx") else ""))
             mp = memo_dir / mname
             if mp.exists() and backup is not None:
                 head = mp.read_text(encoding="utf-8", errors="replace")[:600]
@@ -250,9 +383,10 @@ def write_cards(root: Path, memo_dir: Path, rels: list[str], ms: Path | None = N
             mp.write_text(text, encoding="utf-8", newline="\n")
             if info["staged"] not in known:
                 with open(smap, "a", encoding="utf-8", newline="\n") as f:
-                    f.write(f"{info['staged']}\t{rel}\tprep\n")
+                    mode = "ingest" if relp.lower().endswith(".xlsx") else "prep"
+                    f.write(f"{info['staged']}\t{rel}\t{mode}\n")
                 known.add(info["staged"])
-            prep_text(str((root / rel).resolve()), str(stage / info["staged"]))
+            _stage_into(str((root / rel).resolve()), str(stage))
             names.append(mname)
             info.update({"rel": rel, "memo": mname})
             res.append(info)
