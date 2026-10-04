@@ -50,7 +50,11 @@ INDEXABLE = TEXT_EXT | DOC_EXT
 TAGGED = {".xml", ".html", ".htm"}
 ALWAYS_PREP = TAGGED | {".csv", ".tsv"}
 LONG = 300
+# An installed R library is R's site-packages: third-party vignettes, help pages and test
+# data. 2026-10-04: a project's rlib/ (17 CRAN packages) gave 111 indexed files, and the 8B
+# model read lme4's test data as "CPU load increased by 7.93 in h264ref".
 SKIP = re.compile(r"(/\.git/|/node_modules/|/__pycache__/|/\.venv/|/venv/|/site-packages/|"
+                  r"/rlib/|/renv/library/|/site-library/|/win-library/|"
                   r"/\.cache/|/\.memo/|/_stage[^/]*/|\.memo\.md$)", re.I)
 TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
 HEARTBEAT_S = 120

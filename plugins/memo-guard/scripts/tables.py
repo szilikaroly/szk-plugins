@@ -42,6 +42,7 @@ import mg_lib as mg  # noqa: E402
 csv.field_size_limit(min(sys.maxsize, 2 ** 31 - 1))
 TABLE_EXT = {".csv", ".tsv", ".xlsx"}
 SKIP = re.compile(r"(/\.git/|/node_modules/|/__pycache__/|/\.venv/|/venv/|/site-packages/|"
+                  r"/rlib/|/renv/library/|/site-library/|/win-library/|"   # installed R packages
                   r"/\.cache/|/\.memo/|/_stage[^/]*/)", re.I)
 NUM = re.compile(r"^[+-]?(\d+|\d{1,3}( \d{3})+)([.,]\d+)?([eE][+-]?\d+)?%?$")
 MAX_COLS = 500

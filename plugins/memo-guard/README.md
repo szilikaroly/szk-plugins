@@ -443,6 +443,14 @@ keeps the self test hermetic). Everything stays local, in `data_dir()`:
 
   A value that has to be cut ends on a whole token. A PMID list cut mid-number ("4239616…")
   would read as a different identifier.
+- **Installed R libraries are not corpus (0.15.7).** Ingestion and the table store skip
+  `rlib/`, `renv/library/`, `site-library/` and `win-library/`, as they already skipped
+  `site-packages/` and `node_modules/`. Those folders hold third-party vignettes, help pages
+  and test data.
+
+  Measured 2026-10-04: one project's `rlib/` (17 CRAN packages) put 111 files in the index.
+  From lme4's test data the 8B model read "CPU load increased by 7.93 in h264ref". Their
+  memos were quarantined and the next sync dropped their claims and tables.
 - **The search index holds only claims that can be answers (0.15.3).** `claim_fts` indexes the
   `claim_live` view: REFUTED and STALE claims are excluded. Triggers keep the index in step on
   insert, delete and status change; their WHEN clauses mirror the view, because an
