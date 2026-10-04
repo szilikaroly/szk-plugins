@@ -194,10 +194,11 @@ def main() -> int:
     st_ok = check_sync_tombstones(home)
     tc_ok = check_table_cards(home)
     tx_ok = check_table_cards_xlsx(home)
+    tf_ok = check_table_card_fallback(home)
     dm_ok = check_db_maint(home)
     return 0 if (ok and hit and ap_ok and cv_ok and co_ok and sb_ok and rc_ok
                  and ev_ok and mr_ok and dr_ok and dg_ok and bw_ok and cp_ok
-                 and st_ok and tc_ok and tx_ok and dm_ok) else 1
+                 and st_ok and tc_ok and tx_ok and tf_ok and dm_ok) else 1
 
 
 def check_db_maint(home: Path) -> bool:
@@ -502,6 +503,83 @@ def check_table_cards_xlsx(home: Path) -> bool:
     finally:
         ingest.subprocess.run = real_run
         flag.unlink(missing_ok=True)
+    return ok
+
+
+def check_table_card_fallback(home: Path) -> bool:
+    """15c) A small table the model says nothing about still gets a card, every row a claim.
+
+    Measured 2026-10-04: a meta-analysis's pooled-estimates table and a Monte Carlo summary
+    came back NO CLAIMS on every one of 3-4 model passes, so the study's headline numbers
+    were in no memo at all. Checked: each row of a small table becomes a claim carrying
+    every column (a result row is one finding read across); a cut value ends on a whole
+    token, never mid-identifier; and the worker writes the card when memo_gen leaves no memo.
+    """
+    import re as _re
+    import subprocess as _sp
+    import ingest
+    import table_card
+    print("\n15c) no-claims fallback cards")
+    ok = True
+
+    def chk(cond, what):
+        nonlocal ok
+        print(f"   {'ok  ' if cond else 'FAIL'} {what}")
+        ok = ok and bool(cond)
+
+    chk(table_card._clean("11111111 22222222 33333333", 20) == "11111111 22222222…"
+        and table_card._clean("x" * 30, 10) == "x" * 9 + "…",
+        "a cut value ends on a whole token (a hard cut only for one long word)")
+    root = home / "card-root-f"
+    (root / "out").mkdir(parents=True, exist_ok=True)
+    rel = "out/pooled.csv"
+    rows = [("MCM - all exposure windows", 5, "1.0019", "0.9169", "1.0947", "1.00 (0.92 to 1.09)"),
+            ("Urinary malformations", 1, "1.2472", "1.0468", "1.4858", "1.25 (1.05 to 1.49)"),
+            ("Stillbirth", 2, "1.8952", "0.0067", "533.95", "1.90 (0.01 to 533.95)"),
+            ("Gestational diabetes - preconception exposure only", 5, "1.1513", "0.8044", "1.6478",
+             "1.15 (0.80 to 1.65)")]
+    (root / rel).write_text('"analysis","k","est","lo","hi","summary"\n'
+                            + "".join(f'"{a}",{k},{e},{lo},{hi},"{s}"\n' for a, k, e, lo, hi, s in rows),
+                            encoding="utf-8")
+    _, text, info = table_card.build(root, rel, "t9")
+    got = {int(m.group(1)): m.group(2) for m in
+           _re.finditer(r"data row (\d+): (.*?) @L\d+ `", text)}
+    chk(len(got) == len(rows) and all(
+        all(f"{h}={v}" in got[i + 1] for h, v in zip(("analysis", "k", "est", "lo", "hi", "summary"), r))
+        for i, r in enumerate(rows)),
+        f"all {len(rows)} rows are claims, each with every column and its exact value")
+    chk("column 'analysis' has 4 distinct values, each once" in text and "most frequent" not in text,
+        "a label column is not reported as 'most frequent: x (1), y (1)'")
+
+    ms = Path(os.path.expanduser(mg.load_config().get("memo_index_path", ""))) / "scripts"
+    if not (ms / "verify_anchors.py").exists():
+        print("   skip worker fallback: memo-index is not installed")
+        return ok
+    cfg = {"corpus_roots": [str(root)], "memo_index_path": str(ms.parent), "table_card_min_chunks": 100,
+           "corpus_tables": False}
+    calls = []
+    real_run, real_gpu = ingest.subprocess.run, ingest.ensure_ollama
+
+    def silent_model(*a, **k):
+        cmd = a[0] if a else k.get("args", [])
+        if any("memo_gen" in str(x) for x in cmd):
+            calls.append(cmd)                  # NO CLAIMS: exits 0, writes no memo
+            return _sp.CompletedProcess(cmd, 0, "", "1 file(s) produced NO claims")
+        return real_run(*a, **k)
+
+    ingest.subprocess.run, ingest.ensure_ollama = silent_model, (lambda cfg: True)
+    try:
+        ingest.enqueue(root / rel, "test", cfg)
+        done = ingest.work(cfg, debounce=0, idle_exit=0)
+        cards = list((root / ".memo").glob("*.memo.md"))
+        card = cards[0].read_text(encoding="utf-8") if len(cards) == 1 else ""
+        n = len(_re.findall(r"^- \[C\d+\]", card, _re.M))
+        chk(calls and done.get("cards") == 1 and not done.get("errors") and not done.get("no_claims"),
+            "after a model pass with no claims, the worker writes a computed card")
+        chk("generator: table-card" in card and _re.search(rf"^verified: {n} confirmed\s*$", card, _re.M),
+            f"verify_anchors confirms all {n} of its claims")
+    finally:
+        ingest.subprocess.run, ingest.ensure_ollama = real_run, real_gpu
     return ok
 
 

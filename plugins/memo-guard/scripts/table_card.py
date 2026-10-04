@@ -49,6 +49,7 @@ MIN_CHUNKS = 100       # default threshold: at or above it a table gets a card, 
 CARD_EXT = {".csv", ".tsv", ".xlsx"}
 MAX_COLS = 15
 SAMPLE_ROWS = 3
+ROW_CLAIMS_MAX = 60    # a table this small gets every row as a claim (the no-claims fallback)
 SNIP = 60
 
 csv.field_size_limit(min(sys.maxsize, 2 ** 31 - 1))
@@ -144,7 +145,13 @@ def _rows(ab: str):
 
 def _clean(v: str, n: int = 80) -> str:
     v = re.sub(r"\s+", " ", (v or "").replace("`", "")).strip()
-    return v if len(v) <= n else v[: n - 1].rstrip() + "…"
+    if len(v) <= n:
+        return v
+    cut = v[: n - 1]
+    # End on a whole token: a PMID list cut mid-number ("4239616…") reads as a different
+    # identifier. Only a word that fills the whole window is cut hard.
+    sp = cut.rfind(" ")
+    return (cut[:sp] if sp >= n // 2 else cut).rstrip() + "…"
 
 
 def _fmt(x) -> str:
@@ -157,6 +164,20 @@ def _fmt(x) -> str:
 
 def _n(k: int, word: str) -> str:
     return f"{k:,} {word}" + ("" if k == 1 else "s")
+
+
+def _row_range(nrows: int) -> range:
+    """Which data rows become claims: all of a small table (a result table's rows ARE its
+    findings), the first SAMPLE_ROWS of a big one."""
+    return range(nrows if nrows <= ROW_CLAIMS_MAX else SAMPLE_ROWS)
+
+
+def _pairs(heads: list[str], row: list[str], nrows: int) -> list[str]:
+    """'column=value' for a row's non-empty cells; a small table's rows keep every column
+    and longer values, since such a row is usually one finding read across."""
+    small = nrows <= ROW_CLAIMS_MAX
+    return [f"{heads[i] if i < len(heads) else f'col{i + 1}'}={_clean(v, 80 if small else 40)}"
+            for i, v in enumerate(row) if v.strip()][:MAX_COLS if small else 8]
 
 
 _SEP_RE = re.compile(r"^\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)*\|?$")
@@ -219,7 +240,12 @@ def _column_claims(base: str, heads: list[str], data: list[list[str]], anchor_ro
         first_row = {}
         for ri, v in col:
             first_row.setdefault(v, ri)
-        if len(cnt) <= 50 or top[0][1] >= 0.05 * len(col):
+        if top[0][1] == 1 and len(cnt) <= 50:
+            # a small table's label column: "most frequent: x (1), y (1)" would say nothing
+            ri, v = col[0]
+            add(f"In {base}, column '{h}' has {_n(len(cnt), 'distinct value')}, each once, "
+                f"e.g. \"{_clean(v, 100)}\"", anchor_row(ri))
+        elif len(cnt) <= 50 or top[0][1] >= 0.05 * len(col):
             add(f"In {base}, column '{h}' has {_n(len(cnt), 'distinct value')}; most frequent: "
                 + ", ".join(f"{_clean(v, 60)} ({c:,})" for v, c in top),
                 anchor_row(first_row[top[0][0]]))
@@ -264,9 +290,8 @@ def build_xlsx(root: Path, rel: str, sql: dict) -> tuple[str, str, dict]:
     big = max(sheets, key=lambda s: len(s["rows"]))
     heads = tables._headers(big["header"], max([len(big["header"])] + [len(r) for r in big["rows"][:5000]]))
     _column_claims(f"{base} ({big['label']})", heads, big["rows"], lambda ri: at(big["lines"][ri]), add)
-    for k in range(min(SAMPLE_ROWS, len(big["rows"]))):
-        pairs = [f"{heads[i] if i < len(heads) else f'col{i + 1}'}={_clean(v, 40)}"
-                 for i, v in enumerate(big["rows"][k]) if v.strip()][:8]
+    for k in _row_range(len(big["rows"])):
+        pairs = _pairs(heads, big["rows"][k], len(big["rows"]))
         if pairs:
             add(f"In {base} ({big['label']}), data row {k + 1}: " + "; ".join(pairs), at(big["lines"][k]))
     nl = len(slines)
@@ -327,9 +352,8 @@ def build(root: Path, rel: str, sql_table="") -> tuple[str, str, dict]:
 
     _column_claims(base, heads, data, lambda ri: anchor_of_phys(starts[ri]), add)
 
-    for k in range(min(SAMPLE_ROWS, len(data))):
-        pairs = [f"{heads[i] if i < len(heads) else f'col{i + 1}'}={_clean(v, 40)}"
-                 for i, v in enumerate(data[k]) if v.strip()][:8]
+    for k in _row_range(len(data)):
+        pairs = _pairs(heads, data[k], len(data))
         if pairs:
             add(f"In {base}, data row {k + 1}: " + "; ".join(pairs), anchor_of_phys(starts[k]))
 

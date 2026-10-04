@@ -431,6 +431,18 @@ keeps the self test hermetic). Everything stays local, in `data_dir()`:
 
   The card decision now uses one measure everywhere: memo_gen's own `splitlines` count of
   the staged file. Counting file lines instead would disagree on a stray `\r` or `\x0c`.
+
+  **The no-claims fallback (0.15.6).** A small table goes to the model first. When memo_gen
+  writes no memo for a CSV/TSV/XLSX, the worker writes a card instead. A table of
+  `ROW_CLAIMS_MAX` (60) data rows or fewer gets every row as a claim with every column,
+  because a result table's rows are its findings.
+
+  Measured 2026-10-04: a meta-analysis's pooled-estimates table and a Monte Carlo summary
+  came back NO CLAIMS on 3–4 model passes each, so the studies' headline numbers were in no
+  memo. Their cards now carry them, all CONFIRMED.
+
+  A value that has to be cut ends on a whole token. A PMID list cut mid-number ("4239616…")
+  would read as a different identifier.
 - **The search index holds only claims that can be answers (0.15.3).** `claim_fts` indexes the
   `claim_live` view: REFUTED and STALE claims are excluded. Triggers keep the index in step on
   insert, delete and status change; their WHEN clauses mirror the view, because an

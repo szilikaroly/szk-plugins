@@ -230,11 +230,11 @@ DEFAULTS = {
     # was "qwen3:14b" (text-only) in 0.15.0-0.15.1, harmless only because the worker runs
     # doc_ingest with --no-images and never queues an image.
     "ingest_vision_model": "qwen3-vl:4b",
-    # A CSV/TSV whose staged text is this many memo_gen chunks or more gets a computed table
-    # card (table_card.py) instead of a model pass; 0 turns cards off. Decided 2026-10-03:
-    # such tables cost GPU-hours each, the 8B model paraphrases screening-list titles and
-    # authors (a fabricated-reference risk) and says nothing about simulation output, and
-    # tables.py already holds every row as SQL.
+    # A CSV/TSV/XLSX whose staged text is this many memo_gen chunks or more gets a computed
+    # table card (table_card.py) instead of a model pass; 0 turns cards off. Decided
+    # 2026-10-03 (workbooks from 0.15.5): such tables cost GPU-hours each, the 8B model
+    # paraphrases screening-list titles and authors (a fabricated-reference risk) and says
+    # nothing about simulation output, and tables.py already holds every row as SQL.
     "table_card_min_chunks": 100,
     # Start `ollama serve` (q8 KV, flash attention) when the worker needs it and it is down.
     "ingest_start_ollama": True,

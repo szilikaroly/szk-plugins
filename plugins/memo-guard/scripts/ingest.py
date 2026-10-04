@@ -342,6 +342,13 @@ def process_doc(root: Path, rel: str, cfg: dict) -> tuple[str, str]:
         _verify(memo_dir, [mname], stage, ms)
         with open(memo_dir / "_source_map.tsv", "a", encoding="utf-8") as f:
             f.write(f"{name}\t{rel}\t{'prep' if ext in TEXT_EXT else 'ingest'}\n")
+        if not (memo_dir / mname).exists() and lim and ext in (".csv", ".tsv", ".xlsx"):
+            # The model found nothing to say about a small table -- measured 2026-10-04 on a
+            # meta-analysis's pooled-estimates table and a Monte Carlo summary, retried 3-4
+            # times. A computed card still can, every row of a small table a claim.
+            import table_card
+            if table_card.write_cards(root, memo_dir, [rel], ms=ms, log=lambda *a: None):
+                return "table-card", "the model gave no claims; computed card instead"
         return ("memo" if (memo_dir / mname).exists() else "no-claims"), r.stderr[-200:]
     finally:
         shutil.rmtree(stage, ignore_errors=True)
@@ -447,6 +454,8 @@ def work(cfg: dict, debounce: float = 8.0, idle_exit: float = 30.0) -> dict:
                     outcome, detail = process_doc(root, rel, cfg)
                     if outcome == "memo":
                         done["memos"] += 1
+                    elif outcome == "table-card":       # the no-claims fallback
+                        done["cards"] += 1
                     elif outcome in ("no-claims", "empty"):
                         done["no_claims"] += 1
                     else:
