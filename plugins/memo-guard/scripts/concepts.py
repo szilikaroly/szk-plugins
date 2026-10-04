@@ -26,6 +26,7 @@ there would silence this bulk job, and this job's load would trip the hook's bre
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -55,13 +56,43 @@ CREATE INDEX IF NOT EXISTS cm_claim ON concept_member(claim_id);
 CREATE TABLE IF NOT EXISTS edge (
   src INTEGER NOT NULL, dst INTEGER NOT NULL, kind TEXT NOT NULL, weight REAL, note TEXT,
   created_at REAL, PRIMARY KEY (src, dst, kind));
+CREATE INDEX IF NOT EXISTS edge_dst ON edge(dst);
+-- A claim's vector, memberships and conflict edges go with it. The store re-imports a changed
+-- memo by deleting its claims, and claim ids are INTEGER PRIMARY KEY without AUTOINCREMENT:
+-- a vector left behind is an orphan in every clustering, and when its id is reused it is read
+-- as the NEXT claim's vector. Measured 2026-10-04: 167 of the first 256 vectors were orphans.
+CREATE TRIGGER IF NOT EXISTS claim_concept_ad AFTER DELETE ON claim BEGIN
+  DELETE FROM emb WHERE claim_id = old.id;
+  DELETE FROM concept_member WHERE claim_id = old.id;
+  DELETE FROM edge WHERE src = old.id OR dst = old.id;
+END;
 """
+
+
+def _sha(text: str) -> str:
+    """What a vector was computed from. A claim whose text no longer hashes to it is
+    re-embedded, and its old vector never takes part in a clustering."""
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
 
 
 def connect():
     db = store.connect()
     db.executescript(SCHEMA)
+    if "sha" not in {r[1] for r in db.execute("PRAGMA table_info(emb)")}:
+        db.execute("ALTER TABLE emb ADD COLUMN sha TEXT")   # older rows: NULL = re-embed
+        db.commit()
     return db
+
+
+def _prune(db) -> dict:
+    """Drop what the trigger could not have caught: rows left from before it existed."""
+    out = {}
+    for table, cond in (("emb", "claim_id NOT IN (SELECT id FROM claim)"),
+                        ("concept_member", "claim_id NOT IN (SELECT id FROM claim)"),
+                        ("edge", "src NOT IN (SELECT id FROM claim) OR dst NOT IN (SELECT id FROM claim)")):
+        out[table] = db.execute(f"DELETE FROM {table} WHERE {cond}").rowcount
+    db.commit()
+    return out
 
 
 def _np():
@@ -111,33 +142,39 @@ def _content_ok_sql() -> str:
 def build_embeddings(limit: int | None = None, batch: int = 256, log=print) -> dict:
     np = _np()
     db = connect()
-    q = (f"SELECT c.id, c.text FROM claim c LEFT JOIN emb e ON e.claim_id = c.id"
-         f" WHERE e.claim_id IS NULL AND c.status IN {GOOD} AND {_content_ok_sql()}")
+    pruned = _prune(db)
+    todo = [(cid, t) for cid, t, sha in db.execute(
+        f"SELECT c.id, c.text, e.sha FROM claim c LEFT JOIN emb e ON e.claim_id = c.id"
+        f" WHERE c.status IN {GOOD} AND {_content_ok_sql()}") if sha != _sha(t)]
     if limit:
-        q += f" LIMIT {int(limit)}"
-    todo = db.execute(q).fetchall()
+        todo = todo[:int(limit)]
     t0, done = time.time(), 0
     for i in range(0, len(todo), batch):
         part = todo[i:i + batch]
         vec = embed_batch([t for _, t in part], "search_document: ")
-        db.executemany("INSERT OR REPLACE INTO emb VALUES (?,?,?,?)",
-                       [(cid, MODEL, DIM, vec[j].astype(np.float16).tobytes())
-                        for j, (cid, _) in enumerate(part)])
+        db.executemany("INSERT OR REPLACE INTO emb (claim_id, model, dim, vec, sha) VALUES (?,?,?,?,?)",
+                       [(cid, MODEL, DIM, vec[j].astype(np.float16).tobytes(), _sha(t))
+                        for j, (cid, t) in enumerate(part)])
         done += len(part)
         if (i // batch) % 20 == 0:
             db.commit()
             el = time.time() - t0
             log(f"  {done}/{len(todo)}  ({done / max(el, 1e-9):.0f} claim/s)")
     db.commit()
-    return {"embedded": done, "seconds": round(time.time() - t0, 1)}
+    return {"embedded": done, "pruned": pruned, "seconds": round(time.time() - t0, 1)}
 
 
 def _load_vectors(db):
+    """Vectors of the claims a concept may stand for: still CONFIRMED/DRIFTED, and still the
+    text the vector was computed from."""
     np = _np()
     ids, blobs = [], []
-    for cid, blob in db.execute("SELECT claim_id, vec FROM emb WHERE dim=?", (DIM,)):
-        ids.append(cid)
-        blobs.append(blob)
+    for cid, blob, sha, text in db.execute(
+            f"SELECT e.claim_id, e.vec, e.sha, c.text FROM emb e JOIN claim c ON c.id = e.claim_id"
+            f" WHERE e.dim=? AND c.status IN {GOOD}", (DIM,)):
+        if sha == _sha(text):
+            ids.append(cid)
+            blobs.append(blob)
     X = np.frombuffer(b"".join(blobs), dtype=np.float16).reshape(-1, DIM).astype(np.float32)
     return np.asarray(ids), X
 
@@ -146,6 +183,7 @@ def cluster(k: int | None = None, iters: int = 25, batch: int = 20000, seed: int
             log=print) -> dict:
     np = _np()
     db = connect()
+    _prune(db)
     ids, X = _load_vectors(db)
     n = len(ids)
     if n < 50:
@@ -225,7 +263,8 @@ def conflicts(threshold: float = 0.93, max_per_concept: int = 2000, log=print) -
     for cid in concepts:
         rows = db.execute(
             "SELECT c.id, c.text, e.vec FROM concept_member m JOIN claim c ON c.id = m.claim_id"
-            " JOIN emb e ON e.claim_id = c.id WHERE m.concept_id=? LIMIT ?", (cid, max_per_concept)).fetchall()
+            f" JOIN emb e ON e.claim_id = c.id WHERE m.concept_id=? AND c.status IN {GOOD} LIMIT ?",
+            (cid, max_per_concept)).fetchall()
         nums = [set(NUMS.findall(t)) for _, t, _ in rows]
         keep = [i for i, s in enumerate(nums) if s]
         if len(keep) < 2:
@@ -272,11 +311,12 @@ def search(query: str, top: int = 3, claims_per: int = 3, db=None, timeout: floa
             cid = int(ids[o])
             lab, kws, summ, size, projs = db.execute(
                 "SELECT label, keywords, summary, size, projects FROM concept WHERE id=?", (cid,)).fetchone()
+            # A member verified away since the clustering (UNSUPPORTED, REFUTED) is no answer.
             mem = db.execute(
                 "SELECT c.id, c.text, c.status, d.path, c.anchor_line, e.vec FROM concept_member m"
                 " JOIN claim c ON c.id = m.claim_id JOIN doc d ON d.id = c.doc_id"
-                " JOIN emb e ON e.claim_id = c.id WHERE m.concept_id=? ORDER BY m.score DESC LIMIT 400",
-                (cid,)).fetchall()
+                f" JOIN emb e ON e.claim_id = c.id WHERE m.concept_id=? AND c.status IN {GOOD}"
+                " ORDER BY m.score DESC LIMIT 400", (cid,)).fetchall()
             if mem:
                 V = np.frombuffer(b"".join(m[5] for m in mem), dtype=np.float16).reshape(-1, DIM).astype(np.float32)
                 best = np.argsort(-(V @ q))[:claims_per]
@@ -319,8 +359,12 @@ def main() -> int:
                 print(f"   - {cl['text'][:160]}  — {cl['path']}:{cl['line'] or '?'}  ({cl['sim']})")
     if a.stats:
         db = connect()
+        live = sum(1 for _, t, sha in db.execute(
+            f"SELECT e.claim_id, c.text, e.sha FROM emb e JOIN claim c ON c.id = e.claim_id"
+            f" WHERE c.status IN {GOOD}") if sha == _sha(t))
         print(json.dumps({
             "embedded": db.execute("SELECT COUNT(*) FROM emb").fetchone()[0],
+            "embedded_current": live,
             "concepts": db.execute("SELECT COUNT(*) FROM concept").fetchone()[0],
             "conflict_edges": db.execute("SELECT COUNT(*) FROM edge WHERE kind='conflict'").fetchone()[0],
         }))

@@ -196,9 +196,10 @@ def main() -> int:
     tx_ok = check_table_cards_xlsx(home)
     tf_ok = check_table_card_fallback(home)
     dm_ok = check_db_maint(home)
+    cc_ok = check_concepts(home)
     return 0 if (ok and hit and ap_ok and cv_ok and co_ok and sb_ok and rc_ok
                  and ev_ok and mr_ok and dr_ok and dg_ok and bw_ok and cp_ok
-                 and st_ok and tc_ok and tx_ok and tf_ok and dm_ok) else 1
+                 and st_ok and tc_ok and tx_ok and tf_ok and dm_ok and cc_ok) else 1
 
 
 def check_db_maint(home: Path) -> bool:
@@ -580,6 +581,122 @@ def check_table_card_fallback(home: Path) -> bool:
             f"verify_anchors confirms all {n} of its claims")
     finally:
         ingest.subprocess.run, ingest.ensure_ollama = real_run, real_gpu
+    return ok
+
+
+def check_concepts(home: Path) -> bool:
+    """17) Concept vectors follow their claims.
+
+    The store re-imports a changed memo by deleting its claims, and claim ids are INTEGER
+    PRIMARY KEY without AUTOINCREMENT. A vector left behind is an orphan in every clustering,
+    and once its id is reused it is read as the next claim's vector (2026-10-04: 167 of the
+    first 256 vectors were orphans). Checked, with a deterministic stand-in for the embedding
+    model: a re-imported memo leaves no orphan vector, membership or conflict edge; a claim
+    whose text changed is re-embedded; a reused id never inherits the old vector; a claim
+    verified away after the clustering is no concept-search answer.
+    """
+    import hashlib as _h
+    import store
+    import concepts
+    print("\n17) concept vectors")
+    ok = True
+
+    def chk(cond, what):
+        nonlocal ok
+        print(f"   {'ok  ' if cond else 'FAIL'} {what}")
+        ok = ok and bool(cond)
+
+    try:
+        np = concepts._np()
+    except ImportError:
+        print("   skip: numpy is not installed")
+        return ok
+    saved = os.environ["MEMO_GUARD_HOME"]
+    os.environ["MEMO_GUARD_HOME"] = str(home / "cpt")
+    real_embed, real_mi = concepts.embed_batch, store._memo_index
+
+    def fake_embed(texts, prefix, timeout=120.0, retries=3):
+        out = []
+        for t in texts:
+            v = np.frombuffer(_h.sha512(t.encode()).digest() * 4, dtype=np.uint8)[:concepts.DIM]
+            v = v.astype(np.float32) - 127.5
+            out.append(v / np.linalg.norm(v))
+        return np.vstack(out)
+
+    concepts.embed_batch = fake_embed
+    store._memo_index = lambda cfg: (_ for _ in ()).throw(ImportError("hermetic"))
+    try:
+        root = home / "cpt-root"
+        (root / ".memo").mkdir(parents=True, exist_ok=True)
+        mp = root / ".memo" / "notes.md-00000001.memo.md"
+        lines = [f"- [C{i}] [CONFIRMED] Cohort {i} reported finding number {i} for donor screening "
+                 f"@L{i} `finding {i}`" for i in range(1, 61)]
+        lines.append("- [C61] [UNSUPPORTED] Cohort 61 reported an invented finding for donors @L61 `x`")
+
+        def write(ls):
+            mp.write_text("---\nsource: notes.md\nsha256: x\nlines: 61\nprofile: prose\n---\n\n"
+                          "## Claims\n\n" + "\n".join(ls) + "\n", encoding="utf-8")
+
+        write(lines)
+        store.sync_root(root, cfg={}, log=lambda *a: None)
+        # A second memo after it, so the first one's re-import cannot simply get its old
+        # (highest) ids back -- that coincidence would hide every orphan.
+        (root / ".memo" / "later.md-00000002.memo.md").write_text(
+            "---\nsource: later.md\nsha256: y\nlines: 5\nprofile: prose\n---\n\n## Claims\n\n"
+            + "\n".join(f"- [C{i}] [CONFIRMED] A later memo states fact number {i} about stool banks "
+                        f"@L{i} `fact {i}`" for i in range(1, 6)) + "\n", encoding="utf-8")
+        store.sync_root(root, cfg={}, log=lambda *a: None)
+        e1 = concepts.build_embeddings(log=lambda *a: None)
+        chk(e1["embedded"] == 65, f"only CONFIRMED/DRIFTED claims are embedded ({e1['embedded']} of 66)")
+        c1 = concepts.cluster(k=3, log=lambda *a: None)
+        db = concepts.connect()
+        a, b = [r[0] for r in db.execute("SELECT id FROM claim ORDER BY id LIMIT 2")]
+        db.execute("INSERT INTO edge VALUES (?,?,'conflict',0.95,'test',0)", (a, b))
+        db.commit()
+        chk(c1.get("claims") == 65, "the clustering holds exactly the embedded claims")
+
+        write([lines[0].replace("finding number 1 ", "finding number one ")] + lines[1:])
+        store.sync_root(root, cfg={}, log=lambda *a: None)          # deletes and re-inserts
+        orphans = {t: db.execute(f"SELECT COUNT(*) FROM {t} WHERE {c} NOT IN (SELECT id FROM claim)")
+                   .fetchone()[0] for t, c in (("emb", "claim_id"), ("concept_member", "claim_id"),
+                                               ("edge", "src"))}
+        chk(not any(orphans.values()), f"a re-imported memo leaves no orphans {orphans}")
+        e2 = concepts.build_embeddings(log=lambda *a: None)
+        chk(e2["embedded"] == 60, "its 60 claims are embedded afresh under their new ids, "
+            "the later memo's 5 keep theirs")
+
+        x = db.execute("SELECT id FROM claim WHERE status='CONFIRMED' ORDER BY id LIMIT 1").fetchone()[0]
+        db.execute("UPDATE claim SET text = text || ' (revised)' WHERE id=?", (x,))
+        db.commit()
+        e3 = concepts.build_embeddings(log=lambda *a: None)
+        chk(e3["embedded"] == 1, "a claim whose text changed in place is re-embedded")
+
+        # a reused id: an old vector sits under an id the next claim takes
+        new_id = db.execute("SELECT MAX(id) FROM claim").fetchone()[0] + 1
+        doc = db.execute("SELECT doc_id FROM claim LIMIT 1").fetchone()[0]
+        stale = fake_embed(["a different, older claim text"], "")[0].astype(np.float16).tobytes()
+        db.execute("INSERT INTO emb (claim_id, model, dim, vec, sha) VALUES (?,?,?,?,?)",
+                   (new_id, concepts.MODEL, concepts.DIM, stale, concepts._sha("a different, older claim text")))
+        db.execute("INSERT INTO claim (id, doc_id, cid, text, status) VALUES (?,?,?,?,?)",
+                   (new_id, doc, "C99", "Cohort 99 reported a new finding for donor screening", "CONFIRMED"))
+        db.commit()
+        ids, _ = concepts._load_vectors(db)
+        chk(new_id not in set(ids.tolist()), "a reused id's old vector is in no clustering")
+        e4 = concepts.build_embeddings(log=lambda *a: None)
+        chk(e4["embedded"] == 1, "and the new claim gets its own vector")
+
+        concepts.cluster(k=3, log=lambda *a: None)
+        y, ytext = db.execute("SELECT id, text FROM claim WHERE status='CONFIRMED' ORDER BY id DESC"
+                              " LIMIT 1 OFFSET 5").fetchone()
+        db.execute("UPDATE claim SET status='UNSUPPORTED' WHERE id=?", (y,))
+        db.commit()
+        got = concepts.search(ytext, top=3, claims_per=60, db=db)
+        served = {c["id"] for g in got for c in g["claims"]}
+        chk(got and y not in served, "a claim verified away after the clustering is no answer")
+        db.close()
+    finally:
+        concepts.embed_batch, store._memo_index = real_embed, real_mi
+        os.environ["MEMO_GUARD_HOME"] = saved
     return ok
 
 

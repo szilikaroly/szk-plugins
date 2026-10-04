@@ -462,6 +462,22 @@ keeps the self test hermetic). Everything stays local, in `data_dir()`:
 
   Other files in a staging folder are still read. For example, the npj article texts of
   `multimorbidity-ai-nejm/staging/npj/` have no other copy.
+- **A concept vector follows its claim (0.15.9).** The store re-imports a changed memo by
+  deleting its claims. Claim ids are `INTEGER PRIMARY KEY` without AUTOINCREMENT, so a
+  vector left behind caused two problems: it skewed every clustering as an orphan, and when
+  its id was reused it was read as the next claim's vector. Measured 2026-10-04: 167 of the
+  first 256 vectors were orphans.
+
+  The fixes:
+  - A trigger deletes a claim's vector, concept memberships and conflict edges with the
+    claim. An index on `edge(dst)` keeps that fast during big syncs.
+  - Each vector stores a hash of the text it was computed from. A claim that no longer
+    matches is re-embedded, and its old vector takes part in no clustering.
+  - Clustering, conflict search and concept search read only CONFIRMED/DRIFTED claims.
+    A claim verified away after the clustering is never served.
+
+  Selftest section 17 was mutation-checked: without the fix, its orphan, reused-id and
+  status checks fail.
 - **The search index holds only claims that can be answers (0.15.3).** `claim_fts` indexes the
   `claim_live` view: REFUTED and STALE claims are excluded. Triggers keep the index in step on
   insert, delete and status change; their WHEN clauses mirror the view, because an
