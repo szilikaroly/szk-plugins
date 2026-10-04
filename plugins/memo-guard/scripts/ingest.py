@@ -53,8 +53,13 @@ LONG = 300
 # An installed R library is R's site-packages: third-party vignettes, help pages and test
 # data. 2026-10-04: a project's rlib/ (17 CRAN packages) gave 111 indexed files, and the 8B
 # model read lme4's test data as "CPU load increased by 7.93 in h264ref".
+# A memo-index staging copy (<name>_pdf-<8 hex>.txt, older <name>_xml.txt) in a staging*/ folder
+# is the original document's text a second time. 2026-10-04: 1,698 of them in one project, each
+# beside an original with its own memo -- every claim, and every fabrication, twice.
 SKIP = re.compile(r"(/\.git/|/node_modules/|/__pycache__/|/\.venv/|/venv/|/site-packages/|"
                   r"/rlib/|/renv/library/|/site-library/|/win-library/|"
+                  r"/staging[^/]*/(?:[^/]+/)*[^/]+_(?:pdf|docx?|pptx?|xlsx?|xml|html?|odt|rtf)"
+                  r"(?:-[0-9a-f]{8})?\.txt$|"
                   r"/\.cache/|/\.memo/|/_stage[^/]*/|\.memo\.md$)", re.I)
 TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
 HEARTBEAT_S = 120

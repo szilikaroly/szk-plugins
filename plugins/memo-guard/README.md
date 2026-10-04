@@ -451,6 +451,17 @@ keeps the self test hermetic). Everything stays local, in `data_dir()`:
   Measured 2026-10-04: one project's `rlib/` (17 CRAN packages) put 111 files in the index.
   From lme4's test data the 8B model read "CPU load increased by 7.93 in h264ref". Their
   memos were quarantined and the next sync dropped their claims and tables.
+- **Another index run's staging copies are not documents (0.15.8).** Ingestion skips a
+  memo-index staged-name file (`<name>_pdf-<8 hex>.txt`, or the older `<name>_xml.txt`)
+  inside a `staging*/` folder. Such a file is an original document's text a second time.
+
+  Measured 2026-10-04: one project's `20_index/staging*` folders held 1,698 of them. Every
+  one sat beside an original that had its own memo, with text Jaccard 0.95–1.00 on 28
+  samples. So each claim, and each fabrication, was in the index twice: about 65,000
+  claims in all.
+
+  Other files in a staging folder are still read. For example, the npj article texts of
+  `multimorbidity-ai-nejm/staging/npj/` have no other copy.
 - **The search index holds only claims that can be answers (0.15.3).** `claim_fts` indexes the
   `claim_live` view: REFUTED and STALE claims are excluded. Triggers keep the index in step on
   insert, delete and status change; their WHEN clauses mirror the view, because an
