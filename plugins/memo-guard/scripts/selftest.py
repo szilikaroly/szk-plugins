@@ -1085,6 +1085,49 @@ def check_corpus(home: Path) -> bool:
             cfgp.unlink(missing_ok=True)
         else:
             cfgp.write_text(saved, encoding="utf-8")
+
+    # 0.15.13: corpus_exclude keeps a workspace's copies, work folders and tool lists out of
+    # every store. 2026-10-05: data.db held 42 tables (26,510 rows) that the memo index had
+    # excluded on purpose, among them the indexer's own 18,847-row file list.
+    bundle = root / "kutatas" / "proj" / "BUNDLE_2026-01-01"
+    bundle.mkdir(exist_ok=True)
+    # tables.py skips files under 50 bytes, so both fixtures are a few rows long
+    (bundle / "tabla.csv").write_text("id;varos;prevalencia\n9;Pecs;12,5\n10;Gyor;8\n11;Eger;3,1\n",
+                                      encoding="utf-8")
+    (root / "kutatas" / "proj" / "listing.csv").write_text(
+        "path;size\nkutatas/proj/notes.md;71\nkutatas/proj/tabla.csv;58\n", encoding="utf-8")
+    ex = {"corpus_exclude": ["/BUNDLE_[^/]*/", r"/proj/listing\.csv$", "(unclosed"]}
+    t_all = tables.sync_root(root, log=lambda *a: None, cfg={})
+    chk(t_all["files_imported"] == 2 and tables.find("Pecs"),
+        "without corpus_exclude a bundle's copy and a file list are imported")
+    t_ex = tables.sync_root(root, log=lambda *a: None, cfg=ex)
+    chk(t_ex["removed"] == 2 and not tables.find("Pecs") and tables.find("Szeged"),
+        "with it both tables are dropped, the rest stays, and a broken pattern is ignored")
+    chk(mg.corpus_excluded("kutatas\\proj\\BUNDLE_x\\a.md", ex)
+        and not mg.corpus_excluded("kutatas/proj/notes.md", ex)
+        and not mg.corpus_excluded("kutatas/proj/BUNDLE_x/a.md", {}),
+        "corpus_excluded takes either slash, and matches only what it names")
+    chk(not ingest.enqueue(bundle / "new.md", "test", {**cfg, **ex}),
+        "an excluded path is never queued for ingest")
+    ingest._take_queue()
+    bsrc = bundle / "b.md"
+    bsrc.write_text("# b\n\nA bundle copy of the donor notes.\n", encoding="utf-8")
+    bsha = _h.sha256(bsrc.read_bytes()).hexdigest()
+    (root / ".memo" / "kutatas__proj__BUNDLE_2026-01-01__b.md-00000003.memo.md").write_text(
+        f"---\nsource: kutatas/proj/BUNDLE_2026-01-01/b.md\nsha256: {bsha}\nlines: 3\nprofile: prose\n"
+        "---\n\n## Claims\n\n"
+        "- [C1] [CONFIRMED] The bundle copies the donor notes @L3 `bundle copy of the donor notes`\n",
+        encoding="utf-8")
+    store._memo_index = lambda cfg: (_ for _ in ()).throw(ImportError("hermetic"))
+    try:
+        s1 = store.sync_root(root, cfg={}, log=lambda *a: None)
+        s2 = store.sync_root(root, cfg=ex, log=lambda *a: None)
+        s3 = store.sync_root(root, cfg=ex, log=lambda *a: None)
+        chk(s1["added"] == 1 and s2["removed"] == 1 and s3["added"] == 0,
+            "a memo of an excluded path leaves the memo store and is not imported again "
+            f"({s1['added']}/{s2['removed']}/{s3['added']})")
+    finally:
+        store._memo_index = real_mi
     return ok
 
 

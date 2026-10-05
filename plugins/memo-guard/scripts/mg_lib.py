@@ -229,6 +229,17 @@ DEFAULTS = {
     # and recall_eval sandboxes hermetic (a default built from Path.home() would make them
     # read a 1 GB real index and vary by machine).
     "corpus_roots": [],
+    # Paths under a corpus root that are not corpus: regexes searched in the root-relative
+    # path, written with a leading "/" and forward slashes ("/BUNDLE_[^/]*/"). Ingest and the
+    # table store (data.db) both skip a match. This is for what is specific to one workspace:
+    #   - an export bundle that copies files kept elsewhere;
+    #   - another indexer's work folder;
+    #   - a tool's own file lists.
+    # Generic rules (.git, node_modules, staging copies) are built in. 2026-10-05: data.db held
+    # 42 tables (26,510 rows) that the memo index had excluded on purpose. Among them were a
+    # bundle's copies and the indexer's own 18,847-row manifest, so a path search answered
+    # with the file list.
+    "corpus_exclude": [],
     # Corpus claims as a separately budgeted recall source, next to long-term memory.
     "corpus_recall": True,
     "corpus_max_claims": 3,
@@ -309,6 +320,34 @@ def load_config() -> dict:
             except Exception:
                 pass
     return cfg
+
+
+_EXCLUDE_CACHE: dict = {}
+
+
+def corpus_excluded(rel: str, cfg: dict | None) -> bool:
+    """Does the user's corpus_exclude list keep this root-relative path (file or folder) out?
+
+    `rel` may use either slash; it is matched as "/a/b/c" (a folder as "/a/b/"). An invalid
+    pattern is ignored, never fatal: a typo in config.json must not stop ingestion.
+    """
+    pats = tuple((cfg or {}).get("corpus_exclude") or ())
+    if not pats:
+        return False
+    rx = _EXCLUDE_CACHE.get(pats)
+    if rx is None:
+        ok = []
+        for p in pats:
+            try:
+                re.compile(p)
+                ok.append(f"(?:{p})")
+            except (re.error, TypeError):
+                continue
+        rx = _EXCLUDE_CACHE[pats] = re.compile("|".join(ok), re.I) if ok else None
+    if rx is None:
+        return False
+    path = "/" + str(rel).replace("\\", "/").lstrip("/")
+    return bool(rx.search(path))
 
 # --------------------------------------------------------------------------- window
 

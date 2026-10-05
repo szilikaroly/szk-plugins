@@ -240,8 +240,11 @@ def import_file(db: sqlite3.Connection, root: Path, path: Path) -> list[dict]:
     return out
 
 
-def sync_root(root: Path, log=print) -> dict:
+def sync_root(root: Path, log=print, cfg: dict | None = None) -> dict:
+    """Import new or changed tables under root; drop the tables of files that are gone, or
+    that corpus_exclude now keeps out (they are not "seen", so they leave like deleted files)."""
     root = Path(os.path.expanduser(str(root))).resolve()
+    cfg = mg.load_config() if cfg is None else cfg
     db = connect()
     t0 = time.time()
     known = {}
@@ -251,12 +254,16 @@ def sync_root(root: Path, log=print) -> dict:
     seen, imported, failed, tables_n = set(), 0, 0, 0
     for dp, dn, fn in os.walk(root):
         dpp = dp.replace("\\", "/") + "/"
-        dn[:] = [d for d in dn if not SKIP.search(dpp + d + "/")]
+        rdp = ("/" + Path(dp).relative_to(root).as_posix() + "/").replace("/./", "/")
+        dn[:] = [d for d in dn if not SKIP.search(dpp + d + "/")
+                 and not mg.corpus_excluded(rdp + d + "/", cfg)]
         for f in fn:
             if os.path.splitext(f)[1].lower() not in TABLE_EXT:
                 continue
             p = Path(dp) / f
             rel = p.relative_to(root).as_posix()
+            if mg.corpus_excluded(rel, cfg):
+                continue
             seen.add(rel)
             try:
                 st = p.stat()
@@ -333,7 +340,7 @@ def main() -> int:
             print("no corpus_roots configured and no --root given")
             return 1
         for r in roots:
-            print(json.dumps(sync_root(Path(r)), ensure_ascii=False))
+            print(json.dumps(sync_root(Path(r), cfg=cfg), ensure_ascii=False))
         return 0
     if a.find:
         for h in find(a.find, a.limit):

@@ -229,16 +229,23 @@ def sync_root(root: Path, full: bool = False, cfg: dict | None = None, log=print
     known = {r[0]: r[1:] for r in db.execute(
         "SELECT memo, id, memo_sha, memo_mtime, memo_size FROM doc WHERE root_id=?", (rid,))}
     on_disk = {p.name: p for p in memo_dir.glob("*.memo.md")}
+    # corpus_exclude (0.15.13): the memo of an excluded path leaves the store like a deleted one.
+    excluded = set()
+    if cfg.get("corpus_exclude"):
+        excluded = {m for m, path in db.execute("SELECT memo, path FROM doc WHERE root_id=?", (rid,))
+                    if path and mg.corpus_excluded(path, cfg)}
 
     # 1) what changed
     todo = []
     for name, p in on_disk.items():
+        if name in excluded:
+            continue
         st = p.stat()
         k = known.get(name)
         if not full and k and k[2] == st.st_mtime and k[3] == st.st_size:
             continue
         todo.append((name, p, st))
-    gone = [name for name in known if name not in on_disk]
+    gone = [name for name in known if name not in on_disk or name in excluded]
     bulk = full or len(todo) > 2000
     if bulk:
         _drop_triggers(db)
@@ -272,6 +279,10 @@ def sync_root(root: Path, full: bool = False, cfg: dict | None = None, log=print
             path = source.replace("\\", "/")
         else:
             path = smap.get(source, source).replace("\\", "/")
+        if mg.corpus_excluded(path, cfg):
+            if k:
+                gone.append(name)
+            continue
         old: dict = {}
         if k:
             for row in db.execute(

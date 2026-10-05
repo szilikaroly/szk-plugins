@@ -85,16 +85,17 @@ def root_of(path: Path, cfg: dict):
     return None
 
 
-def indexable(rel: str) -> bool:
+def indexable(rel: str, cfg: dict | None = None) -> bool:
     return (os.path.splitext(rel)[1].lower() in INDEXABLE
-            and not SKIP.search("/" + rel.replace("\\", "/")))
+            and not SKIP.search("/" + rel.replace("\\", "/"))
+            and not mg.corpus_excluded(rel, cfg))
 
 
 # --------------------------------------------------------------------------- hook side
 
 def enqueue(path: Path, reason: str, cfg: dict) -> bool:
     hit = root_of(path, cfg)
-    if not hit or not indexable(hit[1]):
+    if not hit or not indexable(hit[1], cfg):
         return False
     with open(qdir() / "queue.jsonl", "a", encoding="utf-8") as f:
         f.write(json.dumps({"root": str(hit[0]), "rel": hit[1], "reason": reason,
@@ -188,11 +189,12 @@ def scan(cfg: dict, log=print) -> dict:
         rows = []
         for dp, dn, fn in os.walk(root):
             dpp = "/" + Path(dp).relative_to(root).as_posix() + "/"
-            dn[:] = [d for d in dn if not SKIP.search(dpp + d + "/")]
+            dn[:] = [d for d in dn if not SKIP.search(dpp + d + "/")
+                     and not mg.corpus_excluded(dpp + d + "/", cfg)]
             for f in fn:
                 p = Path(dp) / f
                 rel = p.relative_to(root).as_posix()
-                if not indexable(rel):
+                if not indexable(rel, cfg):
                     continue
                 try:
                     st = p.stat()

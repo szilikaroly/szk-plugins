@@ -418,6 +418,17 @@ keeps the self test hermetic). Everything stays local, in `data_dir()`:
   wrap for tagged/long-line text), verifies anchors while the staged text exists, imports
   tables, and syncs the store. `/memo-guard:ingest pause` keeps everything queued and the GPU
   untouched; the first scan of a root only records state, it never queues the whole corpus.
+- **What is not corpus (0.15.13).** `"corpus_exclude"` is a list of regexes, searched in the
+  root-relative path written as `/a/b/c.csv`; either slash in the stored path works.
+  - It is for what is specific to one workspace: an export bundle that copies files kept
+    elsewhere (`"/BUNDLE_[^/]*/"`), another indexer's work folder, a tool's own file lists.
+  - Ingest never queues a match, `data.db` drops its tables at the next `tables.py --sync`,
+    and `memo.db` drops its memos at the next `store.py --sync`.
+  - A pattern that does not compile is ignored, so a typo cannot stop ingestion.
+  - Generic rules (`.git`, `node_modules`, installed R libraries, staging copies) are built in.
+  - Measured 2026-10-05 on the author's workspace: `data.db` held 42 tables (26,510 rows) from
+    folders the memo index excludes on purpose. One of them was the indexer's own 18,847-row
+    file list, so a path-like question was answered with a row of it.
 - **Big tables get a card, not a model pass (0.15.2).** A CSV/TSV whose staged text is
   `table_card_min_chunks` (100) memo_gen chunks or more gets a computed **table card**
   (`table_card.py`). The card is written under the memo name memo_gen would have used and
