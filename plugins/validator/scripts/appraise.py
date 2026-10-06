@@ -26,8 +26,9 @@ not be able to be wrong about *whether it answered* — and a domain with an
 unanswered question gets no verdict at all (INCOMPLETE), never a LOW computed
 from the questions that happened to be answered.
 
-And where the instrument publishes an algorithm — AMSTAR 2, the Newcastle-Ottawa
-star count, GRADE's start-and-adjust — the verdict is arithmetic, not judgement.
+And where the instrument publishes an algorithm — RoB 2's per-domain walk,
+AMSTAR 2, the Newcastle-Ottawa star count, GRADE's start-and-adjust — the verdict
+is arithmetic, not judgement.
 Computing it here means the judgement can be checked against the answers, and a
 rating that does not follow from them is visible instead of plausible.
 
@@ -194,11 +195,21 @@ class Instrument:
         for short, full in _pairs(self.meta.get("aliases", ""), "="):
             self.canon[short.lower()] = _canonical(full)
             self.spelling[short.lower()] = short
+        # Keys are an item id, or `scope/id` where one id names different questions
+        # in different scopes (RoB 2's 2.6 is unconditional for the effect of
+        # assignment and conditional for the effect of adhering).
         self.item_vocab: dict[str, set[str]] = {}
         for ids, vals in _pairs(self.meta.get("item_answers", ""), "="):
             allowed = {_canonical(v) for v in vals.split("|") if v.strip()}
             for iid in _ids(ids):
                 self.item_vocab[iid] = allowed
+        # `not_applicable`: the only items that may be answered N/A (or `none`).
+        # Absent, N/A is accepted everywhere. In 2.0.0 RoB 2 and ROBIS had no such
+        # line, so a record with every answer N/A verified complete and rolled up
+        # LOW — 22 unassessed questions read as a clean trial.
+        na = self.meta.get("not_applicable")
+        self.na_items: set[str] | None = (
+            None if na is None else {x.lower() for x in _ids(na) if x.lower() != "none"})
         toks = sorted(self.spelling.values(), key=len, reverse=True)
         self.token_re = re.compile(
             r"(?<![\w/])(" + "|".join(re.escape(t) for t in toks) + r")(?![\w/])", re.I)
@@ -283,19 +294,60 @@ class Instrument:
         t = token.strip().lower()
         return self.canon.get(t, t)
 
-    def allowed(self, iid: str) -> set[str] | None:
-        return self.item_vocab.get(iid)
+    def _keys(self, it: dict) -> list[str]:
+        """The vocabulary keys of an item, most specific first: `scope/id`, then `id`."""
+        return [f"{t}/{it['id']}" for t in sorted(self.tags(it))] + [it["id"]]
 
-    def invalid(self, iid: str, token: str) -> bool:
-        vocab = self.item_vocab.get(iid)
+    def item(self, iid: str, scope: str = "all") -> dict | None:
+        return next((it for it in self.scoped(scope) if it["id"] == iid), None)
+
+    def vocab_of(self, it: dict | None) -> set[str] | None:
+        """The answers an item accepts (canonical), or None for "the whole vocabulary"."""
+        if it is None:
+            return None
+        for k in self._keys(it):
+            if k in self.item_vocab:
+                return self.item_vocab[k]
+        if self.na_items is None:
+            return None
+        allowed = {_canonical(a) for a in self.answers}
+        if any(k.lower() in self.na_items for k in self._keys(it)):
+            allowed.add("n/a")
+        return allowed
+
+    def allowed(self, iid: str, scope: str = "all") -> set[str] | None:
+        return self.vocab_of(self.item(iid, scope))
+
+    def invalid_item(self, it: dict, token: str) -> bool:
+        vocab = self.vocab_of(it)
         return vocab is not None and self.norm(token) not in vocab
 
-    def allowed_text(self, iid: str) -> str:
-        vocab = self.item_vocab.get(iid)
+    def invalid(self, iid: str, token: str, scope: str = "all") -> bool:
+        return self.invalid_item(self.item(iid, scope) or {"id": iid, "scope": "all"}, token)
+
+    def allowed_text(self, iid: str, scope: str = "all") -> str:
+        vocab = self.allowed(iid, scope)
         if vocab is None:
             return " / ".join(self.answers + ["N/A"])
         order = [a for a in self.answers + ["N/A"] if _canonical(a) in vocab]
         return " / ".join(order)
+
+    def answer_rules(self, scope: str) -> list[str]:
+        """The per-item restrictions that apply in this scope, for the skeleton."""
+        items = self.scoped(scope)
+        out = []
+        for ids, vals in _pairs(self.meta.get("item_answers", ""), "="):
+            here = [i.split("/")[-1] for i in _ids(ids)
+                    if any(i in self._keys(it) for it in items)]
+            if here:
+                out.append(f"{', '.join(here)}: {vals.replace('|', ' / ')}")
+        if self.na_items is not None:
+            na = [it["id"] for it in items
+                  if any(k.lower() in self.na_items for k in self._keys(it))]
+            out.append("N/A only at " + ", ".join(na) + " — a conditional question whose "
+                       "condition is not met; every other item needs an answer"
+                       if na else "N/A is not an answer in this instrument")
+        return out
 
     def shorthand_text(self) -> str:
         return ", ".join(f"{k} = {v}" for k, v in _pairs(self.meta.get("aliases", ""), "="))
@@ -396,11 +448,12 @@ def skeleton(inst: Instrument, scope: str) -> str:
           f"Domain verdicts: **{' / '.join(inst.verdicts)}**.", ""]
     if inst.shorthand_text():
         L += [f"Shorthands accepted for this instrument only: {inst.shorthand_text()}.", ""]
-    if inst.meta.get("item_answers"):
-        groups = [f"{ids.replace(',', ', ')}: {vals.replace('|', ' / ')}"
-                  for ids, vals in _pairs(inst.meta["item_answers"], "=")]
-        L += ["Item-specific answers — any other answer is rejected: " + "; ".join(groups) + ".",
+    rules = inst.answer_rules(scope)
+    if rules:
+        L += ["Item-specific answers — any other answer is rejected: " + "; ".join(rules) + ".",
               ""]
+    if inst.meta.get("skeleton_note"):
+        L += [f"Note for this instrument: {inst.meta['skeleton_note']}", ""]
     resolved = inst.resolve_scope(scope)
     if (scope or "all").lower() == "all" and resolved != "all":
         others = [s for s in inst.scope_names if s not in ("all", resolved)]
@@ -448,6 +501,7 @@ QUESTION_COLS = ("signalling", "question", "q", "sq", "kérdés", "kerdes")
 #: answer — read as prose, a blank skeleton verified 1/16 and rolled up HIGH.
 _BOILER = re.compile(
     r"slots to fill|Answer vocabulary|Shorthands accepted|Item-specific answers|"
+    r"^\s*Note for this instrument:|"
     r"^\s*Domain verdicts:|judgement:\*\*|applicability:\*\*|^\s*\*\*OVERALL|"
     r"^\s*\*\*Applicability|^\s*Scope( filter)?:|^\s*<!--|^\s*#", re.I)
 
@@ -511,6 +565,31 @@ def table_rows(text: str) -> list[tuple[list[str], list[str] | None]]:
 
 def _row_id(cells: list[str]) -> str:
     return cells[0].strip("*_` ") if cells else ""
+
+
+ID_COLS = ("#", "item", "sq", "id", "no", "no.", "tétel", "tetel")
+#: "1. Item 7 (excluded studies) — No": a numbered list line about ANOTHER item.
+_OTHER_ITEM = re.compile(r"^\s*(?:\*\*|__)?items?\s+([A-Za-z]?\d[\w.]*?)[.,;:)]?(?=\s|$)",
+                         re.I)
+
+
+def _id_col(header: list[str] | None) -> int:
+    """The column that holds the item id: the first, unless the header names another.
+
+    A priority table "| Priority | Item | Answer |" keyed by its first cell
+    credited priority 1, 2 … to items 1, 2 ….
+    """
+    names = [h.strip("*_ ").lower() for h in header or []]
+    if not names or names[0] in ID_COLS:
+        return 0
+    return next((i for i, h in enumerate(names) if h in ID_COLS), 0)
+
+
+def _table_id(cells: list[str], header: list[str] | None, known) -> str:
+    """The row's item id: from the header's id column, else (if that is no item) the first cell."""
+    i = _id_col(header)
+    named = re.sub(r"^item\s+", "", _row_id(cells[i:]), flags=re.I) if i < len(cells) else ""
+    return named if i == 0 or named in known else _row_id(cells)
 
 
 def _first_token(s: str, inst: Instrument) -> str | None:
@@ -581,7 +660,7 @@ def read_record(text: str, inst: Instrument, scope: str
     found: dict[str, str] = {}
     bad: dict[str, str] = {}
     for cells, header in table_rows(text):
-        iid = _row_id(cells)
+        iid = _table_id(cells, header, items)
         if iid not in items or iid in found or iid in bad:
             continue
         ai = _col(header, ANSWER_COLS)
@@ -610,6 +689,9 @@ def read_record(text: str, inst: Instrument, scope: str
         for line in prose:
             m = head.match(line)
             if not m:
+                continue
+            other = _OTHER_ITEM.match(line[m.end():])
+            if other and other.group(1).lower() != iid.lower():
                 continue
             tok = _answer_in(line[m.end():], it, inst)
             if tok:
@@ -809,12 +891,13 @@ def verify(path: Path, inst: Instrument, scope: str) -> int:
         return 1
     items = inst.scoped(scope)
     found, bad = read_record(text, inst, scope)
-    invalid = {i: t for i, t in found.items() if inst.invalid(i, t)}
+    invalid = {i: t for i, t in found.items() if inst.invalid(i, t, scope)}
     missing = [it["id"] for it in items if it["id"] not in found and it["id"] not in bad]
     print(f"  {len(found) - len(invalid)}/{len(items)} answered  ({inst.name})")
     if invalid:
         print(f"  INVALID ({len(invalid)}): " + "; ".join(
-            f"{i} '{t}' — this item offers {inst.allowed_text(i)}" for i, t in invalid.items()))
+            f"{i} '{t}' — this item offers {inst.allowed_text(i, scope)}"
+            for i, t in invalid.items()))
     if bad:
         sh = f"; shorthands {inst.shorthand_text()}" if inst.shorthand_text() else ""
         print(f"  UNRECOGNISED ({len(bad)}): " + "; ".join(f"{i} '{c}'" for i, c in bad.items())
@@ -843,7 +926,7 @@ def _partition(inst: Instrument, answers: dict[str, str], items: list[dict]
         a = answers.get(it["id"])
         if a is None:
             unanswered.append(it["id"])
-        elif inst.invalid(it["id"], a):
+        elif inst.invalid_item(it, a):
             invalid[it["id"]] = a
         else:
             valid[it["id"]] = a
@@ -867,7 +950,7 @@ def _flag_text(normal: list[str], reverse: list[str]) -> str:
 
 def rollup_signalling(inst: Instrument, answers: dict[str, str],
                       items: list[dict]) -> Lines:
-    """The shared shape of RoB 2 / ROBINS-I / ROBINS-E / QUADAS-2 / QUIPS / ROBIS / JBI.
+    """The shared shape of ROBINS-I/-E, QUADAS-2, QUIPS, ROBIS and JBI (RoB 2: rollup_rob2).
 
     Deliberately conservative and deliberately NOT the official flowchart. The
     published algorithms branch on specific questions in ways that a generic
@@ -893,13 +976,18 @@ def rollup_signalling(inst: Instrument, answers: dict[str, str],
     # Middle: a problem answer that rules out the low tier but cannot by itself
     # reach the top one — ROBINS-I's 1.1 ("is there potential for confounding?"),
     # which 1.x scored as Serious for every observational study ever run.
+    if inst.key == "rob2":
+        # RoB 2 publishes a per-domain algorithm small enough to run exactly;
+        # tags cannot express it (3.1 No + 3.2 Yes is Low, not a flag).
+        return rollup_rob2(inst, answers, items)
     valid, invalid, _ = _partition(inst, answers, items)
     groups: dict[str, list[dict]] = {}
     for it in items:
         groups.setdefault(it["domain"], []).append(it)
 
     L = Lines()
-    worst = "low"
+    tier: dict[str, str] = {}            # domain -> low / some / high (complete domains)
+    flagged_high: set[str] = set()       # incomplete domains already at the top tier
     incomplete: list[str] = []
     for dom, rows in groups.items():
         high_n, high_r, mid_n, mid_r, partly, unk, missing, bad, routers = \
@@ -944,11 +1032,11 @@ def rollup_signalling(inst: Instrument, answers: dict[str, str],
                 why.append(f"answer not offered by the item at {', '.join(bad)}")
             if high_n or high_r:
                 why.append("already flagged by " + _flag_text(high_n, high_r))
-                worst = "high"
+                flagged_high.add(dom)
             incomplete.append(dom)
         elif high_n or high_r:
             verdict, why = "HIGH / SERIOUS", [_flag_text(high_n, high_r)]
-            worst = "high"
+            tier[dom] = "high"
         elif mid_n or mid_r or partly or unk:
             verdict = "SOME CONCERNS / UNCLEAR"
             why = []
@@ -959,22 +1047,43 @@ def rollup_signalling(inst: Instrument, answers: dict[str, str],
                 why.append(f"'Partly' at {', '.join(partly)}")
             if unk:
                 why.append(f"no information at {', '.join(unk)}")
-            worst = "some" if worst == "low" else worst
+            tier[dom] = "some"
         else:
             verdict, why = "LOW", ["no signalling question flags a problem"]
+            tier[dom] = "low"
         L.append(f"  {inst.heading(dom)} ({title[:42]}): {verdict}  — {'; '.join(why)}")
         if routers:
             L.append(f"  {'':<12}routing questions answered, not scored: {', '.join(routers)}")
     L.append("")
+    # ROBIS: the overall is the phase-3 judgement, made in the light of domains
+    # 1-4 — not the worst of them. A phase-2 concern that the interpretation
+    # addressed (3A Yes) can still end Low; 2.0.0 rated it High at exit 0.
+    over = inst.meta.get("overall_from")
+    basis = [over] if over in groups else list(groups)
+    rank = {"low": 0, "some": 1, "high": 2}
     if incomplete:
         heads = ", ".join(inst.heading(d) for d in incomplete)
         msg = (f"  Implied overall: INCOMPLETE — {heads}: unanswered or invalid questions; "
                f"no overall judgement until every slot is answered.")
-        if worst == "high":
-            msg += " (Already at least HIGH / SERIOUS: one high-risk domain sets the overall.)"
+        if any(d in flagged_high or tier.get(d) == "high" for d in basis):
+            msg += (" (Already at least HIGH / SERIOUS: "
+                    + (f"{inst.heading(over)} is at the top tier.)" if over in groups
+                       else "one high-risk domain sets the overall.)"))
         L.append(msg)
         L.final = False
+    elif over in groups:
+        head = inst.heading(over)
+        flagged = [inst.heading(d) for d in groups if d != over and tier[d] != "low"]
+        L.append({"low": f"  Implied overall: LOW — {head}, the overall judgement",
+                  "some": f"  Implied overall: SOME CONCERNS — {head}, the overall judgement",
+                  "high": f"  Implied overall: HIGH / SERIOUS — {head}, the overall judgement"
+                  }[tier[over]]
+                 + (f"; concerns in {', '.join(flagged)} feed it, they do not set it."
+                    if flagged else "."))
+        if inst.meta.get("overall_note"):
+            L.append(f"  {inst.meta['overall_note']}")
     else:
+        worst = max((tier[d] for d in basis), key=rank.get, default="low")
         L.append({"low": "  Implied overall: LOW — but only if every domain is genuinely low.",
                   "some": "  Implied overall: SOME CONCERNS — driven by the unresolved domains above.",
                   "high": "  Implied overall: HIGH / SERIOUS — one domain at high risk sets the overall."
@@ -988,9 +1097,214 @@ def rollup_signalling(inst: Instrument, answers: dict[str, str],
                  + (" or worse (that call is yours)." if len(inst.verdicts) > 3 else "."))
     L.append("  This is what the recorded answers force. It is NOT the published "
              "flowchart: the official algorithms branch on particular questions "
-             "(RoB 2 domain 2 on 2.6/2.7, ROBINS-I on the confounding domain). "
+             "(ROBINS-I and ROBINS-E on the confounding domain, for instance). "
              "Check the borderline domains against the source algorithm and say "
              "so if you override this.")
+    return L
+
+
+# --------------------------------------------------------------------------- RoB 2
+
+_Y = frozenset({"yes", "probably yes"})
+_N = frozenset({"no", "probably no"})
+_NI = frozenset({"no information"})
+_TIER = {"low": "LOW", "some": "SOME CONCERNS / UNCLEAR", "high": "HIGH / SERIOUS"}
+_RANK = {"low": 0, "some": 1, "high": 2}
+
+
+class _Stop(Exception):
+    """The algorithm reached a question it cannot use (blank, invalid or N/A)."""
+
+    def __init__(self, iid: str, kind: str):
+        super().__init__(iid)
+        self.iid, self.kind = iid, kind
+
+
+def _worse(*tiers: str) -> str:
+    return max(tiers, key=_RANK.get)
+
+
+# One function per domain, each the RoB 2 (22 August 2019) algorithm: the
+# criteria tables of the guidance (reproduced e.g. in PMC8191126) and the
+# answer groupings of the template's conditional questions ("If Y/PY/NI to
+# 2.4"). `ask` returns the canonical answer and records the path; NI is treated
+# exactly where the algorithm puts it, which is not always the middle tier.
+
+def _rob2_d1(ask) -> str:
+    concealed = ask("1.2")
+    if concealed in _N:
+        return "high"
+    baseline = ask("1.3")
+    if concealed in _NI:
+        return "high" if baseline in _Y else "some"
+    random_ = ask("1.1")                     # NI here is compatible with Low
+    return "some" if baseline in _Y or random_ in _N else "low"
+
+
+def _rob2_d2_assignment(ask) -> str:
+    participants, carers = ask("2.1"), ask("2.2")
+    if participants in _N and carers in _N:
+        part1 = "low"
+    else:
+        context = ask("2.3")
+        if context in _N:
+            part1 = "low"
+        elif context in _NI:
+            part1 = "some"
+        elif ask("2.4") in _N:
+            part1 = "some"
+        else:                                   # 2.4 Y/PY/NI
+            part1 = "some" if ask("2.5") in _Y else "high"
+    if ask("2.6") in _Y:
+        part2 = "low"
+    else:                                       # 2.6 N/PN/NI
+        part2 = "some" if ask("2.7") in _N else "high"
+    return _worse(part1, part2)
+
+
+def _rob2_d2_adherence(ask) -> str:
+    problem = False
+    participants, carers = ask("2.1"), ask("2.2")
+    if not (participants in _N and carers in _N):
+        problem |= ask("2.3", na_ok=True) in (_N | _NI)
+    problem |= ask("2.4", na_ok=True) in (_Y | _NI)
+    problem |= ask("2.5", na_ok=True) in (_Y | _NI)
+    if not problem:
+        return "low"
+    return "some" if ask("2.6") in _Y else "high"    # 2.6 N/PN/NI -> High
+
+
+def _rob2_d3(ask) -> str:
+    if ask("3.1") in _Y:
+        return "low"
+    if ask("3.2") in _Y:
+        return "low"
+    if ask("3.3") in _N:
+        return "low"
+    return "some" if ask("3.4") in _N else "high"     # 3.4 Y/PY/NI -> High
+
+
+def _rob2_d4(ask) -> str:
+    if ask("4.1") in _Y:                       # NI follows the N/PN branch
+        return "high"
+    differ = ask("4.2")
+    if differ in _Y:
+        return "high"
+    floor = "some" if differ in _NI else "low"
+    if ask("4.3") in _N or ask("4.4") in _N:
+        return floor
+    return "some" if ask("4.5") in _N else "high"     # 4.5 Y/PY/NI -> High
+
+
+def _rob2_d5(ask) -> str:
+    outcomes, analyses = ask("5.2"), ask("5.3")
+    if outcomes in _Y or analyses in _Y:
+        return "high"
+    if outcomes in _N and analyses in _N:
+        return "low" if ask("5.1") in _Y else "some"
+    return "some"                               # NI at 5.2 or 5.3, neither Yes
+
+
+def rollup_rob2(inst: Instrument, answers: dict[str, str], items: list[dict]) -> Lines:
+    """RoB 2 domain and overall judgements by the published 2019 algorithm.
+
+    2.0.0 scored RoB 2 with the generic polarity tags, and tags cannot express
+    an algorithm in which one answer opens a gate for the next: 3.1 'No' with
+    3.2 'Yes' is Low, not a flag, but was rated HIGH at exit 0; 2.3 NI and
+    4.4 Yes / 4.5 No are Some concerns but came out LOW; NI at 2.5, 2.7 and 4.5
+    is the High branch but came out Some concerns. Each domain is now walked
+    question by question, the way the template routes it.
+
+    A blank or invalid answer anywhere in a domain still makes it INCOMPLETE,
+    and so does N/A at a question the walk reaches.
+    """
+    adherence = any("adherence" in inst.tags(it) for it in items)
+    algo = {"1": _rob2_d1,
+            "2": _rob2_d2_adherence if adherence else _rob2_d2_assignment,
+            "3": _rob2_d3, "4": _rob2_d4, "5": _rob2_d5}
+    valid, invalid, _ = _partition(inst, answers, items)
+    groups: dict[str, list[dict]] = {}
+    for it in items:
+        groups.setdefault(it["domain"], []).append(it)
+
+    L = Lines()
+    tier: dict[str, str] = {}
+    flagged_high: list[str] = []
+    incomplete: list[str] = []
+    for dom, rows in groups.items():
+        ids = [it["id"] for it in rows]
+        missing = [i for i in ids if i not in valid and i not in invalid]
+        bad = [i for i in ids if i in invalid]
+        path: list[str] = []
+
+        def ask(iid: str, na_ok: bool = False) -> str:
+            if iid in invalid:
+                raise _Stop(iid, "invalid")
+            a = valid.get(iid)
+            if a is None:
+                raise _Stop(iid, "blank")
+            n = inst.norm(a)
+            path.append(f"{iid} '{a}'")
+            if n == "n/a" and not na_ok:
+                raise _Stop(iid, "n/a")
+            return n
+
+        result, stop = None, None
+        try:
+            result = algo[dom](ask) if dom in algo else None
+        except _Stop as e:
+            stop = e
+        title = inst.domains.get(dom, dom)
+        why: list[str] = []
+        if missing or bad or stop is not None or result is None:
+            verdict = "INCOMPLETE"
+            if missing:
+                why.append(f"unanswered: {', '.join(missing)}")
+            if bad:
+                why.append(f"answer not offered by the item at {', '.join(bad)}")
+            if stop is not None and stop.kind == "n/a":
+                prior = " → ".join(path[:-1]) or "the answers above"
+                why.append(f"N/A at {stop.iid}, but {prior} leads to it — answer it")
+            if result is not None:
+                why.append(f"the answered questions already give {_TIER[result]} "
+                           f"({' → '.join(path)})")
+                if result == "high":
+                    flagged_high.append(dom)
+            incomplete.append(dom)
+        else:
+            verdict = _TIER[result]
+            tier[dom] = result
+            why.append("2019 algorithm: " + " → ".join(path))
+        L.append(f"  {inst.heading(dom)} ({title[:42]}): {verdict}  — {'; '.join(why)}")
+        walked = {p.split(" ", 1)[0] for p in path}
+        off = [f"{i} '{valid[i]}'" for i in ids
+               if i in valid and i not in walked and inst.norm(valid[i]) != "n/a"]
+        if off and verdict != "INCOMPLETE":
+            L.append(f"  {'':<12}answered, but not on the algorithm's path for these "
+                     f"answers: {', '.join(off)}")
+    L.append("")
+    if incomplete:
+        heads = ", ".join(inst.heading(d) for d in incomplete)
+        msg = (f"  Implied overall: INCOMPLETE — {heads}: unanswered, invalid or N/A where "
+               f"the algorithm needs an answer; no overall judgement until they are answered.")
+        if flagged_high or "high" in tier.values():
+            msg += " (Already at least HIGH / SERIOUS: one high-risk domain sets the overall.)"
+        L.append(msg)
+        L.final = False
+    else:
+        worst = max(tier.values(), key=_RANK.get, default="low")
+        L.append({
+            "low": "  Implied overall: LOW — every domain is at low risk of bias.",
+            "some": "  Implied overall: SOME CONCERNS — at least one domain has some concerns "
+                    "and none is high. RoB 2 also allows High when several domains with some "
+                    "concerns together substantially lower confidence in the result: that is "
+                    "a judgement — state it and why if you make it.",
+            "high": "  Implied overall: HIGH / SERIOUS — one domain at high risk sets the overall.",
+        }[worst])
+    L.append(f"  Domain verdicts follow the RoB 2 algorithms of the 22 August 2019 guidance "
+             f"({'effect of adhering' if adherence else 'effect of assignment'} variant of "
+             f"domain 2). For a published assessment, cross-check with the official Excel "
+             f"tool; an override is legitimate when it is stated with its reason.")
     return L
 
 
@@ -1003,6 +1317,11 @@ def rollup_amstar2(inst: Instrument, answers: dict[str, str],
     High. No critical flaw, more than one non-critical weakness -> Moderate.
     "No meta-analysis conducted" (N/A) on 11, 12 and 15 is neither — in 1.x it
     was counted as a flaw and a narrative review came out Critically low.
+
+    "Partial yes" is counted as a non-critical weakness on every item that offers
+    it (2, 4, 7, 8, 9). That is this tool's convention, not a rule of the paper,
+    which says only that it marks partial adherence; 2.0.0 applied it to the
+    critical items and silently treated a Partial yes on item 8 as met.
     """
     critical = {c.strip() for c in inst.meta.get("critical", "").split(",") if c.strip()}
     valid, invalid, unanswered = _partition(inst, answers, items)
@@ -1016,8 +1335,9 @@ def rollup_amstar2(inst: Instrument, answers: dict[str, str],
             na.append(it["id"])
             continue
         if n in YES_ISH:
-            if n == "partial yes" and it["id"] in critical:
-                # A "Partial Yes" on a critical item is a weakness, not a flaw.
+            if n == "partial yes":
+                # Partial adherence: a weakness, never a critical flaw, and the
+                # same on item 8 as on the critical items 2, 4, 7 and 9.
                 noncrit_flaws.append(it["id"])
             continue
         (crit_flaws if it["id"] in critical else noncrit_flaws).append(it["id"])
@@ -1046,6 +1366,19 @@ def rollup_amstar2(inst: Instrument, answers: dict[str, str],
             f"{i} '{a}' (offers {inst.allowed_text(i)})" for i, a in invalid.items())
             + ". The rating above is provisional until they are corrected."]
     L.final = not unanswered and not invalid
+    partial = [it["id"] for it in items
+               if valid.get(it["id"]) and inst.norm(valid[it["id"]]) == "partial yes"]
+    L += ["", "  Convention used here: 'Partial yes' counts as a non-critical weakness on "
+              "every item that offers it (2, 4, 7, 8, 9)"
+              + (f" — here {', '.join(partial)}" if partial else "")
+              + ". The AMSTAR 2 paper says only that it marks partial adherence; some "
+              "appraisals count it as met. State the convention you used.",
+          "  The rating scheme is advisory: Box 2's footnote allows several non-critical "
+          "weaknesses to move Moderate down to Low, and the critical domains of Box 1 are "
+          "a suggestion appraisers may add to or substitute. Any such change is a "
+          "judgement — state it and why.",
+          "  Items 9 and 11 hold the worse of the RCT and NRSI judgements when the review "
+          "includes both designs."]
     L += ["", "  AMSTAR 2 rates CONFIDENCE IN THE RESULTS of the review, not the quality "
               "of the included studies and not the certainty of the evidence. Say that "
               "explicitly; readers conflate it with GRADE constantly."]
@@ -1058,7 +1391,18 @@ def rollup_nos(inst: Instrument, answers: dict[str, str],
 
     One star per item, two for comparability. A partial star exists only on the
     two-star comparability items; 1.x gave one for "Partial yes" anywhere.
+
+    One form per study: the cohort and the case-control scales are 8 items and
+    9 stars each, and a count across both ("9/18 stars") is refused.
     """
+    forms = {s for s in inst.scope_names if s != "all"}
+    used = {t for it in items for t in inst.tags(it)} & forms
+    if len(used) > 1:
+        L = Lines([f"  Not counted: these items mix the {' and '.join(sorted(used))} forms. "
+                   f"The Newcastle-Ottawa scale is one 8-item, 9-star form per study design; "
+                   f"rerun with --scope {' or --scope '.join(sorted(used))}."])
+        L.final = False
+        return L
     valid, invalid, unanswered = _partition(inst, answers, items)
     stars = 0
     total_possible = 0
@@ -1088,11 +1432,18 @@ def rollup_nos(inst: Instrument, answers: dict[str, str],
     if unanswered:
         L += ["", f"  {len(unanswered)} item(s) unanswered ({', '.join(unanswered)}) — "
                   "the star count above is provisional until they are filled."]
-    bad = [f"{i} '{a}'" for i, a in invalid.items()] + [f"{i} 'Partial yes'"
-                                                       for i in partial_one_star]
+    bad = [f"{i} '{a}' (offers {inst.allowed_text(i)})" for i, a in invalid.items()] \
+        + [f"{i} 'Partial yes'" for i in partial_one_star]
     if bad:
-        L += ["", f"  Not scored: {'; '.join(bad)} — only the two-star comparability items "
-                  "can earn a partial (one of two) star; every other item is Yes or no star."]
+        partial = partial_one_star or any(inst.norm(a) == "partial yes"
+                                          for a in invalid.values())
+        L += ["", f"  Not scored: {'; '.join(bad)} — the star count above is provisional "
+                  "until they are answered."
+                  + (" Only the two-star comparability items can earn a partial (one of two) "
+                     "star; every other item is Yes or no star." if partial else "")
+                  + (" The scale has no not-applicable answer: an item either earns its "
+                     "star or it does not." if any(inst.norm(a) == "n/a"
+                                                     for a in invalid.values()) else "")]
     L.final = not unanswered and not bad
     L += ["", "  There is NO official threshold. The 7-9 = good / 4-6 = fair / 0-3 = poor "
               "cut-offs come from an AHRQ conversion that the scale's authors never "
@@ -1211,6 +1562,7 @@ def rollup_grade(inst: Instrument, answers: dict[str, str],
 
 
 ROLLUPS = {
+    "rob2": rollup_rob2,
     "amstar2": rollup_amstar2,
     "nos": rollup_nos,
     "grade": rollup_grade,
@@ -1229,7 +1581,7 @@ def rollup(path: Path, inst: Instrument, scope: str) -> int:
               "válaszokból számol; előbb töltsd ki a --skeleton táblát.")
         return 1
     items = inst.scoped(scope)
-    n_valid = sum(1 for i, a in answers.items() if not inst.invalid(i, a))
+    n_valid = sum(1 for i, a in answers.items() if not inst.invalid(i, a, scope))
     print(f"ROLLUP — {inst.name}   ({n_valid}/{len(items)} answered)")
     print("-" * 70)
     if bad:
@@ -1276,6 +1628,12 @@ def main(argv: list[str] | None = None) -> int:
         if not inst.valid_scope(args.scope):
             valid = [s for s in inst.scope_names if s != "all"] + ["all"]
             ap.error(f"{inst.key}: unknown --scope '{args.scope}'. Valid: {', '.join(valid)}")
+        # Newcastle-Ottawa is two separate forms, cohort and case-control, of 8
+        # items and 9 stars each. Without a scope the engine merged them into a
+        # 16-slot form and reported "9/18 stars" — a denominator the scale never has.
+        if inst.meta.get("scope_required") and inst.resolve_scope(args.scope) == "all":
+            forms = " or ".join(f"--scope {s}" for s in inst.scope_names if s != "all")
+            ap.error(f"{inst.key}: choose {forms}. {inst.meta['scope_required']}")
         return inst
 
     if args.list:
@@ -1290,8 +1648,10 @@ def main(argv: list[str] | None = None) -> int:
                 n = len(inst.scoped("all"))
             per = ", ".join(f"{s} {len(inst.scoped(s))}" for s in inst.scope_names
                             if s != "all" and not inst.meta.get("engine"))
-            print(f"  {'':<12} {n} tétel"
-                  + (f" ({per})" if per else "")
+            count = (f"egy űrlap vizsgálatonként, --scope kötelező ({per})"
+                     if inst.meta.get("scope_required")
+                     else f"{n} tétel" + (f" ({per})" if per else ""))
+            print(f"  {'':<12} {count}"
                   + f" · válaszok: {' / '.join(inst.answers)}"
                   + (f" · scope: {scopes}" if scopes else ""))
             if inst.shorthand_text():
@@ -1369,6 +1729,16 @@ def main(argv: list[str] | None = None) -> int:
                 continue
             expected = inst.meta.get("published_items", "")
             n = len(inst.scoped("all"))
+            if inst.meta.get("scope_required"):
+                # One form per study: there is no instrument-wide total to check.
+                per = []
+                for sc, exp_s in _pairs(inst.meta.get("published_by_scope", ""), "="):
+                    got = len(inst.scoped(sc))
+                    ok = exp_s.isdigit() and int(exp_s) == got
+                    per.append(f"{sc} {got}{' ok' if ok else f' ≠ {exp_s} MISMATCH'}")
+                    bad += 0 if ok else 1
+                print(f"  {key:<12} {'—':>3}        formánként: {' · '.join(per)}")
+                continue
             note = ""
             if expected:
                 try:

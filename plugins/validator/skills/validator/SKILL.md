@@ -73,7 +73,7 @@ This is where most appraisals go wrong, silently:
 | quips | one study, **per prognostic factor and outcome** |
 | probast-ai | one **model**, in one study |
 | amstar2 / robis | the **review** |
-| nos / jbi | the **study** |
+| nos / jbi | the **study** — for nos, `--scope cohort` or `--scope case-control` is required: two separate 8-item, 9-star forms, never one out of 18 |
 | grade | **one outcome**, across the whole body of evidence |
 
 An appraisal that produces one RoB 2 verdict "for the trial" has used the wrong unit and is not
@@ -100,17 +100,21 @@ python3 "$A" --skeleton rob2 --scope assignment > appraisal.md
 Answer each signalling question from **what the paper actually says**, pointing at the specific
 sentence, table or section. Do not infer past what is reported: **"No information" is a normal,
 common, honest answer**, not a failure to find something. A conditional question whose
-condition is not met ("If Y/PY to 2.4: …") is answered **N/A** — never left blank. In the
-reference files each item carries guidance and a polarity tag:
+condition is not met ("If Y/PY to 2.4: …") is answered **N/A** — never left blank, and only
+there: where the instrument offers no N/A (RoB 2's unconditional questions, every ROBIS item,
+every Newcastle-Ottawa item, PROBAST+AI except its "If … was used" questions) `--verify`
+rejects it. In the reference files each item carries guidance and a polarity tag:
 
 - **normal** — `No` is the problem;
 - **reverse** — `Yes` is the problem (RoB 2's 1.3, 4.1, 4.2; ROBINS-I's 6.4; ROBIS's 1.4);
 - **router** — the answer decides which question comes next and means nothing on its own
-  (RoB 2's 2.1: every open-label trial answers Yes, and scoring that as a problem would rate
-  every unblinded trial high risk);
+  (ROBINS-I's 1.2 and 1.3);
 - **middle** — a problem answer rules out the low tier but, on its own, goes no higher than
   the middle one (ROBINS-I's 1.1: potential for confounding is Yes for nearly every
   observational study; it rules out Low, and 1.4–1.8 decide whether it is Serious).
+
+RoB 2 does not use these tags for its verdict: its rollup runs the published per-domain
+algorithm (step 4), where one answer opens the next question — 3.1 *No* with 3.2 *Yes* is Low.
 
 Answer words are **per instrument**. Each reference file lists its vocabulary and the only
 shorthands it accepts — `PY` is *Probably yes* in RoB 2, ROBINS and PROBAST+AI, *Partial yes*
@@ -135,11 +139,20 @@ fails it; fill the gaps or say why an item is genuinely N/A.
 
 - **AMSTAR 2, Newcastle-Ottawa, GRADE** — the rating *is* an algorithm, and it is reproduced
   exactly (AMSTAR 2's critical-flaw table, the star count, GRADE's start-and-adjust).
-- **RoB 2, ROBINS-I, ROBINS-E, QUADAS-2, QUIPS, JBI, ROBIS** — the rollup reports what the
+  AMSTAR 2's *Partial yes* is counted as a non-critical weakness on every item that offers it
+  (2, 4, 7, 8, 9) — a convention the rollup states, because the paper does not fix one.
+- **RoB 2** — the rollup runs the 22 August 2019 algorithm domain by domain and prints the path
+  it took ("3.1 'No' → 3.2 'Yes'"). *No information* goes where the algorithm puts it: compatible
+  with Low at 1.1, 1.3 or 4.1, the High branch at 2.5, 2.7, 3.4 or 4.5. N/A at a question the
+  walk reaches is INCOMPLETE. The "several Some concerns make it High" clause of the overall is a
+  judgement the rollup reminds you of; it does not make it.
+- **ROBINS-I, ROBINS-E, QUADAS-2, QUIPS, JBI, ROBIS** — the rollup reports what the
   recorded answers *force* and names the questions that forced it. It does **not** reproduce
   the official flowcharts, which branch on particular questions. For a borderline domain, run
   the answers through the source algorithm and say that you did. QUIPS's *Partly* and any
-  *No information* / *Unclear* put a domain in the middle tier, never in LOW.
+  *No information* / *Unclear* put a domain in the middle tier, never in LOW. For ROBIS the
+  implied overall is the phase-3 group alone — domains 1–4 are concerns that inform it, and a
+  concern the interpretation addressed (3A *Yes*) can still end Low.
 
 Nothing is rated from a partial record. A domain with a blank or invalid answer is
 **INCOMPLETE** and makes the overall INCOMPLETE; GRADE prints `CERTAINTY: INCOMPLETE` while any
@@ -162,8 +175,8 @@ judgement resting on an unexamined question reads exactly like one resting on th
 
 Then per domain: the verdict plus one sentence of rationale, and for QUADAS-2 and PROBAST+AI
 the separate applicability judgement — one per domain 1–3, which is how the QUADAS-2 skeleton
-prints the slots. ROBIS's phase 3 (3A–3C) is its own group, not part of domain 3. Then the
-overall, with a paragraph.
+prints the slots. ROBIS's phase 3 (3A–3C) is its own group, not part of domain 3, and it is
+ROBIS's overall judgement. Then the overall, with a paragraph.
 
 You may override the arithmetic — but only explicitly. "Domain 4 is High on the algorithm
 because of the unblinded assessor, but the outcome is all-cause mortality from a national
@@ -193,7 +206,14 @@ python3 "$C" --counts
 
 `--verify` reads each answer from the Answer (PROBAST+AI) or Status (TRIPOD+AI) cell only, and
 for PROBAST+AI only inside its own pass's section — keep the `### Quality (development)` and
-`### Risk of bias (evaluation)` headings the skeleton prints.
+`### Risk of bias (evaluation)` headings the skeleton prints. PROBAST+AI accepts N/A only on its
+conditional questions (development 4.4; evaluation 4.4–4.6).
+
+TRIPOD+AI for Abstracts numbers its 13 items 1–13, the same ids as main items 1–13. Put an
+abstract check under a heading that names it ("## TRIPOD+AI for Abstracts"): nothing under such
+a heading is read as a main-checklist answer. A numbered gap list ("1. Item 18e — Missing") is
+not read as answering item 1, and a table's item id comes from its *Item* column when that is
+not the first one.
 
 PROBAST+AI is **16 signalling questions for development and 18 for evaluation — 34 in total**,
 not 23. Domains 1–3 carry the *same question texts* in both halves and are **answered twice**

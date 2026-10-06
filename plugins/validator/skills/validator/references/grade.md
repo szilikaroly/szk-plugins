@@ -89,7 +89,11 @@ upgrade domains of a body of randomised trials, where they are not considered.
 
 ## Domain 8 — Opposing plausible residual confounding
 
-**8.1 (all) — Would all plausible residual confounding have reduced the observed effect, or created a spurious null?**
+**8.1 (all) — Would all plausible residual confounding or bias have reduced the effect that was observed — or, where the results show no effect, have suggested one that is not there?**
+*Yes* (+1) only when every plausible bias works against the finding: it would have shrunk a
+demonstrated effect, or it would have manufactured an apparent effect where none was found. A
+null result that confounding itself could explain is not a reason to rate up. (2.0.0 asked
+whether confounding had "created a spurious null", the reverse of the GRADE criterion.)
 
 ## How the arithmetic works
 
@@ -117,8 +121,8 @@ throws that away.
 
 The GRADE Handbook (Schünemann H, Brożek J, Guyatt G, Oxman A, eds., updated October 2013) and
 the GRADE series in J Clin Epidemiol 2011;64 — publication bias in part 5 (Guyatt et al.,
-PMID 21802904), rating up, including two levels for a very large effect, in part 9 (Guyatt et
-al., PMID 21802902). Domain names and the rating arithmetic follow
+PMID 21802904), rating up, including two levels for a very large effect and the opposing-bias criterion of
+domain 8, in part 9 (Guyatt et al., PMID 21802902). Domain names and the rating arithmetic follow
 those sources; the guidance text here is a working summary. For a published Summary of
 Findings table, use GRADEpro GDT — and note that the ROBINS-I-based approach to starting level
 for non-randomised evidence is a documented variant, not the default.

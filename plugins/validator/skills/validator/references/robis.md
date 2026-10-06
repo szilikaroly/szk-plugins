@@ -10,6 +10,9 @@ verdicts: Low|High|Unclear
 tiers: Low|Unclear|High
 published_items: 24
 unit: REVIEW
+not_applicable: none
+overall_from: P3
+overall_note: ROBIS rates domains 1-4 as concerns that inform phase 3; the overall risk of bias is the phase-3 judgement, not the worst domain (Whiting 2016, PMC4687950, section 3.3).
 use_for: assessing risk of bias in a systematic review — the companion question to AMSTAR 2's methodological quality
 -->
 
@@ -78,7 +81,15 @@ itself at risk unless the authors did something about it.
 Scored normally: `No` — emphasising significant results — is the problem.
 
 Phase 3 produces the overall **Low / High / Unclear** risk of bias for the review. It is a
-judgement, made in the light of the four domains, not a tally of them.
+judgement, made in the light of the four domains, not a tally of them — a domain-4 concern that
+the interpretation addressed (3A Yes) can still end in an overall Low. `--rollup` therefore
+lists domains 1–4 as concerns and takes the implied overall from phase 3 alone; in 2.0.0 it
+applied the RoB 2 rule "one high domain sets the overall" and rated such a review High at
+exit 0. A blank anywhere still makes the overall INCOMPLETE.
+
+Answers are **Yes / Probably yes / Probably no / No / No information** on every item; ROBIS
+has no not-applicable option, and `--verify` rejects N/A (in 2.0.0 a record with all 24
+answers N/A verified complete).
 
 ## Provenance
 

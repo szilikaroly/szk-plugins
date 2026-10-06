@@ -19,6 +19,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import appraise as A  # noqa: E402
 import checklist as C  # noqa: E402
 
+REF_DIR = A.REF
+
 
 def _ok(label: str, cond: bool) -> bool:
     print(f"  {'PASS' if cond else 'FAIL'}  {label}")
@@ -128,13 +130,15 @@ def run() -> bool:
     print("\n[polarity]")
     lines = "\n".join(A.rollup_signalling(rob2, got, rob2.scoped("assignment")))
     # 1.3 answered "No" is GOOD (reverse); 4.1/4.2 "No" is GOOD (reverse);
-    # 2.1/2.2 "Yes" is normal for an open-label trial (router).
+    # 2.1/2.2 "Yes" is normal for an open-label trial: it only opens 2.3.
+    # (rollup_signalling hands RoB 2 to its own algorithm, rollup_rob2.)
     ok &= _ok("a clean open-label trial is not rated high risk anywhere",
               "HIGH / SERIOUS" not in lines)
     ok &= _ok("domain 1 low despite 1.3='No' (reverse-polarity item)",
               "Domain 1" in lines and "Domain 1 (Randomisation process): LOW" in lines)
-    ok &= _ok("router questions listed but not scored",
-              "routing questions answered, not scored: 2.1, 2.2, 2.3, 2.4" in lines)
+    ok &= _ok("open-label 2.1/2.2 'Yes' only open 2.3: domain 2 LOW, on the algorithm's path",
+              "Domain 2 (Deviations from intended interventions): LOW" in lines
+              and "2.1 'Yes' → 2.2 'Yes' → 2.3 'No' → 2.6 'Yes'" in lines)
 
     dirty = dict(clean, **{"1.2": "No"})
     lines2 = "\n".join(A.rollup_signalling(rob2, dirty, rob2.scoped("assignment")))
@@ -306,11 +310,13 @@ def run() -> bool:
     reo = "\n".join(A.rollup_signalling(re_, re_good, re_.items))
     ok &= _ok("ROBINS-E well-conducted study has no high-risk domain",
               "HIGH / SERIOUS" not in reo)
-    rv = "\n".join(A.rollup_signalling(rob2, dict(clean, **{"1.3": "Yes"}),
-                                       rob2.scoped("assignment")))
-    ok &= _ok("a reverse-worded flag is reported as the Yes it was",
-              "'Yes' or 'Probably yes' at 1.3" in rv
-              and "'No' or 'Probably no' at 1.3" not in rv)
+    rbx = tools["robis"]
+    rbx_good = dict({i["id"]: "Yes" for i in rbx.items}, **{"1.4": "Yes", "1.5": "No",
+                                                            "2.4": "No"})
+    rv = "\n".join(A.rollup_signalling(rbx, rbx_good, rbx.items))
+    ok &= _ok("a reverse-worded flag is reported as the Yes it was (ROBIS 1.4)",
+              "'Yes' or 'Probably yes' at 1.4" in rv
+              and "'No' or 'Probably no' at 1.4" not in rv)
 
     rb = tools["robis"]
     rb_good = dict({i["id"]: "Yes" for i in rb.items}, **{"1.4": "No", "1.5": "No", "2.4": "No"})
@@ -536,7 +542,260 @@ def run() -> bool:
                for sc in ["all"] + _scopes(inst))
     ok &= _ok("no scope of any instrument repeats an item id", uniq)
 
+    ok &= methodology_review(tools)
+
     print(f"\n{'ALL PASSED' if ok else 'FAILURES PRESENT'}")
+    return ok
+
+
+#: An all-low RoB 2 result, answered the way the 2019 template routes it: nobody
+#: aware (2.3-2.5 not asked), ITT (2.7 not asked), complete data (3.2-3.4 not
+#: asked), assessors unaware (4.4-4.5 not asked).
+R2_ASSIGN = {"1.1": "Y", "1.2": "Y", "1.3": "N", "2.1": "N", "2.2": "N", "2.3": "N/A",
+             "2.4": "N/A", "2.5": "N/A", "2.6": "Y", "2.7": "N/A", "3.1": "Y", "3.2": "N/A",
+             "3.3": "N/A", "3.4": "N/A", "4.1": "N", "4.2": "N", "4.3": "N", "4.4": "N/A",
+             "4.5": "N/A", "5.1": "Y", "5.2": "N", "5.3": "N"}
+R2_ADHERE = dict({k: v for k, v in R2_ASSIGN.items() if k != "2.7"},
+                 **{"2.3": "N/A", "2.4": "N", "2.5": "N", "2.6": "N/A"})
+_VERDICT = r"(LOW|SOME CONCERNS / UNCLEAR|HIGH / SERIOUS|INCOMPLETE)"
+
+
+def _verdict(out: str, group: str) -> str | None:
+    m = re.search(rf"{re.escape(group)} \([^)]*\): {_VERDICT}", out)
+    return m.group(1) if m else None
+
+
+def _overall(out: str) -> str | None:
+    m = re.search(r"Implied overall: (LOW|SOME CONCERNS|HIGH / SERIOUS|INCOMPLETE)", out)
+    return m.group(1) if m else None
+
+
+def methodology_review(tools: dict) -> bool:
+    """Regression tests for the methodology review of 2.0.0 (findings F1-F12).
+
+    Each case is a verdict the published instrument gives and the engine did not:
+    run against commit 60e290b (the first 2.0.0 commit), every block below fails.
+    """
+    ok = True
+    rob2 = tools["rob2"]
+    LOW, SOME, HIGH = "LOW", "SOME CONCERNS / UNCLEAR", "HIGH / SERIOUS"
+
+    def r2(over: dict, scope: str = "assignment") -> tuple[object, str]:
+        base = R2_ASSIGN if scope == "assignment" else R2_ADHERE
+        p = _write(_fill(A.skeleton(rob2, scope), dict(base, **over)))
+        return _cli("--rollup", str(p), "--tool", "rob2", "--scope", scope)
+
+    def r2_case(label: str, over: dict, domain: str, want: str,
+                scope: str = "assignment") -> bool:
+        rc, out = r2(over, scope)
+        got = _verdict(out, f"Domain {domain}")
+        overall = {SOME: "SOME CONCERNS"}.get(want, want)
+        return _ok(f"{label}: domain {domain} {want} (got {got}, overall {_overall(out)}, "
+                   f"rc {rc!r})", got == want and _overall(out) == overall and rc == 0)
+
+    print("\n[RoB 2 runs the 2019 per-domain algorithm (F1-F4)]")
+    rc, out = r2({})
+    ok &= _ok(f"an all-low result is LOW in every domain, overall LOW, exit 0 (rc {rc!r})",
+              all(_verdict(out, f"Domain {d}") == LOW for d in "12345")
+              and _overall(out) == "LOW" and rc == 0)
+    # F1 — domain 3: 3.1, 3.2 and 3.3 are gates, not problem answers.
+    ok &= r2_case("F1a 3.1 No, 3.2 Yes (evidence of no bias)",
+                  {"3.1": "N", "3.2": "Y"}, "3", LOW)
+    ok &= r2_case("F1b 3.1/3.2/3.3 No (missingness cannot depend on the value)",
+                  {"3.1": "N", "3.2": "N", "3.3": "N"}, "3", LOW)
+    ok &= r2_case("F1c 3.3 Yes, 3.4 No", {"3.1": "N", "3.2": "N", "3.3": "Y", "3.4": "N"},
+                  "3", SOME)
+    ok &= r2_case("F1 3.3 NI, 3.4 NI", {"3.1": "N", "3.2": "N", "3.3": "NI", "3.4": "NI"},
+                  "3", HIGH)
+    rc, out = r2({"3.1": "N", "3.2": "N/A"})
+    ok &= _ok(f"F1 N/A at 3.2 after 3.1 No: INCOMPLETE, names 3.2, exit 1 (rc {rc!r})",
+              _verdict(out, "Domain 3") == "INCOMPLETE" and "3.2" in out and rc == 1)
+    # F2 — domain 2 (assignment) part 1 and domain 4: 2.3/2.4/4.4 are scored.
+    aware = {"2.1": "Y", "2.2": "Y"}
+    ok &= r2_case("F2 2.3 NI (no information on deviations)", dict(aware, **{"2.3": "NI"}),
+                  "2", SOME)
+    ok &= r2_case("F2 2.3 Yes, 2.4 No", dict(aware, **{"2.3": "Y", "2.4": "N"}), "2", SOME)
+    ok &= r2_case("F2 2.4 Yes, 2.5 Yes (balanced)",
+                  dict(aware, **{"2.3": "Y", "2.4": "Y", "2.5": "Y"}), "2", SOME)
+    ok &= r2_case("F2 2.5 NI", dict(aware, **{"2.3": "Y", "2.4": "Y", "2.5": "NI"}), "2", HIGH)
+    ok &= r2_case("F2 2.6 NI, 2.7 NI", {"2.6": "NI", "2.7": "NI"}, "2", HIGH)
+    ok &= r2_case("F2 4.4 Yes, 4.5 No", {"4.3": "Y", "4.4": "Y", "4.5": "N"}, "4", SOME)
+    ok &= r2_case("F2 4.5 NI", {"4.3": "Y", "4.4": "Y", "4.5": "NI"}, "4", HIGH)
+    # F3 — 1.1, 1.3 (with 1.2 Yes), 2.6 with 2.7 No, and 5.1 are middle; NI at the
+    # gating questions 1.1, 1.3 and 4.1 does not rule out Low.
+    ok &= r2_case("F3 1.1 No with concealment (1.2 Yes)", {"1.1": "N"}, "1", SOME)
+    ok &= r2_case("F3 1.3 Yes with concealment (1.2 Yes)", {"1.3": "Y"}, "1", SOME)
+    ok &= r2_case("F3 1.2 No is High", {"1.2": "N"}, "1", HIGH)
+    ok &= r2_case("F3 1.2 NI, 1.3 Yes is High", {"1.2": "NI", "1.3": "Y"}, "1", HIGH)
+    ok &= r2_case("F3 1.2 NI, 1.3 No is Some concerns", {"1.2": "NI"}, "1", SOME)
+    ok &= r2_case("F3 1.1 NI and 1.3 NI are compatible with Low", {"1.1": "NI", "1.3": "NI"},
+                  "1", LOW)
+    ok &= r2_case("F3 2.6 No, 2.7 No", {"2.6": "N", "2.7": "N"}, "2", SOME)
+    ok &= r2_case("F3 2.6 No, 2.7 Yes", {"2.6": "N", "2.7": "Y"}, "2", HIGH)
+    ok &= r2_case("F3 5.1 No, 5.2/5.3 No", {"5.1": "N"}, "5", SOME)
+    ok &= r2_case("F3 5.2 NI, neither Yes", {"5.2": "NI"}, "5", SOME)
+    ok &= r2_case("F3 5.3 Yes", {"5.3": "Y"}, "5", HIGH)
+    ok &= r2_case("F3 4.1 NI follows the No branch", {"4.1": "NI"}, "4", LOW)
+    ok &= r2_case("F3 4.2 NI caps an otherwise-low domain 4 at Some concerns",
+                  {"4.2": "NI"}, "4", SOME)
+    # F4 — effect of adhering: NI at 2.6 is the bad branch.
+    ok &= r2_case("F4 adherence baseline", {}, "2", LOW, scope="adherence")
+    ok &= r2_case("F4 adherence 2.4 Yes, 2.6 Yes", {"2.4": "Y", "2.6": "Y"}, "2", SOME,
+                  scope="adherence")
+    ok &= r2_case("F4 adherence 2.4 Yes, 2.6 NI", {"2.4": "Y", "2.6": "NI"}, "2", HIGH,
+                  scope="adherence")
+    ok &= r2_case("F4 adherence 2.5 NI, 2.6 NI", {"2.5": "NI", "2.6": "NI"}, "2", HIGH,
+                  scope="adherence")
+    ref = (REF_DIR / "rob2.md").read_text(encoding="utf-8")
+    ok &= _ok("F4 rob2.md no longer says adherence domain 2 is High only when 2.6 is No",
+              "only when 2.6, the analysis\nquestion, is No" not in ref)
+    rc, out = r2({"2.1": "Y", "2.2": "Y", "2.3": "N"})
+    ok &= _ok("an open-label trial without trial-context deviations (2.3 No) is LOW",
+              _verdict(out, "Domain 2") == LOW and rc == 0)
+
+    print("\n[N/A only where the instrument offers it (F5)]")
+    all_na = {it["id"]: "N/A" for it in rob2.scoped("assignment")}
+    p = _write(_fill(A.skeleton(rob2, "assignment"), all_na))
+    rc, out = _cli("--verify", str(p), "--tool", "rob2", "--scope", "assignment")
+    ok &= _ok(f"RoB 2 all N/A does not verify complete (rc {rc!r})",
+              rc == 1 and "INVALID" in out and "1.1" in out and "complete" not in out)
+    rc, out = _cli("--rollup", str(p), "--tool", "rob2", "--scope", "assignment")
+    ok &= _ok(f"... and rolls up INCOMPLETE, not LOW (rc {rc!r})",
+              rc == 1 and _overall(out) == "INCOMPLETE")
+    rc, out = _cli("--verify", str(_write(_fill(A.skeleton(rob2, "assignment"), R2_ASSIGN))),
+                   "--tool", "rob2", "--scope", "assignment")
+    ok &= _ok("RoB 2 N/A on the conditional questions still verifies complete", rc == 0)
+    rc, out = _cli("--verify", str(_write(_fill(A.skeleton(rob2, "adherence"), R2_ADHERE))),
+                   "--tool", "rob2", "--scope", "adherence")
+    ok &= _ok("RoB 2 adherence N/A at 2.3 and 2.6 verifies complete", rc == 0)
+    rb = tools["robis"]
+    p = _write(_fill(A.skeleton(rb, "all"), {i["id"]: "N/A" for i in rb.items}))
+    rc, out = _cli("--verify", str(p), "--tool", "robis")
+    ok &= _ok(f"ROBIS all N/A does not verify complete (rc {rc!r})",
+              rc == 1 and "INVALID" in out)
+    pb = C.skeleton_probast("both")
+
+    def probast_fill(answer_for) -> str:
+        out_, cur = [], None
+        for ln in pb.splitlines():
+            if ln.startswith("### "):
+                cur = "development" if "development" in ln else "evaluation"
+            c_ = [x.strip() for x in ln.strip().strip("|").split("|")]
+            if ln.startswith("| ") and re.match(r"\d\.\d", c_[0]):
+                ln = f"| {c_[0]} | {c_[1]} | {answer_for(cur, c_[0], c_[1])} | p.1 |"
+            out_.append(ln)
+        return "\n".join(out_)
+    rc, out = _run(C.verify, _write(probast_fill(lambda *_: "N/A")), "probast", "both")
+    ok &= _ok(f"PROBAST+AI all N/A does not verify complete (rc {rc!r})",
+              rc == 1 and "INVALID" in out and "complete" not in out)
+    cond = probast_fill(lambda p_, q, t: "N/A" if t.startswith("If ") else "Yes")
+    rc, out = _run(C.verify, _write(cond), "probast", "both")
+    ok &= _ok(f"PROBAST+AI N/A on the 'If ...' questions only verifies complete (rc {rc!r})",
+              rc == 0 and "34/34 answered" in out)
+
+    print("\n[ROBIS overall is the phase-3 judgement (F6)]")
+    rb_good = dict({i["id"]: "Yes" for i in rb.items}, **{"1.4": "No", "1.5": "No", "2.4": "No"})
+    p = _write(_fill(A.skeleton(rb, "all"), dict(rb_good, **{"4.5": "No"})))
+    rc, out = _cli("--rollup", str(p), "--tool", "robis")
+    ok &= _ok(f"4.5 No with the concern addressed (3A Yes): domain 4 flagged, overall LOW "
+              f"(got {_overall(out)}, rc {rc!r})",
+              _verdict(out, "Domain 4") == HIGH and _verdict(out, "Phase 3") == LOW
+              and _overall(out) == "LOW" and rc == 0)
+    p = _write(_fill(A.skeleton(rb, "all"), dict(rb_good, **{"4.5": "No", "3A": "No"})))
+    rc, out = _cli("--rollup", str(p), "--tool", "robis")
+    ok &= _ok(f"... not addressed (3A No): overall HIGH (got {_overall(out)})",
+              _overall(out) == "HIGH / SERIOUS")
+    p = _write(_fill(A.skeleton(rb, "all"), {k: v for k, v in rb_good.items() if k != "2.1"}))
+    rc, out = _cli("--rollup", str(p), "--tool", "robis")
+    ok &= _ok("... and a blank in domains 1-4 still makes the overall INCOMPLETE",
+              _overall(out) == "INCOMPLETE" and rc == 1)
+
+    print("\n[Newcastle-Ottawa is one form per study (F7, F8)]")
+    one_row = str(_write("| # | Q | Answer | Evidence |\n|---|---|---|---|\n| S1 | x | Yes | p |"))
+    for argv in (("--skeleton", "nos"), ("--verify", one_row, "--tool", "nos"),
+                 ("--rollup", one_row, "--tool", "nos")):
+        rc, out = _cli(*argv)
+        ok &= _ok(f"'{argv[0]} nos' without --scope is a usage error (rc {rc!r})",
+                  rc == 2 and "slots to fill" not in out and "case-control" in out)
+    rc, out = _cli("--skeleton", "nos", "--scope", "cohort")
+    ok &= _ok("'--skeleton nos --scope cohort' prints the 8 cohort slots",
+              rc == 0 and "8 slots to fill" in out)
+    ns = tools["nos"]
+    p = _write(_fill(A.skeleton(ns, "cohort"), {i["id"]: "N/A" for i in ns.scoped("cohort")}))
+    rc, out = _cli("--rollup", str(p), "--tool", "nos", "--scope", "cohort")
+    ok &= _ok(f"a cohort record with every item N/A is not a final total (rc {rc!r})",
+              rc == 1 and "S1 'N/A'" in out)
+    rc, out = _cli("--verify", str(p), "--tool", "nos", "--scope", "cohort")
+    ok &= _ok("... and does not verify complete", rc == 1 and "INVALID" in out)
+    mixed = "\n".join(A.rollup_nos(ns, {i["id"]: "Yes" for i in ns.items}, ns.items))
+    ok &= _ok("rollup_nos never sums the two forms (no '/18')", "/18" not in mixed)
+
+    print("\n[TRIPOD+AI: the abstracts checklist is not the main checklist (F9)]")
+    blank_main = {"1", "2", "4", "7", "10", "11", "13"}
+    tsk = []
+    for ln in C.skeleton_tripod("both").splitlines():
+        c_ = [x.strip() for x in ln.strip().strip("|").split("|")]
+        if ln.startswith("| ") and len(c_) == 5 and re.match(r"\d", c_[0]) \
+                and c_[0] not in blank_main:
+            ln = f"| {c_[0]} | {c_[1]} | {c_[2]} | Present | sec |"
+        tsk.append(ln)
+    abstracts = ["", "## Item 2 — TRIPOD+AI for Abstracts", "", "| Item | Status |",
+                 "|---|---|"] + [f"| {n} | Present |" for n in range(1, 14)]
+    rc, out = _run(C.verify, _write("\n".join(tsk + abstracts)), "tripod", "both")
+    ok &= _ok(f"abstracts table rows 1-13 do not answer main items "
+              f"({out.splitlines()[0].strip() if out else ''})",
+              rc == 1 and "45/52 answered" in out)
+    prose_abs = ["", "## TRIPOD+AI for Abstracts"] + [f"{n}. Present" for n in range(1, 14)]
+    rc, out = _run(C.verify, _write("\n".join(tsk + prose_abs)), "tripod", "both")
+    ok &= _ok("... nor do numbered prose lines under that heading", rc == 1 and "45/52" in out)
+    gaps = ["", "## Prioritised gaps", "", "1. Item 18e (code availability) — Missing",
+            "2. Item 14 (fairness) — Partial", "4. Item 9 — Missing"]
+    rc, out = _run(C.verify, _write("\n".join(tsk + gaps)), "tripod", "both")
+    ok &= _ok("... nor does a numbered gap list that names other items",
+              rc == 1 and "45/52" in out)
+    gap_tab = ["", "| Priority | Item | Status |", "|---|---|---|", "| 1 | 18e | Missing |",
+               "| 2 | 14 | Partial |"]
+    rc, out = _run(C.verify, _write("\n".join(tsk + gap_tab)), "tripod", "both")
+    ok &= _ok("... nor a gap table whose item column is not the first",
+              rc == 1 and "45/52" in out)
+    sect = [re.sub(r"\|\s+\|\s+\|$", "| Present | p.1 |", ln) if ln.startswith("| 2 |") else ln
+            for ln in tsk]
+    rc, out = _run(C.verify, _write("## Abstract\n\n" + "\n".join(sect)), "tripod", "both")
+    ok &= _ok("a main-checklist row under a plain '## Abstract' heading still counts",
+              "46/52 answered" in out)
+    # The same keying bug in appraise.py: AMSTAR 2's ids are 1-16.
+    am_ = tools["amstar2"]
+    am_txt = "\n".join(["| # | Q | Answer | Evidence |", "|---|---|---|---|"]
+                       + [f"| {i} | q | Yes | p |" for i in range(2, 13)]
+                       + ["", "## Priorities", "1. Item 7 (excluded studies) — No", "",
+                          "| Priority | Item | Answer |", "|---|---|---|", "| 13 | 9 | No |"])
+    got_am, _ = A.read_record(am_txt, am_, "all")
+    ok &= _ok(f"AMSTAR 2: a gap list and a priority table do not answer items 1 and 13 "
+              f"(got {got_am.get('1')!r}, {got_am.get('13')!r})",
+              "1" not in got_am and "13" not in got_am and got_am.get("9") == "Yes")
+
+    print("\n[GRADE rating up for opposing residual confounding (F10)]")
+    t81 = next(i["text"] for i in tools["grade"].items if i["id"] == "8.1")
+    ok &= _ok("8.1 asks about a spurious effect where none was observed, not a 'spurious null'",
+              "spurious null" not in t81 and "no effect" in t81)
+
+    print("\n[AMSTAR 2 Partial yes and mixed-design items (F11, F12)]")
+    am = tools["amstar2"]
+    all_yes = {i["id"]: "Yes" for i in am.items}
+    o8 = "\n".join(A.rollup_amstar2(am, dict(all_yes, **{"8": "Partial yes",
+                                                         "9": "Partial yes"}), am.items))
+    ok &= _ok("Partial yes on item 8 counts like Partial yes on item 9 (2 weaknesses, Moderate)",
+              "Non-critical weaknesses (2): 8, 9" in o8 and "RESULTS: MODERATE" in o8)
+    ok &= _ok("the rollup states the Partial yes convention and that Box 2 is advisory",
+              "convention" in o8.lower() and "Box 2" in o8)
+    amref = (REF_DIR / "amstar2.md").read_text(encoding="utf-8")
+    ok &= _ok("amstar2.md no longer attributes the convention to 'the AMSTAR 2 guidance'",
+              "how the AMSTAR 2 guidance describes" not in amref)
+    sk = A.skeleton(am, "all")
+    ok &= _ok("the AMSTAR 2 skeleton says items 9 and 11 take the worse of RCT and NRSI",
+              re.search(r"9 and 11.*RCT.*NRSI.*worse", sk, re.S) is not None)
+    rc, out = _run(A.verify, _write(sk), am, "all")
+    ok &= _ok("... and that note is not read as an answer (0/16)", "0/16 answered" in out)
     return ok
 
 

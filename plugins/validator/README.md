@@ -47,20 +47,24 @@ items 3A–3C (21 of 24).
 INCOMPLETE, not LOW, and the overall follows; GRADE gives no certainty while a domain is blank
 or publication bias is undecided.
 
-**Polarity is per item.** RoB 2's 1.3, 4.1 and 4.2 are worded so that *Yes* is the problem, and
-2.1–2.4 only route to the next question. Treating every "No" as bad rated a well-conducted
-open-label trial as high risk on three domains at once. A fourth tag, *middle*, marks answers
-that rule out the low tier but cannot by themselves reach the top one — ROBINS-I's "is there
-potential for confounding?" is Yes for nearly every observational study.
+**Polarity is per item.** QUADAS-2, ROBINS and ROBIS items are tagged by which answer is the
+problem; ROBINS-I's 1.2–1.3 only route to the next question. Treating every "No" as bad rated
+a well-conducted study as high risk. A fourth tag, *middle*, marks answers that rule out the low
+tier but cannot by themselves reach the top one — ROBINS-I's "is there potential for
+confounding?" is Yes for nearly every observational study.
 
 **Answer words are per instrument.** Each reference file declares its vocabulary, its
 shorthands and any per-item restriction: *PY* is *Probably yes* in RoB 2 but *Partial yes* in
-AMSTAR 2, and the Newcastle-Ottawa scale gives a partial star only for comparability.
+AMSTAR 2, the Newcastle-Ottawa scale gives a partial star only for comparability, and N/A is
+accepted only where the instrument offers it (RoB 2's conditional questions, none in ROBIS or
+the Newcastle-Ottawa scale).
 
-**Published algorithms are reproduced where they exist** — AMSTAR 2's critical-flaw table, the
-Newcastle-Ottawa star count, GRADE's start-and-adjust — and **not faked where they do not**.
-For RoB 2 and the ROBINS family the rollup reports what the recorded answers force and names
-the questions that forced it, then says explicitly that this is not the official flowchart.
+**Published algorithms are reproduced where they exist** — RoB 2's per-domain algorithm (2019
+guidance; the rollup prints the path it took), AMSTAR 2's critical-flaw table, the
+Newcastle-Ottawa star count, GRADE's start-and-adjust, ROBIS's overall as the phase-3
+judgement — and **not faked where they do not**. For the ROBINS family, QUADAS-2, QUIPS and
+JBI the rollup reports what the recorded answers force and names the questions that forced
+it, then says explicitly that this is not the official flowchart.
 
 ## What it refuses to do
 
@@ -86,7 +90,8 @@ question text, the polarity handling that rated every open-label trial high risk
 the unscoped rollup that reported "9/18 stars" for a Newcastle-Ottawa cohort, and
 the GRADE substring test in which "not serious" contained "serious" and
 downgraded every domain the assessor had explicitly cleared. The 2.0.0 block
-adds one test per defect listed below; each of them fails against 1.0.0.
+adds one test per defect listed below; each of them fails against 1.0.0, and the
+methodology-review block fails against the first 2.0.0 commit (60e290b).
 
 ## Provenance
 
@@ -96,6 +101,45 @@ paraphrases in each tool's vocabulary — use the published wording when an asse
 in a manuscript, and name the tool version in the methods section.
 
 ## Changes
+
+### 2.0.0 — methodology review (same release)
+
+A review of 2.0.0 against the published instruments found verdicts that the instruments do not
+give. Each fix has regression tests in `scripts/selftest.py` (103 → 163 assertions; run against
+the first 2.0.0 commit, 42 of them fail).
+
+- **RoB 2 runs its published algorithm.** The generic tags cannot express a gate: 3.1 *No* with
+  3.2 *Yes* (any result with a robustness sensitivity analysis) was rated HIGH, overall HIGH,
+  exit 0; 2.3 *NI*, 2.4 *Yes* with 2.5 *Yes*, and 4.4 *Yes* with 4.5 *No* came out LOW; *NI* at
+  2.5, 2.7 and 4.5, and at the adhering variant's 2.6, stayed at Some concerns; 1.1 *No* or
+  1.3 *Yes* with concealed allocation, 2.6 *No* with 2.7 *No*, and 5.1 *No* were HIGH; *NI* at
+  1.1, 1.3 and 4.1 ruled out Low. `--rollup` now walks each domain the way the 22 August 2019
+  guidance routes it (criteria tables as reproduced in PMC8191126) and prints the path;
+  N/A at a question the walk reaches makes the domain INCOMPLETE.
+- **N/A only where offered.** RoB 2 (outside its conditional questions), ROBIS and PROBAST+AI
+  (outside development 4.4, evaluation 4.4–4.6) accepted N/A everywhere: an all-N/A record
+  verified complete and rolled up LOW. New meta key `not_applicable` (scope-qualified ids allowed).
+- **ROBIS overall is the phase-3 judgement** (Whiting 2016, PMC4687950, section 3.3), not the
+  worst of domains 1–4: a domain-4 concern addressed in the interpretation (3A *Yes*) ended
+  HIGH at exit 0. New meta key `overall_from`.
+- **Newcastle-Ottawa is one form per study.** Without `--scope` the cohort and case-control
+  forms merged into 16 slots and "9/18 stars"; `--scope cohort|case-control` is now required
+  (exit 2 otherwise; meta key `scope_required`), and `rollup_nos` refuses a mixed item set.
+  N/A, which the scale does not offer, is rejected — an all-N/A record was a final "0/9 stars".
+- **TRIPOD+AI for Abstracts** rows 1–13 answered main items 1–13, and a numbered gap list
+  ("1. Item 18e — Missing") answered item 1: blank main items verified 52/52. Nothing under a
+  heading that names the abstracts checklist is read; a prose line that names another item is
+  skipped; a table's *Item* column is the id when it is not the first column. `appraise.py`
+  had the same keying bug (an AMSTAR 2 gap list "1. Item 7 — No" answered item 1) and gets the
+  same two rules.
+- **GRADE 8.1** asked whether confounding "created a spurious null" — the reverse of GRADE's
+  criterion (PMID 21802902), which rates up when all plausible biases would have suggested an
+  effect where none is observed. Reworded.
+- **AMSTAR 2 Partial yes** counted as a weakness on critical items but was silently "met" on
+  item 8; it is now a non-critical weakness on every item that offers it, and the rollup states
+  that this is the tool's convention (the paper does not fix one) and that Box 2 is advisory.
+  The skeleton and the rollup say that items 9 and 11 hold the worse of the RCT and NRSI
+  judgements in a mixed-design review.
 
 ### 2.0.0 — the defects a real workbench found
 
