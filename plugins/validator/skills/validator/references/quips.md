@@ -6,6 +6,8 @@ name: QUIPS (Quality In Prognosis Studies)
 answers: Yes|Partly|No|Unclear
 aliases: Y=Yes; N=No; U=Unclear; Partial=Partly; Unsure=Unclear
 unknown_answer: Unclear
+not_applicable: 3f, 5e
+overall_note: QUIPS publishes no rule for combining its six domain ratings; the overall line above is the worst domain, for orientation only — report the six ratings and state any combination rule you apply.
 verdicts: Low|Moderate|High
 tiers: Low|Moderate|High
 published_items: 31
@@ -64,7 +66,7 @@ reported alone.
 **3c (all) — Are continuous variables reported as such, or are appropriate (not data-derived) cut-points used?**
 **3d (all) — Are the method and setting of prognostic factor measurement the same for all participants?**
 **3e (all) — Does an adequate proportion of the sample have complete data on the prognostic factor?**
-**3f (all) — Are appropriate methods of imputation used for missing prognostic factor data?**
+**3f (all) — If prognostic factor data were missing, were appropriate methods of imputation used?**
 
 **Continuous factors dichotomised at a data-derived cut-point** (3c) are the most frequent
 measurement problem in this field: an "optimal" cut-point found in the same dataset inflates
@@ -92,7 +94,10 @@ the outcome needs judgement; say so in the domain rationale.
 
 Prognostic *prediction* does not require confounding control; prognostic *explanation* does.
 Decide which claim the paper is making before rating this domain — the same analysis is sound
-for one and inadequate for the other. 5e is N/A when nothing was imputed.
+for one and inadequate for the other. 5e is N/A when nothing was imputed, and 3f when no
+prognostic factor data were missing — the only two items that take N/A. QUIPS's own scale is
+Yes / Partly / No / Unclear (*Partial* and *Unsure* are read as Partly and Unclear); N/A
+anywhere else is rejected — in 2.0.0 an all-N/A record rolled up Low.
 
 ## Domain 6 — Statistical analysis and reporting
 
@@ -107,7 +112,9 @@ few events per candidate variable makes any model inadequate for the design (6c)
 ## Reporting it
 
 Six domain ratings with a sentence each, then a short statement of which domains actually
-threaten the review's conclusion. Reviews often present all six as equally weighted; in most
+threaten the review's conclusion. QUIPS has no published rule for an overall rating per study
+(Grooten 2019 built its own and says so); the rollup's overall line is the worst domain and
+says that it is only for orientation. Reviews often present all six as equally weighted; in most
 prognostic-factor questions, confounding and reporting carry the weight.
 
 ## Provenance

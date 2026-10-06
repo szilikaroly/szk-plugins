@@ -12,6 +12,7 @@ published_items: 11
 unit: STUDY, but per index test — a study comparing two index tests is assessed once per test
 use_for: diagnostic test accuracy studies contributing sensitivity and specificity
 applicability: domains 1-3
+not_applicable: 2.2
 -->
 
 ## Two judgements per domain, and they are not the same judgement
@@ -49,7 +50,8 @@ with comorbidity raises apparent accuracy.
 **2.2 (all) — If a threshold was used, was it pre-specified?**
 A threshold chosen from the study's own ROC curve is optimised on the data it is evaluated on,
 and the reported sensitivity/specificity pair is optimistic. This is very common and rarely
-acknowledged.
+acknowledged. The only question here that may be answered N/A — for an index test read without
+a threshold; QUADAS-2 itself offers Yes / No / Unclear, and N/A anywhere else is rejected.
 
 ## Domain 3 — Reference standard
 
@@ -74,12 +76,20 @@ Excluding indeterminate index-test results is the usual failure, and it is usual
 in the abstract.
 
 Every QUADAS-2 signalling question is worded so that **Yes means low concern** — none is
-reverse-worded. A tailored question you add should keep that convention.
+reverse-worded. A tailored question you add should keep that convention. The paper's rule: all
+Yes in a domain allows Low; a No flags potential for bias, which the reviewer then judges. The
+rollup rates a domain with a No at the top tier — what the answer flags — and leaves a lower
+rating to an override you state.
 
 ## Reporting it
 
 A per-domain table with two columns — risk of bias and (for domains 1–3) applicability
-concerns — and Low / High / Unclear in each. `Unclear` is a legitimate, frequent answer in
+concerns — and Low / High / Unclear in each. The applicability judgements have no signalling
+questions, so nothing computes them: fill the skeleton's `**Domain N applicability:**` line
+(or an *Applicability* column of a summary table) for domains 1, 2 and 3. `--verify` names
+any that is missing and exits 1, and `--rollup` prints the three with an overall applicability
+(low concern only when all three are Low) and exits 1 while one is missing. In 2.0.0 a record
+with every applicability slot blank verified complete. `Unclear` is a legitimate, frequent answer in
 this literature; a QUADAS-2 assessment with no Unclear cells has usually inferred past what
 was reported.
 

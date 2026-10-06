@@ -85,6 +85,21 @@ NO_ISH = frozenset({"no", "probably no"})
 UNKNOWN = frozenset({"no information", "unclear"})
 #: QUIPS's middle level. It is an answer, and it is not "no problem".
 PARTLY = frozenset({"partly"})
+#: ROBINS-E's graded No (PMC11098530, section 3): the weak form keeps the problem
+#: small enough for the middle tier, the strong form is the top tier.
+WEAK_NO = frozenset({"weak no"})
+STRONG_NO = frozenset({"strong no"})
+
+#: The answer codes a routing condition may name: "If Y/PY/NI to 2.1 or 2.2:".
+_COND_CODES = r"(?:PY|PN|NI|WN|SN|Y|N)"
+#: A question that opens with its routing condition. "If applicable, and if …"
+#: (RoB 2's adherence 2.3) keeps N/A open even when the condition holds.
+_COND_LEAD = re.compile(
+    rf"^\s*if\s+(?P<optional>applicable,?\s*(?:and\s+)?if\s+)?"
+    rf"(?P<body>{_COND_CODES}(?:/{_COND_CODES})*\s+to\s+[^:?]*?)\s*[:?]", re.I)
+_COND_CLAUSE = re.compile(
+    rf"(?<![\w/])(?P<codes>{_COND_CODES}(?:/{_COND_CODES})*)\s+to\s+"
+    rf"(?P<ids>[0-9][\w.]*(?:\s*(?:,|\bor\b|\band\b)\s*[0-9][\w.]*)*)", re.I)
 
 
 def _canonical(answer: str) -> str:
@@ -129,6 +144,7 @@ class Instrument:
         self._parse()
         self._vocabulary()
         self._check_ids()
+        self._conditions()
 
     def _parse(self) -> None:
         text = self.path.read_text(encoding="utf-8")
@@ -210,6 +226,12 @@ class Instrument:
         na = self.meta.get("not_applicable")
         self.na_items: set[str] | None = (
             None if na is None else {x.lower() for x in _ids(na) if x.lower() != "none"})
+        # `restricted_answers`: words of the vocabulary that only the items listed
+        # in `item_answers` offer — ROBINS-E's weak and strong No exist on its
+        # first confounding question, not on every question of the tool.
+        self.restricted: set[str] = {
+            _canonical(a) for a in self.meta.get("restricted_answers", "").split("|")
+            if a.strip()}
         toks = sorted(self.spelling.values(), key=len, reverse=True)
         self.token_re = re.compile(
             r"(?<![\w/])(" + "|".join(re.escape(t) for t in toks) + r")(?![\w/])", re.I)
@@ -230,6 +252,102 @@ class Instrument:
                     raise ValueError(f"{self.path.name}: item id {it['id']} occurs twice "
                                      f"in scope '{sc}'")
                 seen.add(it["id"])
+
+    def _conditions(self) -> None:
+        """Parse each question's routing condition ("If Y/PY to 2.2 and 2.3, or N/PN to 2.4:").
+
+        Stored on the item as `cond`: OR-ed (or AND-ed) clauses, each a set of
+        canonical answers and the ids it applies to (any of "2.2 or 2.3", all of
+        "2.2 and 2.3"). The condition is the item's own text, so it cannot drift
+        from what the question says; a condition naming an answer the instrument
+        does not have, or an id it does not have, is a load error.
+        """
+        if self.meta.get("engine"):
+            return
+        known = {it["id"] for it in self.items}
+        for it in self.items:
+            m = _COND_LEAD.match(it["text"])
+            if not m:
+                continue
+            body = m.group("body")
+            clauses, joins, last = [], [], 0
+            for c in _COND_CLAUSE.finditer(body):
+                if clauses:
+                    joins.append(body[last:c.start()])
+                last = c.end()
+                ids_txt = c.group("ids")
+                if re.search(r"\band\b", ids_txt, re.I) and re.search(r"\bor\b", ids_txt, re.I):
+                    raise ValueError(f"{self.path.name}: item {it['id']}: condition "
+                                     f"'{body}' mixes 'and' and 'or' in one clause")
+                ids = [x for x in re.split(r"\s*(?:,|\bor\b|\band\b)\s*", ids_txt, flags=re.I)
+                       if x]
+                codes = set()
+                for code in c.group("codes").split("/"):
+                    full = self.canon.get(code.lower())
+                    if full is None:
+                        raise ValueError(f"{self.path.name}: item {it['id']}: condition names "
+                                         f"'{code}', which is not an answer of this instrument")
+                    codes.add(full)
+                for i in ids:
+                    if i not in known:
+                        raise ValueError(f"{self.path.name}: item {it['id']}: condition names "
+                                         f"item {i}, which this instrument does not have")
+                clauses.append((frozenset(codes), ids,
+                                "all" if re.search(r"\band\b", ids_txt, re.I) else "any"))
+            if not clauses:
+                raise ValueError(f"{self.path.name}: item {it['id']}: unreadable condition "
+                                 f"'{body}'")
+            ors = [j for j in joins if re.search(r"\bor\b", j, re.I)]
+            ands = [j for j in joins if re.search(r"\band\b", j, re.I)]
+            if ors and ands:
+                raise ValueError(f"{self.path.name}: item {it['id']}: condition '{body}' "
+                                 f"mixes 'and' and 'or' between clauses")
+            it["cond"] = {"clauses": clauses, "mode": "all" if ands else "any",
+                          "text": f"If {body}", "optional": bool(m.group("optional"))}
+
+    def reached(self, items: list[dict], valid: dict[str, str]) -> dict[str, bool | None]:
+        """For each item: is it asked, given the answers before it? None = cannot tell yet.
+
+        An unconditional question is always asked. A conditional one is asked when
+        its condition holds on the answers of questions that were themselves asked:
+        an answer recorded at a question the routing never reached counts as N/A,
+        so a stray "No" there cannot open the next question either.
+        """
+        in_scope = {it["id"] for it in items}
+        state: dict[str, bool | None] = {}
+
+        def value(rid: str) -> str | None:
+            if rid not in in_scope or state.get(rid) is False:
+                return "n/a"
+            a = valid.get(rid)
+            return None if a is None else self.norm(a)
+
+        for it in items:
+            c = it.get("cond")
+            if not c:
+                state[it["id"]] = True
+                continue
+            results = []
+            for codes, rids, mode in c["clauses"]:
+                vals = [value(r) for r in rids]
+                if mode == "any":
+                    results.append(True if any(v in codes for v in vals if v is not None)
+                                   else None if None in vals else False)
+                else:
+                    results.append(False if any(v not in codes for v in vals if v is not None)
+                                   else None if None in vals else True)
+            if c["mode"] == "any":
+                state[it["id"]] = True if True in results else None if None in results else False
+            else:
+                state[it["id"]] = False if False in results else None if None in results else True
+        return state
+
+    def na_where_asked(self, items: list[dict], valid: dict[str, str]) -> list[dict]:
+        """Conditional questions answered N/A although their condition holds."""
+        reach = self.reached(items, valid)
+        return [it for it in items
+                if it.get("cond") and not it["cond"]["optional"] and reach.get(it["id"])
+                and it["id"] in valid and self.norm(valid[it["id"]]) == "n/a"]
 
     # ------------------------------------------------------------ properties
 
@@ -308,10 +426,10 @@ class Instrument:
         for k in self._keys(it):
             if k in self.item_vocab:
                 return self.item_vocab[k]
-        if self.na_items is None:
+        if self.na_items is None and not self.restricted:
             return None
-        allowed = {_canonical(a) for a in self.answers}
-        if any(k.lower() in self.na_items for k in self._keys(it)):
+        allowed = {_canonical(a) for a in self.answers} - self.restricted
+        if self.na_items is None or any(k.lower() in self.na_items for k in self._keys(it)):
             allowed.add("n/a")
         return allowed
 
@@ -347,6 +465,9 @@ class Instrument:
             out.append("N/A only at " + ", ".join(na) + " — a conditional question whose "
                        "condition is not met; every other item needs an answer"
                        if na else "N/A is not an answer in this instrument")
+        if self.restricted:
+            words = [a for a in self.answers if _canonical(a) in self.restricted]
+            out.append(f"{' / '.join(words)} only where an item lists them above")
         return out
 
     def shorthand_text(self) -> str:
@@ -705,6 +826,59 @@ def read_answers(path: Path, inst: Instrument, scope: str) -> dict[str, str]:
     return read_record(path.read_text(encoding="utf-8"), inst, scope)[0]
 
 
+_APPLIC_LINE = re.compile(
+    r"^\s*(?:[-*+]\s+)?(?:\*\*|__)?\s*(?:domain|d)\s*(?P<dom>\d+)\s+applicability\s*"
+    r"(?:concerns?)?\s*:?\s*(?:\*\*|__)?\s*:?\s*(?P<rest>.*)$", re.I)
+
+
+def read_applicability(text: str, inst: Instrument) -> tuple[dict[str, str], dict[str, str]]:
+    """({domain: verdict}, {domain: unrecognised value}) for the domains that take one.
+
+    QUADAS-2 rates applicability once per domain 1-3, as a judgement of its own:
+    no signalling question feeds it, so nothing can compute it, and in 2.0.0 a
+    record with every applicability slot blank verified complete. Read from the
+    skeleton's `**Domain N applicability:**` line, or from a summary table with an
+    applicability column whose first cell names the domain.
+    """
+    doms = _applicability_domains(inst)
+    got: dict[str, str] = {}
+    bad: dict[str, str] = {}
+    if not doms:
+        return got, bad
+    verdicts = {v.lower(): v for v in inst.verdicts}
+    template = " / ".join(inst.verdicts).lower()
+
+    def take(dom: str, raw: str) -> None:
+        if dom not in doms or dom in got or dom in bad:
+            return
+        value = _clean(raw)
+        if not value or value.lower().startswith(template):
+            return
+        word = re.split(r"[\s—–,.;:(/]", value, maxsplit=1)[0].strip("*_").lower()
+        if word in verdicts:
+            got[dom] = verdicts[word]
+        else:
+            bad[dom] = value[:40]
+
+    for line in text.splitlines():
+        m = _APPLIC_LINE.match(line)
+        if m:
+            take(m.group("dom"), m.group("rest"))
+    titles = {inst.domains.get(d, "").lower(): d for d in doms}
+    for cells, header in table_rows(text):
+        ci = next((i for i, h in enumerate(header or []) if h.strip("*_ ").startswith("applicab")),
+                  None)
+        if ci is None or ci >= len(cells) or not cells:
+            continue
+        first = _clean(cells[0]).lower()
+        m = re.match(r"^(?:domain\s*|d)?(\d+)\b", first)
+        dom = m.group(1) if m else next((d for t, d in titles.items() if t and first.startswith(t)),
+                                        None)
+        if dom:
+            take(dom, cells[ci])
+    return got, bad
+
+
 # --------------------------------------------------------------------------- legacy ids
 
 
@@ -824,8 +998,14 @@ def migrate(path: Path, inst: Instrument, scope: str) -> int:
     retired = set(inst.legacy_retired())
     legacy_pat = inst.meta.get("legacy_ids")
     current = {it["id"] for it in inst.items}
+    # The variant being migrated to. ROBINS-I's 1.x 4.3 (the adhering-analysis
+    # question, filed under the effect of assignment) becomes 4.6, which only the
+    # adhering variant asks: 2.0.0 reported "moved: 4.3→4.6" for --scope
+    # assignment and wrote nothing, and counted 4.1-4.2 as carried for --scope
+    # adherence although that skeleton has no row for them.
+    in_scope = {it["id"] for it in inst.scoped(scope)}
     filled: dict[str, tuple[str, str]] = {}
-    moved, split_notes, dropped, kept = [], [], [], 0
+    moved, split_notes, dropped, outside, kept = [], [], [], [], 0
     for old, (ans, ev) in rows.items():
         if not ans and not ev:
             continue
@@ -833,14 +1013,17 @@ def migrate(path: Path, inst: Instrument, scope: str) -> int:
             targets = lmap[old]
             tag = f"[1.x {old}]"
             ev2 = f"{ev} {tag}".strip()
-            if len(targets) == 1:
+            here = [t for t in targets if t in in_scope]
+            if not here:
+                outside.append(f"{old} '{ans}' (now {' + '.join(targets)})")
+            elif len(targets) == 1:
                 filled[targets[0]] = (ans, ev2)
                 if targets[0] != old:
                     moved.append(f"{old}→{targets[0]}")
             elif ans and inst.norm(ans) in NO_ISH:
-                for t in targets:
+                for t in here:
                     filled[t] = (ans, ev2)
-                split_notes.append(f"{old} '{ans}' → {' and '.join(targets)}")
+                split_notes.append(f"{old} '{ans}' → {' and '.join(here)}")
             else:
                 split_notes.append(f"{old} '{ans}' not carried: a '{ans or 'blank'}' to the "
                                    f"merged 1.x question does not say which of "
@@ -848,8 +1031,12 @@ def migrate(path: Path, inst: Instrument, scope: str) -> int:
         elif old in retired:
             dropped.append(f"{old} '{ans}'")
         elif old in current and not (legacy_pat and re.match(legacy_pat, old)):
-            filled.setdefault(old, (ans, ev))
-            kept += 1
+            if old not in in_scope:
+                outside.append(f"{old} '{ans}'")
+                continue
+            if old not in filled:
+                filled[old] = (ans, ev)
+                kept += 1
 
     out = [f"<!-- migrated from the validator 1.x {inst.key} numbering by appraise.py "
            f"--migrate {path.name}: answers carried to the item that asks the same "
@@ -875,6 +1062,11 @@ def migrate(path: Path, inst: Instrument, scope: str) -> int:
     if dropped:
         print(f"  retired (no published counterpart; carry the concern by hand): "
               f"{', '.join(dropped)}", file=err)
+    if outside:
+        sc = inst.resolve_scope(scope)
+        print(f"  not carried — the '{sc}' variant does not ask them (migrate again with the "
+              f"--scope of the effect you assess if it is the other one): "
+              f"{', '.join(outside)}", file=err)
     if blank:
         print(f"  to answer now (blank): {', '.join(blank)}", file=err)
     return 0
@@ -910,7 +1102,29 @@ def verify(path: Path, inst: Instrument, scope: str) -> int:
                  "Every slot needs an answer from its vocabulary; silence is not one."))
     if invalid or bad:
         print("  An answer the instrument does not offer is not an answer.")
-    if missing or invalid or bad:
+    valid = {i: t for i, t in found.items() if i not in invalid}
+    asked_na = inst.na_where_asked(items, valid)
+    if asked_na:
+        print(f"  N/A WHERE ASKED ({len(asked_na)}): " + "; ".join(
+            f"{it['id']} — its condition holds ({it['cond']['text']})" for it in asked_na)
+            + ". N/A answers a question the routing skipped, not one it reached.")
+    applic = _applicability_domains(inst)
+    app_missing: list[str] = []
+    app_bad: dict[str, str] = {}
+    if applic:
+        app, app_bad = read_applicability(text, inst)
+        app_missing = [d for d in applic if d not in app and d not in app_bad]
+        print(f"  applicability: {len(app)}/{len(applic)} domains judged")
+        if app_missing:
+            print(f"  APPLICABILITY NOT RECORDED: "
+                  f"{', '.join(inst.heading(d) for d in app_missing)} — {inst.short_name} judges "
+                  f"applicability once per domain {applic[0]}-{applic[-1]} "
+                  f"({' / '.join(inst.verdicts)}); no signalling question supplies it.")
+        if app_bad:
+            print("  APPLICABILITY NOT RECOGNISED: " + "; ".join(
+                f"{inst.heading(d)} '{v}'" for d, v in app_bad.items())
+                + f" — use {' / '.join(inst.verdicts)}")
+    if missing or invalid or bad or asked_na or app_missing or app_bad:
         return 1
     print("  complete")
     return 0
@@ -969,21 +1183,30 @@ def rollup_signalling(inst: Instrument, answers: dict[str, str],
     # worded so that YES is the problem. Treating every "No" as bad rated a
     # well-conducted trial as high risk on domain 4 for correctly answering "No,
     # the measurement method was not inappropriate".
-    # Routers: questions that only decide what is asked next. RoB 2's 2.1 ("were
-    # participants aware of their assigned intervention?") is Yes in every
-    # open-label trial ever run, and by itself means nothing. Router questions
-    # are listed but do not drive the domain verdict.
+    # Routers (gateways): questions whose Yes or No only decides what is asked
+    # next. ROBINS-I's 2.1 (selection on characteristics observed after the start
+    # of intervention) opens 2.2-2.3; the bias is judged there, and a Yes at 2.1
+    # with a No at 2.2 can still be Low. Their answer is listed, not scored — but
+    # No information at a gateway leaves the domain unclear.
     # Middle: a problem answer that rules out the low tier but cannot by itself
     # reach the top one — ROBINS-I's 1.1 ("is there potential for confounding?"),
     # which 1.x scored as Serious for every observational study ever run.
+    # Joint: problem answers that count only together. ROBINS-I's 6.1 and 6.2 (an
+    # outcome open to influence AND assessors who knew) — either alone is Low in
+    # the 2016 criteria; 5.4 and 5.5 — either Yes is Low.
+    # Routing: a conditional question ("If Y/PY to 2.2 and 2.3, or N/PN to 2.4:")
+    # is scored only where its condition holds. An answer at a question the
+    # routing skipped is listed and ignored; N/A at one it reached is a blank.
     if inst.key == "rob2":
         # RoB 2 publishes a per-domain algorithm small enough to run exactly;
         # tags cannot express it (3.1 No + 3.2 Yes is Low, not a flag).
         return rollup_rob2(inst, answers, items)
     valid, invalid, _ = _partition(inst, answers, items)
+    reach = inst.reached(items, valid)
     groups: dict[str, list[dict]] = {}
     for it in items:
         groups.setdefault(it["domain"], []).append(it)
+    low_label = dict(_pairs(inst.meta.get("low_label", ""), "="))
 
     L = Lines()
     tier: dict[str, str] = {}            # domain -> low / some / high (complete domains)
@@ -992,6 +1215,8 @@ def rollup_signalling(inst: Instrument, answers: dict[str, str],
     for dom, rows in groups.items():
         high_n, high_r, mid_n, mid_r, partly, unk, missing, bad, routers = \
             [], [], [], [], [], [], [], [], []
+        graded_high, graded_mid, offpath, asked_na = [], [], [], []
+        joint: list[tuple[dict, str, str]] = []       # (item, answer, problem/good/unknown)
         for it in rows:
             iid = it["id"]
             if iid in invalid:
@@ -1001,12 +1226,28 @@ def rollup_signalling(inst: Instrument, answers: dict[str, str],
             if a is None:
                 missing.append(iid)
                 continue
-            tags = inst.tags(it)
-            if "router" in tags:
-                routers.append(iid)
-                continue
             n = inst.norm(a)
+            if reach.get(iid) is False:
+                if n != "n/a":
+                    offpath.append(f"{iid} '{a}'")
+                continue
             if n == "n/a":
+                if it.get("cond") and reach.get(iid) and not it["cond"]["optional"]:
+                    asked_na.append(it)
+                continue
+            tags = inst.tags(it)
+            rev = "reverse" in tags
+            if "router" in tags:
+                (unk if n in UNKNOWN else routers).append(iid)
+                continue
+            if not rev and n in WEAK_NO | STRONG_NO:
+                strong = n in STRONG_NO and "middle" not in tags
+                (graded_high if strong else graded_mid).append(f"'{a}' at {iid}")
+                continue
+            problem = (n in YES_ISH) if rev else (n in NO_ISH)
+            if "joint" in tags:
+                joint.append((it, a, "unknown" if n in UNKNOWN | PARTLY
+                              else "problem" if problem else "good"))
                 continue
             if n in UNKNOWN:
                 unk.append(iid)
@@ -1014,35 +1255,69 @@ def rollup_signalling(inst: Instrument, answers: dict[str, str],
             if n in PARTLY:
                 partly.append(iid)
                 continue
-            rev = "reverse" in tags
-            if not ((n in YES_ISH) if rev else (n in NO_ISH)):
+            if not problem:
                 continue
             if "middle" in tags:
                 (mid_r if rev else mid_n).append(iid)
             else:
                 (high_r if rev else high_n).append(iid)
 
+        # A joint group flags only when every reached member shows the problem;
+        # one good answer clears it, and No information keeps it unclear.
+        joint_tier, joint_why = None, ""
+        states = [s for _, _, s in joint]
+        if joint and "good" not in states:
+            prob_n = [it["id"] for it, _, s in joint
+                      if s == "problem" and "reverse" not in inst.tags(it)]
+            prob_r = [it["id"] for it, _, s in joint
+                      if s == "problem" and "reverse" in inst.tags(it)]
+            if all(s == "problem" for s in states):
+                joint_why = _flag_text(prob_n, prob_r) + (" together" if len(joint) > 1 else "")
+                if all("middle" in inst.tags(it) for it, _, _ in joint):
+                    joint_tier = "some"
+                    joint_why += (" — at least the middle tier; whether it is worse is a "
+                                  "judgement the answers do not record")
+                else:
+                    joint_tier = "high"
+            else:
+                joint_tier = "some"
+                unk.extend(it["id"] for it, _, s in joint if s == "unknown")
+                if prob_n or prob_r:
+                    others = [it["id"] for it, _, s in joint if s != "problem"]
+                    joint_why = (_flag_text(prob_n, prob_r) + " counts only together with "
+                                 + ", ".join(others))
+
         title = inst.domains.get(dom, dom)
-        if missing or bad:
+        top = [x for x in (_flag_text(high_n, high_r),
+                           joint_why if joint_tier == "high" else "",
+                           ", ".join(graded_high)) if x]
+        if missing or bad or asked_na:
             verdict = "INCOMPLETE"
             why = []
             if missing:
                 why.append(f"unanswered: {', '.join(missing)}")
             if bad:
                 why.append(f"answer not offered by the item at {', '.join(bad)}")
-            if high_n or high_r:
-                why.append("already flagged by " + _flag_text(high_n, high_r))
+            for it in asked_na:
+                why.append(f"N/A at {it['id']}, but its condition holds ({it['cond']['text']}) "
+                           f"— answer it")
+            if top:
+                why.append("already flagged by " + "; ".join(top))
                 flagged_high.add(dom)
             incomplete.append(dom)
-        elif high_n or high_r:
-            verdict, why = "HIGH / SERIOUS", [_flag_text(high_n, high_r)]
+        elif top:
+            verdict, why = "HIGH / SERIOUS", top
             tier[dom] = "high"
-        elif mid_n or mid_r or partly or unk:
+        elif mid_n or mid_r or partly or unk or graded_mid or joint_tier == "some":
             verdict = "SOME CONCERNS / UNCLEAR"
             why = []
             if mid_n or mid_r:
                 why.append(_flag_text(mid_n, mid_r) + " — rules out low; on its own goes "
                            "no higher than the middle tier")
+            if graded_mid:
+                why.append(", ".join(graded_mid) + " — the weak form: the middle tier")
+            if joint_why:
+                why.append(joint_why)
             if partly:
                 why.append(f"'Partly' at {', '.join(partly)}")
             if unk:
@@ -1050,10 +1325,15 @@ def rollup_signalling(inst: Instrument, answers: dict[str, str],
             tier[dom] = "some"
         else:
             verdict, why = "LOW", ["no signalling question flags a problem"]
+            if dom in low_label:
+                why.append(f"in {inst.short_name}'s terms: {low_label[dom]}")
             tier[dom] = "low"
         L.append(f"  {inst.heading(dom)} ({title[:42]}): {verdict}  — {'; '.join(why)}")
         if routers:
             L.append(f"  {'':<12}routing questions answered, not scored: {', '.join(routers)}")
+        if offpath:
+            L.append(f"  {'':<12}answered, but the routing does not reach them — not scored: "
+                     f"{', '.join(offpath)}")
     L.append("")
     # ROBIS: the overall is the phase-3 judgement, made in the light of domains
     # 1-4 — not the worst of them. A phase-2 concern that the interpretation
@@ -1063,8 +1343,9 @@ def rollup_signalling(inst: Instrument, answers: dict[str, str],
     rank = {"low": 0, "some": 1, "high": 2}
     if incomplete:
         heads = ", ".join(inst.heading(d) for d in incomplete)
-        msg = (f"  Implied overall: INCOMPLETE — {heads}: unanswered or invalid questions; "
-               f"no overall judgement until every slot is answered.")
+        msg = (f"  Implied overall: INCOMPLETE — {heads}: unanswered or invalid questions, or "
+               f"N/A where the routing asks them; no overall judgement until every slot is "
+               f"answered.")
         if any(d in flagged_high or tier.get(d) == "high" for d in basis):
             msg += (" (Already at least HIGH / SERIOUS: "
                     + (f"{inst.heading(over)} is at the top tier.)" if over in groups
@@ -1088,6 +1369,8 @@ def rollup_signalling(inst: Instrument, answers: dict[str, str],
                   "some": "  Implied overall: SOME CONCERNS — driven by the unresolved domains above.",
                   "high": "  Implied overall: HIGH / SERIOUS — one domain at high risk sets the overall."
                   }[worst])
+        if inst.meta.get("overall_note"):
+            L.append(f"  {inst.meta['overall_note']}")
     tiers = [t.strip() for t in inst.meta.get("tiers", "").split("|") if t.strip()]
     if len(tiers) == 3:
         # Lower-case on purpose: the upper-case tier names are what readers of
@@ -1096,10 +1379,11 @@ def rollup_signalling(inst: Instrument, answers: dict[str, str],
                  f"middle = {tiers[1]}, high = {tiers[2]}"
                  + (" or worse (that call is yours)." if len(inst.verdicts) > 3 else "."))
     L.append("  This is what the recorded answers force. It is NOT the published "
-             "flowchart: the official algorithms branch on particular questions "
-             "(ROBINS-I and ROBINS-E on the confounding domain, for instance). "
-             "Check the borderline domains against the source algorithm and say "
-             "so if you override this.")
+             "flowchart: conditional questions count only where their routing reaches "
+             "them, and a domain is raised only as far as the answers decide it — where "
+             "the published criteria turn on a judgement the answers do not record (how "
+             "substantial, how strongly related), check the domain against the source "
+             "and say so if you override this.")
     return L
 
 
@@ -1592,6 +1876,25 @@ def rollup(path: Path, inst: Instrument, scope: str) -> int:
     lines = fn(inst, answers, items)
     print("\n".join(lines))
     final = getattr(lines, "final", True) and not bad
+    applic = _applicability_domains(inst)
+    if applic:
+        app, app_bad = read_applicability(text, inst)
+        print("")
+        print(f"  Applicability concerns (domains {applic[0]}-{applic[-1]}, judged against the "
+              f"review question; no signalling question feeds them):")
+        for d in applic:
+            shown = app.get(d) or (f"not recognised ('{app_bad[d]}')" if d in app_bad
+                                   else "NOT RECORDED")
+            print(f"    domain {d} — {inst.domains.get(d, d)}: {shown}")
+        if len(app) == len(applic):
+            vals = {v.lower() for v in app.values()}
+            word = "high" if "high" in vals else "unclear" if "unclear" in vals else "low"
+            print(f"    overall applicability: {word} concern"
+                  + (" — every domain is of low concern." if word == "low" else
+                     " — at least one domain is not of low concern."))
+        else:
+            print("    no applicability conclusion until each of these domains is judged.")
+            final = False
     if not final:
         print("\n  (exit 1: this verdict is not final — see above.)")
     return 0 if final else 1

@@ -543,6 +543,7 @@ def run() -> bool:
     ok &= _ok("no scope of any instrument repeats an item id", uniq)
 
     ok &= methodology_review(tools)
+    ok &= gateway_review(tools)
 
     print(f"\n{'ALL PASSED' if ok else 'FAILURES PRESENT'}")
     return ok
@@ -796,6 +797,266 @@ def methodology_review(tools: dict) -> bool:
               re.search(r"9 and 11.*RCT.*NRSI.*worse", sk, re.S) is not None)
     rc, out = _run(A.verify, _write(sk), am, "all")
     ok &= _ok("... and that note is not read as an answer (0/16)", "0/16 answered" in out)
+    return ok
+
+
+
+#: A ROBINS-I result with every domain at its best, answered the way the 2016
+#: tool routes it (1.1 Yes: confounding expected, so domain 1 is Moderate at best).
+RI_GOOD = {"1.1": "Y", "1.2": "N", "1.3": "N/A", "1.4": "Y", "1.5": "Y", "1.6": "N",
+           "1.7": "N/A", "1.8": "N/A",
+           "2.1": "N", "2.2": "N/A", "2.3": "N/A", "2.4": "Y", "2.5": "N/A",
+           "3.1": "Y", "3.2": "Y", "3.3": "N",
+           "4.1": "N", "4.2": "N/A", "4.3": "Y", "4.4": "Y", "4.5": "Y", "4.6": "N/A",
+           "5.1": "Y", "5.2": "N", "5.3": "N", "5.4": "N/A", "5.5": "N/A",
+           "6.1": "N", "6.2": "N", "6.3": "Y", "6.4": "N",
+           "7.1": "N", "7.2": "N", "7.3": "N"}
+RE_GOOD = {"1.1": "Y", "1.2": "Y", "1.3": "N", "1.4": "N", "1.5": "N/A",
+           "2.1": "Y", "2.2": "N", "2.3": "Y", "3.1": "N", "3.2": "Y", "3.3": "N/A",
+           "4.1": "N", "4.2": "N/A", "5.1": "Y", "5.2": "N", "5.3": "N/A",
+           "6.1": "N", "6.2": "Y", "6.3": "Y", "7.1": "N", "7.2": "N", "7.3": "N", "7.4": "N"}
+
+
+def gateway_review(tools: dict) -> bool:
+    """ROBINS-I 2.1 is a gateway; the ROBINS-I/-E, QUADAS-2, QUIPS and --migrate review.
+
+    Each case is a verdict the published instrument gives and the engine at commit
+    1b2c906 did not (or an answer it accepted that the instrument does not offer).
+    """
+    ok = True
+    LOW, SOME, HIGH, INC = "LOW", "SOME CONCERNS / UNCLEAR", "HIGH / SERIOUS", "INCOMPLETE"
+    ri, re_ = tools["robins-i"], tools["robins-e"]
+
+    def roll(tool: str, base: dict, over: dict, scope: str = "all",
+             extra: str = "") -> tuple[object, str]:
+        inst = tools[tool]
+        p = _write(_fill(A.skeleton(inst, scope), dict(base, **over)) + extra)
+        return _cli("--rollup", str(p), "--tool", tool, "--scope", scope)
+
+    def case(label: str, tool: str, base: dict, over: dict, domain: str, want: str,
+             scope: str = "all", rc_want: int = 0) -> bool:
+        rc, out = roll(tool, base, over, scope)
+        got = _verdict(out, f"Domain {domain}")
+        return _ok(f"{label}: domain {domain} {want} (got {got}, rc {rc!r})",
+                   got == want and rc == rc_want)
+
+    print("\n[ROBINS-I 2.1 gateway — domain 2 per the 2016 Tables A-C]")
+    tag21 = A.Instrument.tags(ri.item("2.1"))
+    ok &= _ok(f"2.1 is tagged router, not middle ({sorted(tag21)})",
+              "router" in tag21 and "middle" not in tag21)
+    ok &= _ok("2.2 is a gateway too; 2.3 (selection tied to the outcome) rules out Low",
+              "router" in A.Instrument.tags(ri.item("2.2"))
+              and "middle" in A.Instrument.tags(ri.item("2.3")))
+    for sc in ("assignment", "adherence"):
+        ok &= case(f"G1 ({sc}) 2.1 Yes, 2.2 No — can be Low", "robins-i", RI_GOOD,
+                   {"2.1": "Y", "2.2": "N"}, "2", LOW, sc)
+    ok &= case("G2 2.1 Yes, 2.2 Yes, 2.3 No — no selection bias", "robins-i", RI_GOOD,
+               {"2.1": "Y", "2.2": "Y", "2.3": "N"}, "2", LOW, "assignment")
+    ok &= case("G3 2.1/2.2/2.3 Yes, corrected (2.5 Yes) — Moderate", "robins-i", RI_GOOD,
+               {"2.1": "Y", "2.2": "Y", "2.3": "Y", "2.5": "Y"}, "2", SOME, "assignment")
+    ok &= case("G3 2.1/2.2/2.3 Yes, not corrected (2.5 No) — Serious", "robins-i", RI_GOOD,
+               {"2.1": "Y", "2.2": "Y", "2.3": "Y", "2.5": "N"}, "2", HIGH, "assignment")
+    ok &= case("G3 2.1/2.2/2.3 Yes, 2.5 NI — at least Moderate", "robins-i", RI_GOOD,
+               {"2.1": "Y", "2.2": "Y", "2.3": "Y", "2.5": "NI"}, "2", SOME, "assignment")
+    rc, out = roll("robins-i", RI_GOOD, {"2.1": "Y", "2.2": "Y", "2.3": "Y"}, "assignment")
+    ok &= _ok("G3 ... with 2.5 left N/A: INCOMPLETE, 2.5 named, exit 1",
+              _verdict(out, "Domain 2") == INC and "N/A at 2.5" in out and rc == 1)
+    ok &= case("G4 2.1 No goes to 2.4: 2.4 Yes — Low", "robins-i", RI_GOOD, {}, "2", LOW,
+               "assignment")
+    ok &= case("G4 2.1 No, 2.4 No, 2.5 Yes — Moderate", "robins-i", RI_GOOD,
+               {"2.4": "N", "2.5": "Y"}, "2", SOME, "assignment")
+    ok &= case("G4 2.1 No, 2.4 No, 2.5 No — Serious", "robins-i", RI_GOOD,
+               {"2.4": "N", "2.5": "N"}, "2", HIGH, "assignment")
+    ok &= case("G5 2.1 No information — unclear, not Low", "robins-i", RI_GOOD,
+               {"2.1": "NI"}, "2", SOME, "assignment")
+    rc, out = roll("robins-i", RI_GOOD, {"2.5": "N"}, "assignment")
+    ok &= _ok("G6 2.1 No and 2.4 Yes with a stray 2.5 No: Low, the 2.5 answer listed "
+              "as not reached", _verdict(out, "Domain 2") == LOW
+              and "routing does not reach them — not scored: 2.5 'N'" in out and rc == 0)
+    ref = (REF_DIR / "robins-i.md").read_text(encoding="utf-8")
+    ok &= _ok("robins-i.md no longer says a Yes at 2.1 rules out Low",
+              "potential marker of bias but not a\nverdict — it rules out Low" not in ref
+              and "2.1 Yes with 2.2 No can be Low" in ref)
+    skill = (REF_DIR.parent / "SKILL.md").read_text(encoding="utf-8")
+    readme = (REF_DIR.parents[2] / "README.md").read_text(encoding="utf-8")
+    ok &= _ok("SKILL.md and README describe 2.1 as a gateway",
+              "ROBINS-I 2.1 is the one people get" in skill and "2.1 is a gateway" in readme
+              and "it, 2.1–2.4, 3.2" not in readme)
+
+    print("\n[ROBINS-I routing and N/A]")
+    rc, out = roll("robins-i", RI_GOOD, {"1.4": "N/A", "1.5": "N/A"}, "assignment")
+    ok &= _ok(f"1.2 No reaches 1.4: N/A there is INCOMPLETE, not a verdict (rc {rc!r})",
+              _verdict(out, "Domain 1") == INC and "N/A at 1.4" in out and rc == 1)
+    p = _write(_fill(A.skeleton(ri, "assignment"), dict(RI_GOOD, **{"1.4": "N/A",
+                                                                    "1.5": "N/A"})))
+    rc, out = _cli("--verify", str(p), "--tool", "robins-i", "--scope", "assignment")
+    ok &= _ok("... and --verify names it", rc == 1 and "N/A WHERE ASKED (1): 1.4" in out)
+    ok &= case("1.1 No ends domain 1 (no confounding expected): Low", "robins-i", RI_GOOD,
+               {"1.1": "N", "1.2": "N/A", "1.4": "N/A", "1.5": "N/A", "1.6": "N/A"}, "1", LOW,
+               "assignment")
+    ok &= case("1.2 Yes, 1.3 Yes: the time-varying branch decides (1.7 No — Serious)",
+               "robins-i", RI_GOOD, {"1.2": "Y", "1.3": "Y", "1.4": "N/A", "1.5": "N/A",
+                                     "1.6": "N/A", "1.7": "N", "1.8": "N/A"}, "1", HIGH,
+               "assignment")
+    ok &= case("4.1 No with a stray 4.2 Yes: Low", "robins-i", RI_GOOD, {"4.2": "Y"}, "4", LOW,
+               "assignment")
+    ok &= case("adhering: 4.3 No, appropriate analysis (4.6 Yes) — Moderate", "robins-i",
+               RI_GOOD, {"4.3": "N", "4.6": "Y"}, "4", SOME, "adherence")
+    ok &= case("adhering: 4.3 No, 4.6 No — Serious", "robins-i", RI_GOOD,
+               {"4.3": "N", "4.6": "N"}, "4", HIGH, "adherence")
+    all_na = {it["id"]: "N/A" for it in ri.items if it["id"] != "1.1"}
+    p = _write(_fill(A.skeleton(ri, "assignment"), dict(all_na, **{"1.1": "N"})))
+    rc, out = _cli("--verify", str(p), "--tool", "robins-i", "--scope", "assignment")
+    ok &= _ok("an all-N/A ROBINS-I record does not verify complete (3.1 named)",
+              rc == 1 and "INVALID" in out and "3.1 'N/A'" in out)
+    rc, out = _cli("--rollup", str(p), "--tool", "robins-i", "--scope", "assignment")
+    ok &= _ok("... and does not roll up LOW", rc == 1 and _overall(out) == "INCOMPLETE")
+    rc, out = _cli("--verify", str(_write(_fill(A.skeleton(ri, "adherence"), RI_GOOD))),
+                   "--tool", "robins-i", "--scope", "adherence")
+    ok &= _ok("N/A on the conditional questions the routing skips still verifies", rc == 0)
+
+    print("\n[ROBINS-I domains 5 and 6 per Table C]")
+    ok &= case("5.1 No, 5.4 Yes (similar across groups) — Low", "robins-i", RI_GOOD,
+               {"5.1": "N", "5.4": "Y", "5.5": "N"}, "5", LOW, "assignment")
+    ok &= case("5.1 No, 5.5 Yes (robust to missing data) — Low", "robins-i", RI_GOOD,
+               {"5.1": "N", "5.4": "N", "5.5": "Y"}, "5", LOW, "assignment")
+    rc, out = roll("robins-i", RI_GOOD, {"5.3": "Y", "5.4": "N", "5.5": "N"}, "assignment")
+    ok &= _ok("5.3 Yes, 5.4 No, 5.5 No — at least Moderate, the rest left to judgement",
+              _verdict(out, "Domain 5") == SOME and "together" in out
+              and "judgement the answers do not record" in out)
+    ok &= case("5.1 No information — unclear", "robins-i", RI_GOOD, {"5.1": "NI"}, "5", SOME,
+               "assignment")
+    ok &= case("6.1 Yes, assessors unaware (6.2 No) — Low", "robins-i", RI_GOOD,
+               {"6.1": "Y"}, "6", LOW, "assignment")
+    ok &= case("6.2 Yes, objective outcome (6.1 No) — Low", "robins-i", RI_GOOD,
+               {"6.2": "Y"}, "6", LOW, "assignment")
+    ok &= case("6.1 Yes and 6.2 Yes — Serious", "robins-i", RI_GOOD,
+               {"6.1": "Y", "6.2": "Y"}, "6", HIGH, "assignment")
+    ok &= case("6.1 Yes, 6.2 No information — unclear", "robins-i", RI_GOOD,
+               {"6.1": "Y", "6.2": "NI"}, "6", SOME, "assignment")
+    ok &= case("6.3 No (assessment not comparable) — Serious on its own", "robins-i", RI_GOOD,
+               {"6.3": "N"}, "6", HIGH, "assignment")
+    ok &= _ok("ROBINS-I counts unchanged: 34 items, 30 assignment, 32 adherence",
+              len(ri.items) == 34 and len(ri.scoped("assignment")) == 30
+              and len(ri.scoped("adherence")) == 32)
+    conds = {it["id"]: it["cond"]["text"] for it in ri.items if it.get("cond")}
+    ok &= _ok(f"every conditional ROBINS-I question has a parsed condition ({len(conds)})",
+              set(conds) == {"1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "2.2", "2.3",
+                             "2.5", "4.2", "4.6", "5.4", "5.5"})
+
+    print("\n[ROBINS-E: graded No, routing, labels (PMC11098530)]")
+    ok &= case("1.1 Weak no — middle tier", "robins-e", RE_GOOD, {"1.1": "WN"}, "1", SOME)
+    ok &= case("1.1 Strong no — top tier", "robins-e", RE_GOOD, {"1.1": "Strong no"}, "1", HIGH)
+    rc, out = _cli("--verify", str(_write(_fill(A.skeleton(re_, "all"),
+                                                dict(RE_GOOD, **{"1.1": "WN"})))),
+                   "--tool", "robins-e")
+    ok &= _ok(f"'WN' at 1.1 verifies complete (rc {rc!r})", rc == 0)
+    rc, out = _cli("--verify", str(_write(_fill(A.skeleton(re_, "all"),
+                                                dict(RE_GOOD, **{"2.1": "WN", "1.1": "N"})))),
+                   "--tool", "robins-e")
+    ok &= _ok("Weak no elsewhere, and a plain No at 1.1, are rejected",
+              rc == 1 and "2.1 'WN'" in out and "1.1 'N'" in out)
+    ok &= case("3.1 Yes, corrected (3.3 Yes) — not top tier", "robins-e", RE_GOOD,
+               {"3.1": "Y", "3.3": "Y"}, "3", SOME)
+    ok &= case("3.1 Yes, not corrected (3.3 No) — top tier", "robins-e", RE_GOOD,
+               {"3.1": "Y", "3.3": "N"}, "3", HIGH)
+    ok &= case("4.1 Yes, analysis corrected (4.2 Yes) — not top tier", "robins-e", RE_GOOD,
+               {"4.1": "Y", "4.2": "Y"}, "4", SOME)
+    ok &= case("4.1 No information: 4.2 is N/A (the paper's own example)", "robins-e", RE_GOOD,
+               {"4.1": "NI"}, "4", SOME)
+    ok &= case("5.1 No, evidence of no bias (5.3 Yes) — Low", "robins-e", RE_GOOD,
+               {"5.1": "N", "5.3": "Y"}, "5", LOW)
+    ok &= case("1.4 No information (variant unknown) — unclear", "robins-e", RE_GOOD,
+               {"1.4": "NI"}, "1", SOME)
+    rc, out = roll("robins-e", {i["id"]: "N/A" for i in re_.items}, {})
+    ok &= _ok("an all-N/A ROBINS-E record is not LOW", rc == 1 and _overall(out) == "INCOMPLETE")
+    rc, out = roll("robins-e", RE_GOOD, {})
+    ok &= _ok("domain 3 is named for selection into the study or the analysis; a Low domain 1 "
+              "carries the uncontrolled-confounding caveat",
+              "or into the analysis" in re_.domains["3"]
+              and re.search(r"Domain 1 \([^)]*\): LOW .*uncontrolled confounding", out)
+              is not None)
+
+    print("\n[QUADAS-2: applicability per domain 1-3, N/A only at 2.2]")
+    q2 = tools["quadas2"]
+    ok &= _ok("QUADAS-2 signalling questions per domain are 3/2/2/4",
+              [len([i for i in q2.items if i["domain"] == d]) for d in "1234"] == [3, 2, 2, 4])
+    yes = {i["id"]: "Yes" for i in q2.items}
+    sk = _fill(A.skeleton(q2, "all"), yes)
+    rc, out = _cli("--verify", str(_write(sk)), "--tool", "quadas2")
+    ok &= _ok(f"all Yes without applicability does not verify complete (rc {rc!r})",
+              rc == 1 and "APPLICABILITY NOT RECORDED: Domain 1, Domain 2, Domain 3" in out)
+    rc, out = _cli("--rollup", str(_write(sk)), "--tool", "quadas2")
+    ok &= _ok("... and the rollup says so and exits 1",
+              rc == 1 and "domain 1 — Patient selection: NOT RECORDED" in out)
+    filled = re.sub(r"(\*\*Domain [123] applicability:\*\*) Low / High / Unclear",
+                    r"\1 Low", sk)
+    filled = filled.replace("**Domain 1 applicability:** Low", "**Domain 1 applicability:** High")
+    rc, out = _cli("--verify", str(_write(filled)), "--tool", "quadas2")
+    ok &= _ok("with the three applicability lines filled it verifies", rc == 0)
+    rc, out = _cli("--rollup", str(_write(filled)), "--tool", "quadas2")
+    ok &= _ok("... and the rollup reports them (overall high concern) with exit 0",
+              rc == 0 and "domain 1 — Patient selection: High" in out
+              and "overall applicability: high concern" in out)
+    table = sk + ("\n\n| Domain | Risk of bias | Applicability concerns |\n|---|---|---|\n"
+                  "| 1. Patient selection | Low | Low |\n| Domain 2 | Low | Unclear |\n"
+                  "| Reference standard | Low | Low |\n")
+    rc, out = _cli("--verify", str(_write(table)), "--tool", "quadas2")
+    ok &= _ok("an applicability column in a summary table counts", rc == 0)
+    rc, out = _cli("--verify", str(_write(_fill(A.skeleton(q2, "all"),
+                                                {i["id"]: "N/A" for i in q2.items}))),
+                   "--tool", "quadas2")
+    ok &= _ok("all N/A is rejected", rc == 1 and "INVALID" in out and "1.1 'N/A'" in out)
+    rc, out = _cli("--verify", str(_write(re.sub(r"(\| 2\.2 \|[^|]*\|) Yes", r"\1 N/A",
+                                                 filled))), "--tool", "quadas2")
+    ok &= _ok("N/A at 2.2 (no threshold) is accepted", rc == 0)
+    ok &= _ok("no QUADAS-2 item is reverse-worded",
+              not any("reverse" in A.Instrument.tags(i) for i in q2.items))
+
+    print("\n[QUIPS: 31 prompting items, four levels, N/A only at 3f and 5e]")
+    qp = tools["quips"]
+    want = [f"{d}{c}" for d, n in ((1, 6), (2, 5), (3, 6), (4, 3), (5, 7), (6, 4))
+            for c in "abcdefg"[:n]]
+    ok &= _ok("ids are exactly 1a-1f, 2a-2e, 3a-3f, 4a-4c, 5a-5g, 6a-6d",
+              [i["id"] for i in qp.items] == want)
+    ok &= _ok("answers are Yes / Partly / No / Unclear, Partial and Unsure accepted",
+              qp.answers == ["Yes", "Partly", "No", "Unclear"]
+              and qp.norm("Partial") == "partly" and qp.norm("Unsure") == "unclear")
+    yes = {i["id"]: "Yes" for i in qp.items}
+    rc, out = _cli("--verify", str(_write(_fill(A.skeleton(qp, "all"),
+                                                {i["id"]: "N/A" for i in qp.items}))),
+                   "--tool", "quips")
+    ok &= _ok("an all-N/A QUIPS record does not verify", rc == 1 and "INVALID" in out)
+    rc, out = roll("quips", {i["id"]: "N/A" for i in qp.items}, {})
+    ok &= _ok("... nor roll up LOW", rc == 1 and _overall(out) == "INCOMPLETE")
+    rc, out = _cli("--verify", str(_write(_fill(A.skeleton(qp, "all"),
+                                                dict(yes, **{"3f": "N/A", "5e": "N/A"})))),
+                   "--tool", "quips")
+    ok &= _ok("N/A at 3f and 5e (nothing missing, nothing imputed) is accepted", rc == 0)
+    rc, out = roll("quips", yes, {"2a": "Partial"})
+    ok &= _ok("'Partial' is the middle level; the overall says QUIPS has no combination rule",
+              _verdict(out, "Domain 2") == SOME and "publishes no rule" in out and rc == 0)
+
+    print("\n[--migrate carries only what the chosen variant asks]")
+    old = ["| # | Signalling question | Answer | Evidence |", "|---|---|---|---|"]
+    old_ids = ([f"1.{i}" for i in range(1, 9)] + [f"2.{i}" for i in range(1, 6)]
+               + ["3.1", "3.2", "3.3", "4.1", "4.2", "4.3", "5.1", "5.2", "5.3",
+                  "6.1", "6.2", "6.3", "7.1", "7.2", "7.3"])
+    old += [f"| {i} | {'Was the analysis appropriate to estimate the effect of starting' if i == '4.3' else 'q'} | No | p.1 |"
+            for i in old_ids]
+    of = _write("\n".join(old))
+    rc, out = _cli("--migrate", str(of), "--tool", "robins-i", "--scope", "assignment")
+    log = out.split("MIGRATION —")[-1]
+    ok &= _ok("assignment scope: 1.x 4.3 (now 4.6, adhering only) is listed as not carried, "
+              "not as moved", rc == 0 and "4.3→4.6" not in log and "4.3 'No' (now 4.6)" in log)
+    mig = A.read_answers(_write(out.split("MIGRATION —")[0]), ri, "assignment")
+    # 28 rows: 4.3 is not carried, 5.3 moves to 5.4, 5.2 'No' splits to 5.2 and 5.3.
+    ok &= _ok(f"... and the carried count matches the rows written ({len(mig)} written)",
+              len(mig) == 28 and "same id:  25 answer(s)" in log and mig.get("4.1") == "No")
+    rc, out = _cli("--migrate", str(of), "--tool", "robins-i", "--scope", "adherence")
+    log = out.split("MIGRATION —")[-1]
+    ok &= _ok("adherence scope: 1.x 4.1-4.2 are listed as not carried",
+              rc == 0 and "4.1 'No', 4.2 'No'" in log and "4.3→4.6" in log)
     return ok
 
 

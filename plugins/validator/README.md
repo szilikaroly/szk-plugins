@@ -48,23 +48,28 @@ INCOMPLETE, not LOW, and the overall follows; GRADE gives no certainty while a d
 or publication bias is undecided.
 
 **Polarity is per item.** QUADAS-2, ROBINS and ROBIS items are tagged by which answer is the
-problem; ROBINS-I's 1.2–1.3 only route to the next question. Treating every "No" as bad rated
-a well-conducted study as high risk. A fourth tag, *middle*, marks answers that rule out the low
-tier but cannot by themselves reach the top one — ROBINS-I's "is there potential for
-confounding?" is Yes for nearly every observational study.
+problem; gateways (*router*) only open the next question — ROBINS-I's 1.2–1.3, 2.1–2.2 and
+5.1–5.3. Treating every "No" as bad rated a well-conducted study as high risk. *Middle* marks
+answers that rule out the low tier but cannot by themselves reach the top one — ROBINS-I's "is
+there potential for confounding?" is Yes for nearly every observational study — and *joint*
+marks answers that count only together (ROBINS-I 6.1 with 6.2, 5.4 with 5.5). For ROBINS-I and
+ROBINS-E the rollup follows each question's "If … to …" routing condition, read from the
+question text.
 
 **Answer words are per instrument.** Each reference file declares its vocabulary, its
 shorthands and any per-item restriction: *PY* is *Probably yes* in RoB 2 but *Partial yes* in
-AMSTAR 2, the Newcastle-Ottawa scale gives a partial star only for comparability, and N/A is
-accepted only where the instrument offers it (RoB 2's conditional questions, none in ROBIS or
-the Newcastle-Ottawa scale).
+AMSTAR 2, the Newcastle-Ottawa scale gives a partial star only for comparability, ROBINS-E's
+graded *Weak no* / *Strong no* exists only on its first confounding question, and N/A is
+accepted only where the instrument offers it (the conditional questions of RoB 2, ROBINS-I and
+ROBINS-E, QUADAS-2 2.2, QUIPS 3f and 5e; none in ROBIS or the Newcastle-Ottawa scale).
 
 **Published algorithms are reproduced where they exist** — RoB 2's per-domain algorithm (2019
 guidance; the rollup prints the path it took), AMSTAR 2's critical-flaw table, the
 Newcastle-Ottawa star count, GRADE's start-and-adjust, ROBIS's overall as the phase-3
 judgement — and **not faked where they do not**. For the ROBINS family, QUADAS-2, QUIPS and
 JBI the rollup reports what the recorded answers force and names the questions that forced
-it, then says explicitly that this is not the official flowchart.
+it, then says explicitly that this is not the official flowchart. QUADAS-2's applicability
+judgements, which no signalling question feeds, are read and required per domain 1–3.
 
 ## What it refuses to do
 
@@ -90,8 +95,9 @@ question text, the polarity handling that rated every open-label trial high risk
 the unscoped rollup that reported "9/18 stars" for a Newcastle-Ottawa cohort, and
 the GRADE substring test in which "not serious" contained "serious" and
 downgraded every domain the assessor had explicitly cleared. The 2.0.0 block
-adds one test per defect listed below; each of them fails against 1.0.0, and the
-methodology-review block fails against the first 2.0.0 commit (60e290b).
+adds one test per defect listed below; each of them fails against 1.0.0, the
+methodology-review block fails against the first 2.0.0 commit (60e290b), and the ROBINS-I
+gateway block against 1b2c906.
 
 ## Provenance
 
@@ -101,6 +107,52 @@ paraphrases in each tool's vocabulary — use the published wording when an asse
 in a manuscript, and name the tool version in the methods section.
 
 ## Changes
+
+### 2.0.0 — ROBINS-I 2.1 is a gateway; ROBINS-E, QUADAS-2 and QUIPS review (same release)
+
+Decision: ROBINS-I 2.1 routes, it does not rate. Selection based on characteristics observed
+after the start of intervention opens 2.2 and 2.3; the bias in domain 2 is judged from 2.2–2.3
+(selection related to both intervention and outcome) and, for the timing of follow-up against
+the start of intervention, from 2.4–2.5 — the logic of the 2016 tool's Tables A–C
+(PMC5062054). The rest of the methodology review, skipped in the previous commit, was run on
+constructed records; every fix has a regression test (`[ROBINS-I 2.1 gateway …]` and the blocks
+after it in `scripts/selftest.py`, 163 → 230 assertions; run against commit 1b2c906, 40 of the
+67 new ones fail). Random records give identical rollups for RoB 2, AMSTAR 2, GRADE, NOS, ROBIS
+and JBI apart from the reworded closing note.
+
+- **ROBINS-I domain 2.** 2.1 *Yes* with 2.2 *No* was SOME CONCERNS at exit 0; it is Low-capable
+  now. 2.1 and 2.2 are gateways (`router`), 2.3 and 2.4 are middle, 2.5 decides Serious. *No
+  information* at a gateway leaves the domain unclear.
+- **Routing is followed (ROBINS-I, ROBINS-E).** Conditions are parsed from the question text.
+  A stray answer at a question the routing skips was scored (2.1 *No* with 2.5 *No* was
+  Serious at exit 0); it is listed and ignored now. N/A at a reached question (1.4 after 1.2
+  *No*) was skipped; it is INCOMPLETE now, and `--verify` names it — for RoB 2 as well, whose
+  rollup already said INCOMPLETE there. N/A at an unconditional question (an all-N/A record)
+  is rejected (`not_applicable`).
+- **ROBINS-I domains 5 and 6 (Table C).** Missing data with 5.4 or 5.5 *Yes* is Low (it was
+  Moderate, or Serious with one of them *No*); 5.1–5.3 are gateways and 5.4/5.5 a `joint`
+  pair (both *No*: at least Moderate, Serious left to a stated judgement). 6.1 *Yes* with
+  6.2 *No* (or the reverse) was Serious; 6.1/6.2 are a `joint` pair — Serious only together.
+- **ROBINS-E (PMC11098530).** The graded *Weak no* / *Strong no* of its first confounding
+  question was rejected as unrecognised; it is accepted there (middle / top tier) and only
+  there (meta `restricted_answers`). A correction recorded at 3.3 or 4.2 was overridden by a
+  top-tier flag at 3.1/3.2/4.1, and 5.3 *Yes* (no bias from missing data) was High; those
+  questions are middle or gateways now. Domain 3 carries its full name (study *or analysis*);
+  a Low domain 1 prints the tool's standing caveat about uncontrolled confounding.
+- **QUADAS-2.** A record with no applicability judgement verified complete; `--verify` and
+  `--rollup` read the three per-domain judgements and exit 1 while one is missing. N/A is
+  offered only at 2.2 (no threshold); an all-N/A record rolled up Low.
+- **QUIPS.** N/A only at 3f and 5e (nothing missing / nothing imputed); an all-N/A record
+  rolled up Low. The overall line states that QUIPS publishes no combination rule.
+- **`--migrate` (ROBINS-I).** With `--scope assignment` the 1.x adhering-analysis answer (4.3,
+  now 4.6) and 4.4–4.6 were reported as "moved" and silently dropped; with `--scope adherence`
+  4.1–4.2 were counted as carried. Answers whose question the chosen variant does not ask are
+  now listed as not carried.
+
+Checked and unchanged: ROBINS-I ids, routing conditions and counts (34; 30 assignment, 32
+adherence); QUADAS-2's 3/2/2/4 signalling questions, all Yes-is-good; QUIPS's 31 prompting
+items 1a–6d, four-level scale (*Partial* / *Unsure* accepted as shorthands) and *Partly* as
+the middle level; the QUIPS legacy map.
 
 ### 2.0.0 — methodology review (same release)
 
@@ -155,9 +207,11 @@ reference files' provenance notes.
 - **Polarity.** QUADAS-2 1.2 and 1.3, ROBIS 4.6 and 3C, ROBINS-E 2.3 and 6.2, and ROBINS-I 6.3
   and 1.x 4.4 (co-interventions balanced, now 4.3) were tagged reverse although *Yes* is the
   good answer; ROBINS-E 5.2 and ROBINS-I 5.2 were not, although *Yes* is the problem. An ideal study came out high risk. ROBINS-I 1.1 forced
-  Serious on every observational study; it, 2.1–2.4, 3.2, 4.1, 4.3–4.5 and 5.1–5.3 are now
-  *middle* (the 2016 tool's Tables B–C rate them Moderate unless a later question fails), 1.3
-  routes. The reason text names the answer actually given ("'Yes' … (reverse-worded)").
+  Serious on every observational study; it, 2.3, 2.4, 3.2, 4.1 and 4.3–4.5 are now *middle*
+  (the 2016 tool's Tables B–C rate them Moderate unless a later question fails), and 1.3
+  routes. (This entry first tagged 2.1–2.2 and 5.1–5.3 *middle* as well; they are gateways —
+  see the entry above.) The reason text names the answer actually given ("'Yes' …
+  (reverse-worded)").
 - **QUIPS *Partly*** counted as no problem; it is the middle level now.
 - **Newcastle-Ottawa** gave a star for *Partial yes* on one-star items, and accepted *PY*; only
   the comparability items earn a partial star, and *PY* is rejected.

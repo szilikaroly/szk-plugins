@@ -14,6 +14,7 @@ unit: RESULT (one outcome, one comparison)
 use_for: cohort, case-control, controlled before-after, interrupted time series and other non-randomised studies that evaluate an intervention
 scopes: assignment, adherence, all
 item_answers: 1.1=Yes|Probably yes|Probably no|No
+not_applicable: 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 2.2, 2.3, 2.5, 4.2, 4.6, 5.4, 5.5
 numbering: 2016 Table A
 legacy_map: 4.3>4.6; 4.4>4.3; 4.5>4.4; 4.6>4.5; 5.3>5.4; 5.2>5.2+5.3
 legacy_cue: 4.3=analysis appropriate; 4.4=co-intervention; 4.5=implemented; 4.6=participants adhere; 5.2=, or on; 5.3=proportion of participants
@@ -75,17 +76,21 @@ a time-varying confounder affected by prior exposure does not control it.
 
 ## Domain 2 — Bias in selection of participants into the study
 
-**2.1 (all, reverse, middle) — Was selection of participants into the study (or into the analysis) based on participant characteristics observed after the start of intervention?**
-Immortal time bias and prevalent-user designs live here: selecting people who survived long
-enough to receive the intervention builds the result into the cohort. No / Probably no: go to
-2.4. Yes / Probably yes is marked in the 2016 tool as a potential marker of bias but not a
-verdict — it rules out Low, and 2.2, 2.3 and 2.5 decide whether it is worse.
+**2.1 (all, reverse, router) — Was selection of participants into the study (or into the analysis) based on participant characteristics observed after the start of intervention?**
+A gateway. Immortal time bias and prevalent-user designs start here, but a Yes only opens 2.2
+and 2.3: selection on a post-intervention characteristic biases the result only when that
+characteristic is related to both the intervention and the outcome. So Yes / Probably yes
+does not by itself rule out Low — 2.1 Yes with 2.2 No can be Low. No / Probably no: 2.2 and
+2.3 are N/A, go to 2.4. No information leaves the domain unclear.
 
-**2.2 (all, reverse, middle) — If Y/PY to 2.1: were the post-intervention variables that influenced selection likely to be associated with intervention?**
+**2.2 (all, reverse, router) — If Y/PY to 2.1: were the post-intervention variables that influenced selection likely to be associated with intervention?**
+Also a gateway: association with the intervention alone does not bias the comparison. No /
+Probably no: 2.3 is N/A. Yes / Probably yes: go to 2.3.
 
 **2.3 (all, reverse, middle) — If Y/PY to 2.2: were the post-intervention variables that influenced selection likely to be influenced by the outcome or a cause of the outcome?**
-Selection related to both intervention and outcome is the mechanism. Whether it is Moderate
-or Serious depends on 2.5 — whether the authors corrected for it.
+Yes here, after Yes at 2.2, is the mechanism — selection related to both intervention and
+outcome — and it rules out Low. Whether it is Moderate or Serious depends on 2.5: Moderate
+when the authors used methods likely to correct it, Serious when they did not.
 
 **2.4 (all, middle) — Do start of follow-up and start of intervention coincide for most participants?**
 When they do not, the unobserved period between them is where immortal time accumulates. A
@@ -135,30 +140,38 @@ g-methods. A naive per-protocol or as-treated comparison is No.
 
 ## Domain 5 — Bias due to missing data
 
-**5.1 (all, middle) — Were outcome data available for all, or nearly all, participants?**
-"Nearly all" is judged against the risk of the outcome, not as a fixed percentage.
+**5.1 (all, router) — Were outcome data available for all, or nearly all, participants?**
+A gateway. "Nearly all" is judged against the risk of the outcome, not as a fixed percentage.
+No / Probably no opens 5.4 and 5.5; on its own it is not a verdict.
 
-**5.2 (all, reverse, middle) — Were participants excluded due to missing data on intervention status?**
-Reverse-polarity: Yes is the problem.
+**5.2 (all, reverse, router) — Were participants excluded due to missing data on intervention status?**
+A gateway, reverse-polarity: Yes opens 5.4 and 5.5.
 
-**5.3 (all, reverse, middle) — Were participants excluded due to missing data on other variables needed for the analysis?**
-Reverse-polarity: Yes is the problem. Complete-case analysis on confounders lives here.
+**5.3 (all, reverse, router) — Were participants excluded due to missing data on other variables needed for the analysis?**
+A gateway, reverse-polarity: Yes opens 5.4 and 5.5. Complete-case analysis on confounders
+lives here.
 
-**5.4 (all) — If PN/N to 5.1, or Y/PY to 5.2 or 5.3: are the proportion of participants and reasons for missing data similar across interventions?**
+**5.4 (all, joint, middle) — If PN/N to 5.1, or Y/PY to 5.2 or 5.3: are the proportion of participants and reasons for missing data similar across interventions?**
 
-**5.5 (all) — If PN/N to 5.1, or Y/PY to 5.2 or 5.3: is there evidence that results were robust to the presence of missing data?**
-Multiple imputation under a stated assumption, or a sensitivity analysis. Data missing on
-5.1–5.3 is Low when 5.4 or 5.5 is Yes; the rollup keeps it in the middle tier and raises it
-only when 5.4 or 5.5 is No.
+**5.5 (all, joint, middle) — If PN/N to 5.1, or Y/PY to 5.2 or 5.3: is there evidence that results were robust to the presence of missing data?**
+Multiple imputation under a stated assumption, or a sensitivity analysis. In the 2016
+criteria (Table C) missing data are Low when the missingness is similar across groups (5.4
+Yes) **or** the analysis is likely to have removed the bias (5.5 Yes); only when both are No
+is the domain Moderate or worse — Serious when the differences are substantial, which is a
+judgement the answers do not record. The rollup scores 5.4 and 5.5 as a pair (`joint`): one
+Yes clears the domain, both No put it in the middle tier with that judgement left to you.
 
 ## Domain 6 — Bias in measurement of outcomes
 
-**6.1 (all, reverse) — Could the outcome measure have been influenced by knowledge of the intervention received?**
+**6.1 (all, reverse, joint) — Could the outcome measure have been influenced by knowledge of the intervention received?**
 Reverse-polarity. A registry-recorded death cannot; a clinician-adjudicated diagnosis can.
 
-**6.2 (all, reverse) — Were outcome assessors aware of the intervention received by study participants?**
-Reverse-polarity. The 2016 criteria make this Serious only together with a subjective outcome
-(6.1). The rollup flags either one; if only one of them is Yes, say so and override.
+**6.2 (all, reverse, joint) — Were outcome assessors aware of the intervention received by study participants?**
+Reverse-polarity. The 2016 criteria (Table C) make this Serious only together with an outcome
+open to influence (6.1): an objective outcome, or assessors who did not know, is Low. The
+rollup scores 6.1 and 6.2 as a pair (`joint`) — both Yes is the top tier, one Yes with the
+other No flags nothing, and No information on the partner of a Yes leaves the domain
+unclear.
 
 **6.3 (all) — Were the methods of outcome assessment comparable across intervention groups?**
 Yes is the good answer. Differential surveillance — more testing in the treated group —
@@ -183,13 +196,26 @@ Reverse-polarity.
 
 - **normal** — `No` / `Probably no` is the problem.
 - **reverse** — `Yes` / `Probably yes` is the problem.
-- **router** — the answer only decides which question comes next (1.2, 1.3).
+- **router** — a gateway: the answer only decides which question comes next, and is listed,
+  not scored (1.2, 1.3, 2.1, 2.2, 5.1–5.3). *No information* at a gateway leaves the domain
+  unclear (middle tier), because the questions that would decide it cannot be reached.
 - **middle** — a problem answer here rules out Low but cannot by itself make the domain worse
-  than Moderate in the 2016 criteria (Table B and C of the tool); a later question decides
-  Serious (1.1, 2.1–2.4, 3.2, 4.1, 4.3–4.5, 5.1–5.3).
+  than Moderate in the 2016 criteria (Tables B and C of the tool); a later question decides
+  Serious (1.1, 2.3, 2.4, 3.2, 4.1, 4.3–4.5).
+- **joint** — problem answers that count only together: 5.4 with 5.5 (both No: at least
+  Moderate) and 6.1 with 6.2 (both Yes: Serious). One answer on the good side clears the pair.
 
-The tags follow the response markers of the 2016 tool (Table A colours the answers that are
-potential markers of low and of high risk of bias) and its judgement criteria.
+**Routing is followed.** Every "If … to …" condition above is read from the question text.
+A conditional question is scored only where its condition holds on the answers before it; an
+answer recorded at a question the routing skips is listed and not scored (2.1 No with a stray
+No at 2.5 is not Serious), and N/A where the routing reaches a question is a blank
+(INCOMPLETE). N/A is offered only on the conditional questions listed in `not_applicable`.
+
+The tags follow the judgement criteria of the 2016 tool (Tables B and C), read through the
+routing of Table A: a question whose Yes only opens further questions is a gateway, not a
+marker of bias in itself. Domain 2 in particular: 2.1 and 2.2 are gateways; 2.3 Yes (selection
+related to both intervention and outcome) or 2.4 No (follow-up and intervention starting at
+different times) rules out Low, and 2.5 decides Moderate (corrected) or Serious (not).
 
 ## Reaching the verdicts
 
@@ -214,8 +240,12 @@ non-randomised studies of interventions.* BMJ 2016;355:i4919 — the signalling 
 the web-extra Table A (PMC5062054, supplementary file), the judgement criteria in its Tables B
 and C. 30 items apply to the effect of assignment, 32 to the effect of starting and adhering.
 Question texts here are working paraphrases in the tool's vocabulary, not the canonical
-wording; the polarity and `middle` tags are this file's reading of Table A's response markers
-and of Tables B–C. ROBINS-I V2 (2024) is a different item set — do not cite this file for it,
+wording; the polarity, `router`, `middle` and `joint` tags are this file's reading of Tables
+B–C through Table A's routing. Validator 2.0.0 first tagged 2.1–2.2 and 5.1–5.3 `middle`
+(rating any Yes there at least Moderate) and 6.1/6.2 separately (either Yes Serious); the
+methodology review of the same release made them gateways and pairs, because Tables B–C give
+Low for 2.1 Yes with 2.2 No, for missing data with 5.4 or 5.5 Yes, and for an open outcome
+assessed by assessors who did not know. ROBINS-I V2 (2024) is a different item set — do not cite this file for it,
 and name the version in the methods section.
 
 **Numbering changed in validator 2.0.0.** Validator 1.x carried 31 items in its own order:
