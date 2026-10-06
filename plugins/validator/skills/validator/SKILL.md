@@ -22,7 +22,12 @@ python3 "$A" --route "<study design in the user's own words>"
 python3 "$A" --skeleton <tool> [--scope <variant>]     # every slot to fill
 python3 "$A" --verify  draft.md --tool <tool>          # what was left blank
 python3 "$A" --rollup  draft.md --tool <tool>          # what the answers force
+python3 "$A" --migrate old.md  --tool <tool> > new.md  # a validator 1.x file → current numbering
 ```
+
+Exit codes: **0** complete and final · **1** something is unanswered, invalid, undecided or in an
+old numbering (the output says which) · **2** usage error (unknown `--scope`, or a tool that runs
+on `checklist.py`).
 
 ## Choosing the instrument
 
@@ -62,7 +67,7 @@ This is where most appraisals go wrong, silently:
 
 | Tool | Assessed per |
 |---|---|
-| rob2 | **one result** — one outcome from one trial. The same trial can be low risk for mortality and high risk for a patient-reported score |
+| rob2 | **one result** — one outcome from one trial. The same trial can be low risk for mortality and high risk for a patient-reported score. `--scope assignment` (the default; also what `all` means here) or `--scope adherence` — alternatives, each with its own domain 2 |
 | robins-i / robins-e | **one result** — one outcome, one comparison |
 | quadas2 | one study, **per index test** |
 | quips | one study, **per prognostic factor and outcome** |
@@ -94,14 +99,25 @@ python3 "$A" --skeleton rob2 --scope assignment > appraisal.md
 
 Answer each signalling question from **what the paper actually says**, pointing at the specific
 sentence, table or section. Do not infer past what is reported: **"No information" is a normal,
-common, honest answer**, not a failure to find something. In the reference files each item
-carries guidance and a polarity tag:
+common, honest answer**, not a failure to find something. A conditional question whose
+condition is not met ("If Y/PY to 2.4: …") is answered **N/A** — never left blank. In the
+reference files each item carries guidance and a polarity tag:
 
 - **normal** — `No` is the problem;
-- **reverse** — `Yes` is the problem (RoB 2's 1.3, 4.1, 4.2; QUIPS's 3.6; ROBIS's 1.4);
+- **reverse** — `Yes` is the problem (RoB 2's 1.3, 4.1, 4.2; ROBINS-I's 6.4; ROBIS's 1.4);
 - **router** — the answer decides which question comes next and means nothing on its own
   (RoB 2's 2.1: every open-label trial answers Yes, and scoring that as a problem would rate
-  every unblinded trial high risk).
+  every unblinded trial high risk);
+- **middle** — a problem answer rules out the low tier but, on its own, goes no higher than
+  the middle one (ROBINS-I's 1.1: potential for confounding is Yes for nearly every
+  observational study; it rules out Low, and 1.4–1.8 decide whether it is Serious).
+
+Answer words are **per instrument**. Each reference file lists its vocabulary and the only
+shorthands it accepts — `PY` is *Probably yes* in RoB 2, ROBINS and PROBAST+AI, *Partial yes*
+in AMSTAR 2, and not an answer at all on the Newcastle-Ottawa scale. Some items accept only
+part of the vocabulary (GRADE's publication bias, AMSTAR 2's N/A on items 11, 12, 15 only, a
+partial star only on Newcastle-Ottawa's comparability item); the skeleton prints those
+restrictions and `--verify` rejects anything else as INVALID.
 
 ### 4. Verify, then roll up
 
@@ -110,8 +126,10 @@ python3 "$A" --verify appraisal.md --tool rob2 --scope assignment
 python3 "$A" --rollup appraisal.md --tool rob2 --scope assignment
 ```
 
-`--verify` names every slot with no verdict on its line and exits non-zero. Do not hand over an
-appraisal that fails it; fill the gaps or say why an item is genuinely N/A.
+`--verify` reads each answer from the table's **Answer** column (prose lines count only when
+they start with the item id), names every slot left blank, every answer the item does not offer
+and every word it does not recognise, and exits non-zero. Do not hand over an appraisal that
+fails it; fill the gaps or say why an item is genuinely N/A.
 
 `--rollup` behaves differently depending on whether the tool publishes an algorithm:
 
@@ -120,7 +138,15 @@ appraisal that fails it; fill the gaps or say why an item is genuinely N/A.
 - **RoB 2, ROBINS-I, ROBINS-E, QUADAS-2, QUIPS, JBI, ROBIS** — the rollup reports what the
   recorded answers *force* and names the questions that forced it. It does **not** reproduce
   the official flowcharts, which branch on particular questions. For a borderline domain, run
-  the answers through the source algorithm and say that you did.
+  the answers through the source algorithm and say that you did. QUIPS's *Partly* and any
+  *No information* / *Unclear* put a domain in the middle tier, never in LOW.
+
+Nothing is rated from a partial record. A domain with a blank or invalid answer is
+**INCOMPLETE** and makes the overall INCOMPLETE; GRADE prints `CERTAINTY: INCOMPLETE` while any
+domain (or the starting level) is blank, and `CERTAINTY: UNRESOLVED` while publication bias is
+*Suspected* or *Could not be assessed* — re-answer it *Undetected* (0) or *Strongly suspected*
+(−1) with the reason. AMSTAR 2 and Newcastle-Ottawa mark their rating provisional and name the
+missing items. In every such case `--rollup` exits 1.
 
 ### 5. Report it
 
@@ -135,7 +161,9 @@ share one verdict and nobody can see which of them was actually assessed — and
 judgement resting on an unexamined question reads exactly like one resting on three.
 
 Then per domain: the verdict plus one sentence of rationale, and for QUADAS-2 and PROBAST+AI
-the separate applicability judgement. Then the overall, with a paragraph.
+the separate applicability judgement — one per domain 1–3, which is how the QUADAS-2 skeleton
+prints the slots. ROBIS's phase 3 (3A–3C) is its own group, not part of domain 3. Then the
+overall, with a paragraph.
 
 You may override the arithmetic — but only explicitly. "Domain 4 is High on the algorithm
 because of the unblinded assessor, but the outcome is all-cause mortality from a national
@@ -163,6 +191,10 @@ python3 "$C" --verify draft.md --tool probast --scope both
 python3 "$C" --counts
 ```
 
+`--verify` reads each answer from the Answer (PROBAST+AI) or Status (TRIPOD+AI) cell only, and
+for PROBAST+AI only inside its own pass's section — keep the `### Quality (development)` and
+`### Risk of bias (evaluation)` headings the skeleton prints.
+
 PROBAST+AI is **16 signalling questions for development and 18 for evaluation — 34 in total**,
 not 23. Domains 1–3 carry the *same question texts* in both halves and are **answered twice**
 for a development-plus-evaluation study: once judging development *quality*, once judging
@@ -172,6 +204,21 @@ the verdict is the most common way such an appraisal silently under-counts — w
 instrument keeps its own engine rather than being flattened into the generic one.
 
 The domain-by-domain guidance is in `references/probast-ai.md` and `references/tripod-ai.md`.
+
+## Item numbering changed in 2.0.0 — old files
+
+ROBINS-I now follows the 2016 tool's numbering (34 items; 4.1–4.2 for the effect of
+assignment, 4.3–4.6 for adhering; 5.1–5.5; 6.1–6.4) and QUIPS the 31 published prompting items
+1a–6d. In a validator 1.x file the same id can name a different question, so `--verify` and
+`--rollup` recognise such a file and refuse to score it. Convert it explicitly:
+
+```bash
+python3 "$A" --migrate old.md --tool robins-i --scope <scope> > new.md   # then answer the blanks
+```
+
+The migration carries each answer only to the item that asks the same question, lists what it
+could not carry, and leaves the new questions blank so `--verify` names them. The id maps are
+in the `legacy_map` lines of `references/robins-i.md` and `references/quips.md`.
 
 ## Provenance
 

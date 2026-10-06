@@ -4,7 +4,10 @@
 tool: robins-e
 name: ROBINS-E (Risk Of Bias In Non-randomised Studies — of Exposures, 2023)
 answers: Yes|Probably yes|Probably no|No|No information
+aliases: Y=Yes; PY=Probably yes; PN=Probably no; N=No; NI=No information
+unknown_answer: No information
 verdicts: Low|Some concerns|High|Very high
+tiers: Low|Some concerns|High
 unit: RESULT (one exposure-outcome pair)
 use_for: observational studies of an exposure — environmental, occupational, nutritional, pharmacoepidemiological when the question is about exposure rather than a treatment decision
 -->
@@ -50,10 +53,10 @@ decades of accumulated exposure is a different construct, not a noisy version of
 **2.2 (all, reverse) — Could measurement or classification of the exposure have differed between groups defined by the outcome?**
 Reverse-polarity. Recall bias — cases remembering exposures more thoroughly than controls.
 
-**2.3 (all, reverse) — Were exposure measurement errors likely to be non-differential with respect to the outcome?**
-Reverse-polarity is inverted here: non-differential error usually biases toward the null, so
-`No` (differential error) is the problem and `Yes` is reassuring — hence this item is scored
-normally. Say which direction the error plausibly pushes the estimate; "measurement error"
+**2.3 (all) — Were exposure measurement errors likely to be non-differential with respect to the outcome?**
+Scored normally: `No` (differential error) is the problem and `Yes` is reassuring, because
+non-differential error usually biases toward the null rather than inventing an effect. Say
+which direction the error plausibly pushes the estimate; "measurement error"
 alone tells a reader nothing about whether the finding is likely to be too big or too small.
 
 ## Domain 3 — Bias in selection of participants into the study
@@ -64,7 +67,9 @@ where none exists.
 
 **3.2 (all) — Do start of follow-up and start of exposure coincide for most participants?**
 
-**3.3 (all) — Were adjustment techniques used that are likely to correct for selection bias?**
+**3.3 (all) — If Y/PY to 3.1 or N/PN to 3.2: were adjustment techniques used that are likely to correct for selection bias?**
+N/A when selection was not a problem — a study that needed no correction is not marked down
+for not making one.
 
 ## Domain 4 — Bias due to post-exposure interventions
 
@@ -77,9 +82,10 @@ Reverse-polarity. Screening or treatment that follows from being known to be exp
 
 **5.1 (all) — Were outcome data available for all, or nearly all, participants?**
 
-**5.2 (all) — Were participants excluded due to missing exposure or covariate data?**
+**5.2 (all, reverse) — Were participants excluded due to missing exposure or covariate data?**
+Reverse-polarity: Yes is the problem.
 
-**5.3 (all) — Is there evidence that the result was not biased by missing data?**
+**5.3 (all) — If N/PN to 5.1 or Y/PY to 5.2: is there evidence that the result was not biased by missing data?**
 Multiple imputation under a stated missingness assumption, or a sensitivity analysis. Complete
 case analysis is not evidence.
 
@@ -88,8 +94,8 @@ case analysis is not evidence.
 **6.1 (all, reverse) — Could the outcome measure have been influenced by knowledge of the exposure?**
 Reverse-polarity.
 
-**6.2 (all, reverse) — Were the methods of outcome assessment comparable across exposure groups?**
-Differential surveillance again: exposed cohorts are often monitored more closely, which finds
+**6.2 (all) — Were the methods of outcome assessment comparable across exposure groups?**
+Yes is the good answer. Differential surveillance again: exposed cohorts are often monitored more closely, which finds
 more disease.
 
 **6.3 (all) — Were any systematic errors in outcome measurement unrelated to exposure?**
@@ -122,7 +128,15 @@ the part reviewers actually use.
 ## Provenance
 
 Follows Higgins JPT, Morgan RL, Rooney AA, et al. *A tool to assess risk of bias in
-non-randomized studies of exposures (ROBINS-E).* Environment International 2024;186:108602,
-and the guidance at riskofbias.info/robins-e. Question texts are working paraphrases in the
-tool's vocabulary; the tool has been revised more than once — name the version you used, and
-check the item list against the current release before publishing an assessment.
+non-randomized studies of exposures (ROBINS-E).* Environment International 2024;186:108602
+(PMC11098530), and the guidance at riskofbias.info/robins-e. The seven domains and the issues
+each one covers follow the paper's Table 1; the **signalling questions here are a condensed
+working set, not the released tool's question list** (the 2023 release asks more questions,
+for example several on missing data, and offers "weak no / strong no" on its first confounding
+question). That is why `--counts` carries no expected total for this tool. Name the version
+you used, and use the released form when the assessment will be published.
+
+Polarity was corrected in validator 2.0.0: 2.3 (non-differential error) and 6.2 (comparable
+outcome assessment) are scored normally — Yes is reassuring — and 5.2 (exclusion for missing
+data) is reverse-worded. In 1.x the three were the other way round, so a well-conducted study
+was rated high risk in domains 2, 5 and 6.

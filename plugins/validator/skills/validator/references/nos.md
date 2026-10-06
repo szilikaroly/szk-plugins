@@ -4,7 +4,12 @@
 tool: nos
 name: Newcastle-Ottawa Scale (NOS) — star system for cohort and case-control studies
 answers: Yes|Partial yes|No|Unclear
+aliases: Y=Yes; N=No; U=Unclear
+unknown_answer: Unclear
 verdicts: see the note on thresholds — the scale publishes none
+published_items: 16
+published_by_scope: cohort=8; case-control=8
+item_answers: S1,S2,S3,S4,O1,O2,O3,S5,S6,S7,S8,E1,E2,E3=Yes|No|Unclear|N/A; C1,C2=Yes|Partial yes|No|Unclear|N/A
 unit: STUDY
 use_for: cohort and case-control studies, when a star-based appraisal is required
 scopes: cohort, case-control, all
@@ -29,6 +34,14 @@ Three things to know, and to say in your methods section if you use it:
 **Prefer ROBINS-I** (intervention questions) or **ROBINS-E** (exposure questions) whenever the
 review will be scrutinised. Use the NOS when a journal or a supervisor requires it — and then
 report the per-domain stars, never the total alone.
+
+## How the stars are counted
+
+Each Selection and Outcome / Exposure item earns **at most one star** — Yes or nothing. Only
+the comparability items (C1, C2) carry two stars, and only there does **Partial yes** mean
+something: one of the two stars, for controlling the single most important factor but no
+other. *Partial yes* on a one-star item is not an answer the scale offers; `--verify` rejects
+it and the rollup scores it 0. There is no "PY" shorthand for this scale — write *Partial yes*.
 
 ## Cohort studies — 8 items, 9 stars
 
@@ -100,8 +113,9 @@ Same rate for both groups, described.
 
 Wells GA, Shea B, O'Connell D, et al. *The Newcastle-Ottawa Scale (NOS) for assessing the
 quality of nonrandomised studies in meta-analyses.* Ottawa Hospital Research Institute (no
-formal journal publication). Item texts are working paraphrases of the published coding
-manual; the star-allocation rules above are compressed and the manual should be consulted for
-the exact criteria. The absence of an official threshold, the poor reliability, and the
+formal journal publication). One star per Selection and Outcome / Exposure item and up to two
+for comparability is the scale's rule as applied in published reviews (e.g. PMC13222748).
+Item texts are working paraphrases of the published coding manual; the star-allocation
+rules above are compressed and the manual should be consulted for the exact criteria. The absence of an official threshold, the poor reliability, and the
 commensurability problem are documented in the methodological literature and are stated here
 because a tool this widely used deserves its limits attached to it.

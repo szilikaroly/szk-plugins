@@ -4,12 +4,16 @@
 tool: rob2
 name: RoB 2 (Cochrane risk-of-bias tool for randomised trials, version 2, 22 August 2019)
 answers: Yes|Probably yes|Probably no|No|No information
+aliases: Y=Yes; PY=Probably yes; PN=Probably no; N=No; NI=No information
+unknown_answer: No information
 verdicts: Low|Some concerns|High
+tiers: Low|Some concerns|High
 published_items: 22
+published_by_scope: assignment=22; adherence=21
 unit: RESULT (one specific outcome, from one specific trial)
 use_for: individually randomised parallel-group trials; cluster-randomised and crossover trials add domain 1b / 1c questions from the variant tools
 scopes: assignment, adherence, all
-applicability: not part of RoB 2 — RoB 2 rates risk of bias only
+default_scope: assignment
 -->
 
 ## What this tool actually rates
@@ -21,10 +25,14 @@ interpretable — Cochrane's own guidance is explicit about this. Fill the table
 result you intend to use.
 
 **A specified effect of interest.** The default here is the *effect of assignment to
-intervention* (intention-to-treat). The *effect of adhering to intervention* uses a
-different domain 2 (per-protocol, adherence-focused), and mixing the two inside one
-assessment is the second most common way this tool is misapplied. State which one you are
-rating before answering 2.1.
+intervention* (intention-to-treat, `--scope assignment`, which is also what `all` means for
+this tool). The *effect of adhering to intervention* (per-protocol, `--scope adherence`) uses a
+different domain 2 with its own six questions numbered 2.1–2.6, and mixing the two inside one
+assessment is the second most common way this tool is misapplied. The two variants are
+alternatives, never additions: an assessment uses one of them. State which one you are rating
+before answering 2.1.
+
+RoB 2 rates risk of bias only; it has no applicability judgement.
 
 Answer vocabulary: **Yes / Probably yes / Probably no / No / No information**. "Probably"
 is not hedging — it marks a judgement made from indirect evidence rather than an explicit
@@ -66,7 +74,7 @@ would also happen outside a trial, which is part of the effect of assignment.
 
 **2.4 (assignment, router) — If Y/PY to 2.3: were these deviations likely to have affected the outcome?**
 
-**2.5 (assignment) — If Y/PY to 2.4: were these deviations from intended intervention balanced between groups?**
+**2.5 (assignment) — If Y/PY/NI to 2.4: were these deviations from intended intervention balanced between groups?**
 
 **2.6 (assignment) — Was an appropriate analysis used to estimate the effect of assignment to intervention?**
 Intention-to-treat, or a "modified ITT" that excludes only participants with no outcome
@@ -75,6 +83,26 @@ data. Excluding participants for non-adherence, or analysing as-treated, answers
 **2.7 (assignment, reverse) — If N/PN/NI to 2.6: was there potential for a substantial impact of the failure to analyse participants in the group to which they were randomised?**
 Judge the *size* of the excluded group and how differently it plausibly fared. A handful of
 exclusions in a large trial with a common outcome usually cannot move the result.
+
+**Effect of adhering to intervention** — the domain 2 questions for `--scope adherence`. The
+ids repeat 2.1–2.6 because the published template numbers them that way; the scope decides
+which set is printed and read.
+
+**2.1 (adherence, router) — Were participants aware of their assigned intervention during the trial?**
+
+**2.2 (adherence, router) — Were carers and people delivering the interventions aware of participants' assigned intervention during the trial?**
+
+**2.3 (adherence, middle) — If applicable, and if Y/PY/NI to 2.1 or 2.2: were important non-protocol interventions balanced across intervention groups?**
+N/A when nobody was aware of the assignment, or when non-protocol interventions are not part
+of the question.
+
+**2.4 (adherence, reverse, middle) — If applicable: were there failures in implementing the intervention that could have affected the outcome?**
+
+**2.5 (adherence, reverse, middle) — If applicable: was there non-adherence to the assigned intervention regimen that could have affected participants' outcomes?**
+
+**2.6 (adherence) — If N/PN/NI to 2.3, or Y/PY/NI to 2.4 or 2.5: was an appropriate analysis used to estimate the effect of adhering to the intervention?**
+Methods that allow for the non-adherence — instrumental variables, inverse probability
+weighting. A naive per-protocol or as-treated analysis is No.
 
 ## Domain 3 — Missing outcome data
 
@@ -139,6 +167,12 @@ Each item carries a tag that tells `appraise.py --rollup` how to read its answer
   (2.1, 2.2, 2.3, 2.4, 3.3, 4.3, 4.4). Every open-label trial answers Yes to 2.1; scoring
   that as a problem would rate every unblinded trial high risk, which is not what the tool
   says. Routers are listed in the rollup and excluded from the verdict.
+- **middle** — a problem answer here puts the domain in the middle tier (Some concerns) and
+  no higher on its own; the analysis question decides High.
+
+For the adherence variant of domain 2: 2.1 and 2.2 route; 2.3 (normal), 2.4 and 2.5 (reverse)
+are middle, because the published algorithm rates them High only when 2.6, the analysis
+question, is No; 2.6 is normal.
 
 ## The algorithm, and why this file does not pretend to run it
 
@@ -160,7 +194,10 @@ is a judgement, and it must be stated when used.
 Domain structure, the 22 signalling questions and the answer vocabulary follow Sterne JAC,
 Savović J, Page MJ, et al. *RoB 2: a revised tool for assessing risk of bias in randomised
 trials.* BMJ 2019;366:l4898, and the RoB 2 guidance document (version 22 August 2019) at
-riskofbias.info. The question texts here are working paraphrases in the tool's own
+riskofbias.info. The six domain-2 questions for the effect of adhering (21 questions in that
+variant) follow the official template as reproduced in published assessments (e.g. PMC8920395,
+PMC11432466); validator 1.x advertised `--scope adherence` without them and verified a
+15-slot appraisal that never assessed domain 2. The question texts here are working paraphrases in the tool's own
 vocabulary, not a verbatim reproduction; check the canonical wording at riskofbias.info
 before quoting an item in a manuscript, and use the official Excel template when the
 assessment will be published.

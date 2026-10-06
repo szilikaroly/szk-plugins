@@ -4,7 +4,10 @@
 tool: quadas2
 name: QUADAS-2 (Quality Assessment of Diagnostic Accuracy Studies, version 2)
 answers: Yes|No|Unclear
+aliases: Y=Yes; N=No; U=Unclear
+unknown_answer: Unclear
 verdicts: Low|High|Unclear
+tiers: Low|Unclear|High
 published_items: 11
 unit: STUDY, but per index test — a study comparing two index tests is assessed once per test
 use_for: diagnostic test accuracy studies contributing sensitivity and specificity
@@ -29,15 +32,15 @@ QUADAS-2 is explicitly designed to be tailored, and an untailored application is
 
 **1.1 (all) — Was a consecutive or random sample of patients enrolled?**
 
-**1.2 (all, reverse) — Was a case-control design avoided?**
-Reverse-polarity is *not* needed here — the item is worded so that Yes is good — but note the
-trap: two-gate ("diagnostic case-control") designs, comparing clear cases with healthy
-controls, inflate accuracy substantially. This is the most consequential single item in the
-tool.
+**1.2 (all) — Was a case-control design avoided?**
+Worded so that **Yes is good**: Yes means the case-control design *was* avoided. The trap it
+guards against: two-gate ("diagnostic case-control") designs, comparing clear cases with
+healthy controls, inflate accuracy substantially. This is the most consequential single item
+in the tool.
 
-**1.3 (all, reverse) — Did the study avoid inappropriate exclusions?**
-Excluding difficult-to-diagnose patients, prior test failures, or those with comorbidity
-raises apparent accuracy.
+**1.3 (all) — Did the study avoid inappropriate exclusions?**
+Yes is good here too. Excluding difficult-to-diagnose patients, prior test failures, or those
+with comorbidity raises apparent accuracy.
 
 ## Domain 2 — Index test
 
@@ -69,6 +72,9 @@ and index-negative patients getting follow-up instead — biases accuracy upward
 **4.4 (all) — Were all patients included in the analysis?**
 Excluding indeterminate index-test results is the usual failure, and it is usually invisible
 in the abstract.
+
+Every QUADAS-2 signalling question is worded so that **Yes means low concern** — none is
+reverse-worded. A tailored question you add should keep that convention.
 
 ## Reporting it
 

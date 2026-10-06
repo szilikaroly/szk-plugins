@@ -121,7 +121,7 @@
     {
       "name": "validator",
       "source": "./plugins/validator",
-      "description": "Critical appraisal with the right instrument, every slot answered, and the domain verdicts computed from the answers instead of asserted. Routes a design to its tool — RoB 2, ROBINS-I, ROBINS-E, QUADAS-2, QUIPS, PROBAST+AI, TRIPOD+AI, AMSTAR 2, ROBIS, Newcastle-Ottawa, JBI, GRADE — prints the full slot list, verifies that none was left blank, and applies each tool's published rating algorithm where one exists. Item lists are parsed from the reference files so the script and the reference cannot drift apart.",
+      "description": "Critical appraisal with the right instrument, every slot answered, and the domain verdicts computed from the answers instead of asserted. Routes a design to its tool — RoB 2, ROBINS-I, ROBINS-E, QUADAS-2, QUIPS, PROBAST+AI, TRIPOD+AI, AMSTAR 2, ROBIS, Newcastle-Ottawa, JBI, GRADE — prints the full slot list, verifies that none was left blank and that every answer is one the item offers, and applies each tool's published rating algorithm where one exists; a domain with an unanswered question is INCOMPLETE, never LOW. ROBINS-I and QUIPS follow their published item numbering (2.0.0, with a migration for 1.x files). Item lists are parsed from the reference files so the script and the reference cannot drift apart.",
       "author": {
         "name": "Dr. Szili Károly"
       },

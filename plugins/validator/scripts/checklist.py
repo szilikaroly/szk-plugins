@@ -136,32 +136,164 @@ def skeleton_tripod(scope: str) -> str:
     return "\n".join(L)
 
 
+# --------------------------------------------------------------------------- reading
+
+PROBAST_TOKENS = {"yes", "probably yes", "probably no", "no", "no information", "ni", "py",
+                  "pn", "y", "n", "n/a", "na", "not applicable"}
+TRIPOD_TOKENS = {"present", "partial", "missing", "n/a", "na", "not applicable"}
+
+#: "If Y/PY to 4.1:" — a question's conditional prefix is not its answer.
+_COND_RE = re.compile(r"\bif\s+(?:(?:Y|PY|N|PN|NI|NA)/)*(?:Y|PY|N|PN|NI|NA)\s+to\b[^:?]*[:?]",
+                      re.I)
+_SEP_RE = re.compile(r"\s[—–]\s|\s-\s|:\s|\s=>?\s|\s->\s")
+
+
+def _cells(line: str) -> list[str]:
+    return [c.strip() for c in line.strip().strip("|").split("|")]
+
+
+def _is_sep(cells: list[str]) -> bool:
+    return any(cells) and all(re.fullmatch(r":?-{2,}:?", c) for c in cells if c)
+
+
+def _clean(cell: str) -> str:
+    c = cell.strip().strip("*_`").strip()
+    return "" if c in ("—", "–", "-") else c
+
+
+def _col(header: list[str] | None, names: tuple[str, ...]) -> int | None:
+    for i, h in enumerate(header or []):
+        if any(h.strip("*_ ").lower().startswith(n) for n in names):
+            return i
+    return None
+
+
+def _prose_answer(rest: str, title: str, tokens: set[str]) -> str | None:
+    """The answer in a prose line, after the item's own title and any "If …:" clause
+    are cut out. Only an emphasised answer, the text after the last separator,
+    or a line that opens with the answer counts — "11 How missing data were
+    handled …" is a title that contains a status word, not a status."""
+    r = rest
+    for t in (title, title[:64], title[:52]):
+        t = t.strip()
+        if len(t) >= 12 and t.lower() in r.lower():
+            j = r.lower().index(t.lower())
+            r = r[:j] + " " + r[j + len(t):]
+            break
+    r = _COND_RE.sub(" ", r)
+    alts = "|".join(re.escape(x) for x in sorted(tokens, key=len, reverse=True))
+    tok_re = re.compile(rf"(?<![\w/])({alts})(?![\w/])", re.I)
+    for b in re.findall(r"\*\*(.+?)\*\*", r):
+        if _clean(b).lower() in tokens:
+            return _clean(b).lower()
+    parts = _SEP_RE.split(r)
+    if len(parts) > 1:
+        m = tok_re.search(parts[-1])
+        if m:
+            return m.group(1).lower()
+    m = re.match(rf"\s*({alts})(?![\w/])", r, re.I)
+    return m.group(1).lower() if m else None
+
+
+def read_by_pass(text: str, tokens: set[str], answer_cols: tuple[str, ...],
+                 titles: dict[str, str]) -> dict[str | None, dict[str, str]]:
+    """{pass: {id: answer}} — pass is 'development', 'evaluation' or None.
+
+    The pass is the one named by the nearest heading above (a PROBAST+AI
+    skeleton prints "### Quality (development)" and "### Risk of bias
+    (evaluation)"). In 1.x the whole file was searched for each id, so the
+    development table's 1.1-4.5 also answered the evaluation pass's 1.1-4.5:
+    filling one pass verified 32 of 34.
+
+    In a table the answer is read from the column the header names, and nowhere
+    else; a table without a header falls back to the first cell that is exactly
+    an answer. In 1.x a line-wide search counted the word "Missing" in TRIPOD
+    item 11's title ("How missing data were handled") as its status, and a "no"
+    in an evidence note ("no mention in methods") as a PROBAST answer.
+    Outside tables, a line counts only when it starts with the item id.
+    """
+    out: dict[str | None, dict[str, str]] = {}
+    lines = text.splitlines()
+    cur: str | None = None
+    header: list[str] | None = None
+    for i, line in enumerate(lines):
+        s = line.strip()
+        h = re.match(r"^#{1,6}\s+(.*)$", s)
+        if h:
+            low = h.group(1).lower()
+            if "development" in low:
+                cur = "development"
+            elif "evaluation" in low:
+                cur = "evaluation"
+            header = None
+            continue
+        if s.startswith("|"):
+            cells = _cells(s)
+            if _is_sep(cells):
+                continue
+            nxt = lines[i + 1].strip() if i + 1 < len(lines) else ""
+            if nxt.startswith("|") and _is_sep(_cells(nxt)):
+                header = [c.lower() for c in cells]
+                continue
+            iid = cells[0].strip("*_` ") if cells else ""
+            col = _col(header, answer_cols)
+            cand = ([cells[col]] if col < len(cells) else []) if col is not None else cells[1:]
+            for c in cand:
+                tok = _clean(c).lower()
+                if tok in tokens:
+                    out.setdefault(cur, {}).setdefault(iid, tok)
+                    break
+            continue
+        header = None
+        m = re.match(r"^\s*(?:[-*+]\s+)?(?:\*\*)?([0-9]{1,2}(?:\.[0-9]{1,2}|[a-z])?)"
+                     r"(?:\*\*|[.):])*\s+(.*)$", s, re.I)
+        if m and m.group(1) in titles:
+            tok = _prose_answer(m.group(2), titles[m.group(1)], tokens)
+            if tok:
+                out.setdefault(cur, {}).setdefault(m.group(1), tok)
+    return out
+
+
 def verify(path: Path, tool: str, scope: str) -> int:
     text = path.read_text(encoding="utf-8")
+    note = ""
     if tool == "probast":
         items = probast_items()
         passes = ["development", "evaluation"] if scope == "both" else [scope]
+        titles = {qid: title for p in items.values() for qid, title in p}
+        by_pass = read_by_pass(text, PROBAST_TOKENS, ("answer", "response"), titles)
+        named = [p for p in by_pass if p]
         missing: list[str] = []
         for p in passes:
+            # A single-pass file needs no pass heading; a two-pass file does,
+            # because otherwise nothing says which pass an answer belongs to.
+            pool = by_pass.get(p, {})
+            if scope != "both" and not named:
+                pool = by_pass.get(None, {})
             for qid, _ in items[p]:
-                # An id is "answered" only if a verdict token shares its line.
-                pat = re.compile(
-                    rf"^.*\b{re.escape(qid)}\b.*?\b"
-                    rf"(Yes|Probably yes|Probably no|No information|NI|PY|PN|N/A|No)\b",
-                    re.M | re.I)
-                if not pat.search(text):
+                if qid not in pool:
                     missing.append(f"{p}/{qid}")
+        if scope == "both" and by_pass.get(None):
+            note = (f"  {len(by_pass[None])} answer(s) sit outside a '(development)' / "
+                    "'(evaluation)' section and were not counted: in a two-pass appraisal "
+                    "every answer has to be under its pass's heading.")
         expected = sum(len(items[p]) for p in passes)
     else:
         keep = [i for i in tripod_items()
                 if scope == "both" or scope[0].upper() in i[1]]
-        missing = [i[0] for i in keep if not re.search(
-            rf"^.*\b{re.escape(i[0])}\b.*?\b(Present|Partial|Missing|N/A)\b",
-            text, re.M | re.I)]
+        titles = {i[0]: i[2] for i in keep}
+        by_pass = read_by_pass(text, TRIPOD_TOKENS, ("status",), titles)
+        pool: dict[str, str] = {}
+        for answers in by_pass.values():
+            for k, v in answers.items():
+                pool.setdefault(k, v)
+        missing = [i[0] for i in keep if i[0] not in pool]
         expected = len(keep)
 
     done = expected - len(missing)
     print(f"  {done}/{expected} answered")
+    if note:
+        print(note)
     if missing:
         print(f"  UNANSWERED ({len(missing)}): {', '.join(missing)}")
         print("  An appraisal with unanswered slots is not finished. 'No "
@@ -171,7 +303,7 @@ def verify(path: Path, tool: str, scope: str) -> int:
     return 0
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--skeleton", choices=("probast", "tripod"))
@@ -180,15 +312,16 @@ def main() -> int:
     ap.add_argument("--scope", choices=("development", "evaluation", "both"),
                     default="both")
     ap.add_argument("--counts", action="store_true")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     if args.counts:
         p = probast_items()
         t = tripod_items()
         print(f"  PROBAST+AI development : {len(p['development'])}  (paper says 16)")
         print(f"  PROBAST+AI evaluation  : {len(p['evaluation'])}  (paper says 18)")
-        print(f"  TRIPOD+AI items parsed : {len(t)}")
-        bad = (len(p["development"]) != 16) or (len(p["evaluation"]) != 18)
+        print(f"  TRIPOD+AI items parsed : {len(t)}  (paper says 52)")
+        bad = (len(p["development"]) != 16) or (len(p["evaluation"]) != 18) \
+            or (len(t) != 52)
         print("  MISMATCH — the reference file and the published tool disagree"
               if bad else "  matches the published counts")
         return 1 if bad else 0

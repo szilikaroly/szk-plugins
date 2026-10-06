@@ -25,6 +25,11 @@ python3 "$A" --verify appraisal.md --tool <TOOL> --scope <SCOPE>
 python3 "$A" --rollup appraisal.md --tool <TOOL> --scope <SCOPE>
 ```
 
+   `--verify` and `--rollup` exit 1 until every slot is answered with a word the item offers;
+   a domain with a blank is INCOMPLETE, never LOW. A file written with validator 1.x for
+   ROBINS-I or QUIPS is refused (their item numbering changed in 2.0.0) — convert it first with
+   `python3 "$A" --migrate old.md --tool <TOOL> --scope <SCOPE> > appraisal.md`.
+
 6. **Report one row per signalling question**, then the domain verdicts with a sentence each,
    then the overall with a paragraph. If you override what the rollup computed, say so and say
    why — silently smoothing over a flag is the failure this whole tool exists to prevent.

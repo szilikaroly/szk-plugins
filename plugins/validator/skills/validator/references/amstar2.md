@@ -4,7 +4,10 @@
 tool: amstar2
 name: AMSTAR 2 (A MeaSurement Tool to Assess systematic Reviews, version 2)
 answers: Yes|Partial yes|No
+aliases: Y=Yes; N=No; PY=Partial yes; No meta-analysis conducted=N/A
+unknown_answer: No
 verdicts: High|Moderate|Low|Critically low
+item_answers: 1,3,5,6,10,13,14,16=Yes|No; 2,4,7,8,9=Yes|Partial yes|No; 11,12,15=Yes|No|N/A
 published_items: 16
 critical: 2,4,7,9,11,13,15
 unit: REVIEW
@@ -77,7 +80,8 @@ Jadad scale" is No — a scale is not a risk-of-bias assessment.
 
 **11 (critical) — If meta-analysis was performed, did the review authors use appropriate methods for statistical combination of results?**
 Justified the model, investigated heterogeneity, combined only combinable studies. Answer
-N/A — and say so — if no meta-analysis was done; N/A does not count as a flaw.
+N/A ("No meta-analysis conducted", the published option) if no meta-analysis was done; N/A
+counts as neither a flaw nor a weakness. Items 11, 12 and 15 are the only ones that offer it.
 
 **12 — If meta-analysis was performed, did the review authors assess the potential impact of risk of bias in individual studies on the results?**
 
@@ -95,6 +99,21 @@ scores better than an uninterpretable funnel plot.
 
 **16 — Did the review authors report any potential sources of conflict of interest, including funding received for conducting the review?**
 
+## Answers each item offers
+
+The published checklist does not give every item the same options, and `--verify` holds each
+item to its own:
+
+| Items | Options |
+|---|---|
+| 1, 3, 5, 6, 10, 13, 14, 16 | Yes / No |
+| 2, 4, 7, 8, 9 | Yes / Partial yes / No |
+| 11, 12, 15 | Yes / No / No meta-analysis conducted (write N/A) |
+
+In this instrument **PY means Partial yes** — never "probably yes", which AMSTAR 2 does not
+have. In 1.x the shorthand was read as "probably yes" and counted as a full Yes, so a critical
+item marked PY silently vanished from the rating.
+
 ## One judgement call the tool leaves open
 
 A **Partial yes on a critical item** — most often item 2 or item 4 — is treated here as a
@@ -108,5 +127,6 @@ rollup names every Partial yes it counted this way.
 Shea BJ, Reeves BC, Wells G, et al. *AMSTAR 2: a critical appraisal tool for systematic
 reviews that include randomised or non-randomised studies of healthcare interventions, or
 both.* BMJ 2017;358:j4008, and the AMSTAR 2 guidance at amstar.ca. Item texts are working
-paraphrases; the Yes / Partial yes thresholds above follow the published guidance and should
-be checked against amstar.ca when an assessment is published.
+paraphrases; the Yes / Partial yes thresholds above and the per-item options follow the
+published checklist (the web appendix of the BMJ paper, PMC5833365) and should be checked
+against amstar.ca when an assessment is published.

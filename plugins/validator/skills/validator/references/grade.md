@@ -3,8 +3,11 @@
 <!--
 tool: grade
 name: GRADE — certainty (quality) of a body of evidence, rated per outcome
-answers: Not serious|Serious|Very serious|Yes|No|Undetected|Suspected|Strongly suspected|High|Low
+answers: Not serious|Serious|Very serious|Yes|No|Very large|Undetected|Suspected|Strongly suspected|Could not be assessed|High|Low
+aliases: Y=Yes; N=No
 verdicts: High|Moderate|Low|Very low
+published_items: 9
+item_answers: 0.1=High|Low; 1.1,2.1,3.1,4.1=Not serious|Serious|Very serious; 5.1=Undetected|Suspected|Strongly suspected|Could not be assessed; 6.1=No|Yes|Very large|N/A; 7.1,8.1=No|Yes|N/A
 group_label: GRADE domain
 unit: OUTCOME — one rating per outcome, never per study and never per review
 use_for: rating how much confidence to place in an effect estimate across the whole body of evidence for one outcome
@@ -60,14 +63,25 @@ a narrow one that straddles it may.
 
 ## Domain 5 — Publication bias
 
-**5.1 (all) — Publication bias: undetected / suspected / strongly suspected.**
+**5.1 (all) — Publication bias: undetected / suspected / strongly suspected / could not be assessed.**
 Small positive studies only, industry funding across the board, an asymmetric funnel plot with
-enough studies to interpret one. With fewer than about ten studies, "could not be assessed" is
-the honest answer, and it is not the same as "undetected" — say which one you mean.
+enough studies to interpret one. The four answers mean different things to the arithmetic:
+
+- **Undetected** — no downgrade.
+- **Strongly suspected** — downgrade one level. GRADE allows two for a very strong suspicion;
+  that is a manual call — state it and the reason, the rollup does not make it for you.
+- **Suspected** — a concern that has not been decided yet. The rollup prints UNRESOLVED and
+  withholds the certainty until you re-answer *Undetected* or *Strongly suspected* with the
+  reason in the evidence column. In 1.x it silently counted as no downgrade.
+- **Could not be assessed** — with fewer than about ten studies the funnel plot cannot be read,
+  and that is not the same as "undetected". It is also UNRESOLVED: the decision still has to
+  be made from what you can see (small studies, funding), and recorded the same way.
 
 ## Domain 6 — Large effect
 
 **6.1 (all) — Large magnitude of effect (RR > 2 or < 0.5, consistent, no plausible confounders)?**
+Answer *Yes* (+1), *Very large* (RR > 5 or < 0.2: +2) or *No*. N/A is accepted for the three
+upgrade domains of a body of randomised trials, where they are not considered.
 
 ## Domain 7 — Dose-response
 
@@ -80,10 +94,13 @@ the honest answer, and it is not the same as "undetected" — say which one you 
 ## How the arithmetic works
 
 Start High (RCTs) or Low (observational). Subtract one level per *serious* domain, two per
-*very serious*. Upgrade factors apply **only to a body of evidence that has not been
-downgraded** — in practice, only to observational evidence with no serious limitations. Floor
-at Very low. `appraise.py --rollup ... --tool grade` computes this and refuses to apply an
-upgrade alongside a downgrade.
+*very serious*, one for publication bias *strongly suspected*. Upgrade factors — +1 each, +2
+for a very large effect — apply **only to a body of evidence that has not been downgraded**:
+in practice, only to observational evidence with no serious limitations. Floor at Very low.
+`appraise.py --rollup ... --tool grade` computes this, refuses to apply an upgrade alongside a
+downgrade, and gives no certainty at all while a domain is unanswered (INCOMPLETE) or
+publication bias is undecided (UNRESOLVED). Each domain accepts only its own answers: a
+*Serious* on publication bias, for instance, is rejected rather than read.
 
 | Certainty | What it licenses saying |
 |---|---|
@@ -99,7 +116,9 @@ throws that away.
 ## Provenance
 
 The GRADE Handbook (Schünemann H, Brożek J, Guyatt G, Oxman A, eds., updated October 2013) and
-the GRADE series in J Clin Epidemiol 2011;64. Domain names and the rating arithmetic follow
+the GRADE series in J Clin Epidemiol 2011;64 — publication bias in part 5 (Guyatt et al.,
+PMID 21802904), rating up, including two levels for a very large effect, in part 9 (Guyatt et
+al., PMID 21802902). Domain names and the rating arithmetic follow
 those sources; the guidance text here is a working summary. For a published Summary of
 Findings table, use GRADEpro GDT — and note that the ROBINS-I-based approach to starting level
 for non-randomised evidence is a documented variant, not the default.
