@@ -96,8 +96,8 @@ the unscoped rollup that reported "9/18 stars" for a Newcastle-Ottawa cohort, an
 the GRADE substring test in which "not serious" contained "serious" and
 downgraded every domain the assessor had explicitly cleared. The 2.0.0 block
 adds one test per defect listed below; each of them fails against 1.0.0, the
-methodology-review block fails against the first 2.0.0 commit (60e290b), and the ROBINS-I
-gateway block against 1b2c906.
+methodology-review block fails against the first 2.0.0 commit (60e290b), the ROBINS-I
+gateway block against 1b2c906, and the engine-agreement block against 84363b0.
 
 ## Provenance
 
@@ -107,6 +107,38 @@ paraphrases in each tool's vocabulary — use the published wording when an asse
 in a manuscript, and name the tool version in the methods section.
 
 ## Changes
+
+### 2.0.0 — agreement with the metaANAL engine (same release)
+
+Every answer combination of every domain was enumerated — RoB 2 (both variants), ROBINS-I (both),
+ROBINS-E, QUADAS-2, QUIPS, NOS (per form), GRADE and AMSTAR 2 — and this rollup, run on the
+generated Markdown records, was compared with the metaANAL engine's `appraisal.check`. Two
+disagreement classes were this side's; each fix has regression tests (`[agreement …]` in
+`scripts/selftest.py`, 230 → 254 assertions; 10 of the new ones fail against 84363b0):
+
+- **RoB 2 3.2 offered *No information*.** The 2019 template has no NI option at 3.2 (evidence
+  that the result is not biased is shown or it is not); `item_answers` now restricts it, so
+  `--verify` rejects it and domain 3 is INCOMPLETE instead of a verdict.
+- **No information at a gateway, settled later.** NI at a gateway kept the domain at the middle
+  tier even when another answer opened the question that gateway feeds and that question was
+  answered — ROBINS-E 5.1 NI with 5.2 *Yes* and 5.3 *Yes*, ROBINS-I 5.1 NI with 5.2 *Yes* and
+  5.4 or 5.5 *Yes* rolled up SOME CONCERNS; they are Low now, as RoB 2's 3.1 NI with 3.2 *Yes*
+  is. A gateway whose dependent questions are not reached still leaves the domain unclear.
+
+The selftest also checks every RoB 2 domain of both variants, for every answer each question
+offers, against an independent implementation written from the 2019 criteria table (as
+reproduced in PMC8191126, Table 2): no difference.
+
+What still differs from the engine is deliberate on both sides and documented there (the
+metaANAL bridge prints a note for each): N/A at a question the routing reaches is INCOMPLETE
+here and counted as *No information* by the engine; where the ROBINS-I/-E answers do not decide
+between the middle and the top tier (No information at a correction question such as ROBINS-I
+2.5 or ROBINS-E 3.3/4.2/5.3, or ROBINS-I 5.4 and 5.5 both *No*) this rollup reports the tier the
+answers force and the engine's conservative rule the stricter one; a blank question the routing
+does not reach is INCOMPLETE here; and AMSTAR 2 here is the engine's 'weakness' convention
+(*Partial yes* is a weakness on every item that offers it), while the engine's default is 'meets'
+and it reports both. GRADE agrees on every combination of the shared vocabulary; *N/A* on the
+upgrading domains and *Could not be assessed* for publication bias exist only here.
 
 ### 2.0.0 — ROBINS-I 2.1 is a gateway; ROBINS-E, QUADAS-2 and QUIPS review (same release)
 

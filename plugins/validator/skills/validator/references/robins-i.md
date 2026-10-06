@@ -198,7 +198,9 @@ Reverse-polarity.
 - **reverse** — `Yes` / `Probably yes` is the problem.
 - **router** — a gateway: the answer only decides which question comes next, and is listed,
   not scored (1.2, 1.3, 2.1, 2.2, 5.1–5.3). *No information* at a gateway leaves the domain
-  unclear (middle tier), because the questions that would decide it cannot be reached.
+  unclear (middle tier), because the questions that would decide it cannot be reached — unless
+  another answer still reaches a question that gateway feeds and it is answered: 5.1 NI with
+  5.2 Yes opens 5.4/5.5, and either of them Yes is Low (Table C).
 - **middle** — a problem answer here rules out Low but cannot by itself make the domain worse
   than Moderate in the 2016 criteria (Tables B and C of the tool); a later question decides
   Serious (1.1, 2.3, 2.4, 3.2, 4.1, 4.3–4.5).

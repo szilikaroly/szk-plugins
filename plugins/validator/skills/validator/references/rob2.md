@@ -14,6 +14,7 @@ unit: RESULT (one specific outcome, from one specific trial)
 use_for: individually randomised parallel-group trials; cluster-randomised and crossover trials add domain 1b / 1c questions from the variant tools
 scopes: assignment, adherence, all
 default_scope: assignment
+item_answers: 3.2=Yes|Probably yes|Probably no|No|N/A
 not_applicable: assignment/2.3, assignment/2.4, assignment/2.5, assignment/2.7, adherence/2.3, adherence/2.4, adherence/2.5, adherence/2.6, 3.2, 3.3, 3.4, 4.3, 4.4, 4.5
 -->
 
@@ -118,7 +119,9 @@ event rate can reverse a result, while 10% missing with a 50% event rate may not
 
 **3.2 (all) — If N/PN/NI to 3.1: is there evidence that the result was not biased by missing outcome data?**
 A sensitivity analysis under plausible alternative assumptions is evidence. Similar
-proportions missing in both arms is *not*, because the reasons can still differ.
+proportions missing in both arms is *not*, because the reasons can still differ. The 2019
+template offers no *No information* here: evidence is either shown or it is not, so a report
+that says nothing about it answers No (or Probably no).
 
 **3.3 (all, reverse) — If N/PN to 3.2: could missingness in the outcome depend on its true value?**
 Reverse-polarity. For mortality, missingness usually cannot depend on the true value in the

@@ -140,7 +140,8 @@ rollup prints that caveat with a Low domain 1.
 condition holds; an answer at one the routing skips is listed and not scored, N/A where the
 routing reaches it is a blank, and N/A anywhere else is rejected. 1.4, 5.1 and 5.2 are
 gateways (`router`): their answer opens the next question and is not a verdict, but No
-information there leaves the domain unclear. ROBINS-E's own guidance stresses that *Low* requires the study to be
+information there leaves the domain unclear — unless another answer still opens the question
+the gateway feeds and that question is answered (5.1 NI with 5.2 Yes opens 5.3; 5.3 Yes is Low). ROBINS-E's own guidance stresses that *Low* requires the study to be
 comparable to a well-conducted study with no important residual confounding — for most
 exposure epidemiology, **Some concerns is the realistic ceiling**, and an appraisal that
 returns Low for a food-frequency-questionnaire cohort has almost certainly under-read

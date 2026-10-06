@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import itertools
 import re
 import sys
 import tempfile
@@ -544,6 +545,7 @@ def run() -> bool:
 
     ok &= methodology_review(tools)
     ok &= gateway_review(tools)
+    ok &= agreement_review(tools)
 
     print(f"\n{'ALL PASSED' if ok else 'FAILURES PRESENT'}")
     return ok
@@ -1057,6 +1059,158 @@ def gateway_review(tools: dict) -> bool:
     log = out.split("MIGRATION —")[-1]
     ok &= _ok("adherence scope: 1.x 4.1-4.2 are listed as not carried",
               rc == 0 and "4.1 'No', 4.2 'No'" in log and "4.3→4.6" in log)
+    return ok
+
+
+# --------------------------------------------------------------------------- agreement
+
+_Y, _N, _NI, _NA = ("Yes", "Probably yes"), ("No", "Probably no"), "No information", "N/A"
+
+
+class _Inc(Exception):
+    pass
+
+
+def _ref_rob2(domain: str, a: dict, adherence: bool) -> str:
+    """RoB 2 written from the 2019 criteria table (as reproduced in PMC8191126, Table 2) and the
+    template routing — independently of rollup_rob2. N/A where the walk needs an answer, or No
+    information at 3.2 (not an option of the template), is INCOMPLETE."""
+    def need(k: str, na_ok: bool = False) -> str:
+        v = a.get(k)
+        if v is None or (v == _NA and not na_ok):
+            raise _Inc(k)
+        return v
+    order = ["low", "some", "high"]
+    if domain == "1":
+        r, c, b = need("1.1"), need("1.2"), need("1.3")
+        if c in _N:
+            return "high"
+        if c == _NI:
+            return "high" if b in _Y else "some"
+        return "some" if (b in _Y or r in _N) else "low"
+    if domain == "2" and adherence:
+        aware = not (need("2.1") in _N and need("2.2") in _N)
+        problem = (aware and need("2.3", True) in _N + (_NI,)) or need("2.4", True) in _Y + (_NI,) \
+            or need("2.5", True) in _Y + (_NI,)
+        return ("some" if need("2.6") in _Y else "high") if problem else "low"
+    if domain == "2":
+        if need("2.1") in _N and need("2.2") in _N or need("2.3") in _N:
+            p1 = "low"
+        elif a["2.3"] == _NI or need("2.4") in _N:
+            p1 = "some"
+        else:
+            p1 = "some" if need("2.5") in _Y else "high"
+        p2 = "low" if need("2.6") in _Y else ("some" if need("2.7") in _N else "high")
+        return max(p1, p2, key=order.index)
+    if domain == "3":
+        if need("3.1") in _Y:
+            return "low"
+        ev = need("3.2")
+        if ev == _NI:
+            raise _Inc("3.2")
+        if ev in _Y or need("3.3") in _N:
+            return "low"
+        return "some" if need("3.4") in _N else "high"
+    if domain == "4":
+        if need("4.1") in _Y or need("4.2") in _Y:
+            return "high"
+        floor = "some" if a["4.2"] == _NI else "low"
+        if need("4.3") in _N or need("4.4") in _N:
+            return floor
+        return "some" if need("4.5") in _N else "high"
+    o, an = need("5.2"), need("5.3")
+    if o in _Y or an in _Y:
+        return "high"
+    if o in _N and an in _N:
+        return "low" if need("5.1") in _Y else "some"
+    return "some"
+
+
+def agreement_review(tools: dict) -> bool:
+    """Agreement with the metaANAL engine (2026-10), after enumerating every answer combination.
+
+    The enumeration ran this rollup on generated Markdown records against the engine's
+    appraisal.check for RoB 2 (both variants), ROBINS-I (both), ROBINS-E, QUADAS-2, QUIPS, AMSTAR 2,
+    NOS and GRADE. Two disagreements were this side's: RoB 2 3.2 accepted No information, which
+    the 2019 template does not offer there; and No information at a gateway kept the domain at
+    the middle tier even when the question that gateway feeds was reached through another answer
+    and settled it (ROBINS-E 5.3 Yes, ROBINS-I 5.4/5.5 Yes). The rest are documented
+    conventions (N/A where the routing asks: INCOMPLETE here, No information in the engine;
+    ROBINS-I/-E Moderate/Serious borderlines: the tier the answers force here, the stricter one
+    in the engine's conservative rule; AMSTAR 2: this rollup is the engine's 'weakness'
+    convention).
+    """
+    ok = True
+    LOW, SOME, HIGH, INC = "LOW", "SOME CONCERNS / UNCLEAR", "HIGH / SERIOUS", "INCOMPLETE"
+    rob2 = tools["rob2"]
+
+    print("\n[agreement: RoB 2 every combination = the 2019 criteria table]")
+    vals = ["Yes", "Probably no", _NI, _NA]
+    tier = {LOW: "low", SOME: "some", HIGH: "high", INC: "incomplete"}
+    for scope in ("assignment", "adherence"):
+        for d in "12345":
+            its = [it for it in rob2.scoped(scope) if it["domain"] == d]
+            # every answer each question offers (Probably yes / No behave as Yes / Probably no)
+            offered = [[v for v in vals if rob2.norm(v) in rob2.vocab_of(it)] for it in its]
+            bad, n = [], 0
+            for combo in itertools.product(*offered):
+                a = {it["id"]: v for it, v in zip(its, combo)}
+                n += 1
+                try:
+                    want = _ref_rob2(d, a, scope == "adherence")
+                except _Inc:
+                    want = "incomplete"
+                out = "\n".join(A.rollup_rob2(rob2, a, its))
+                m = re.search(rf"Domain {d} \([^)]*\): {_VERDICT}", out)
+                got = tier[m.group(1)] if m else None
+                if got != want:
+                    bad.append((a, want, got))
+            ok &= _ok(f"{scope} domain {d}: {n} combinations, {len(bad)} differ from the criteria "
+                      f"table{(' — e.g. ' + str(bad[0])) if bad else ''}", not bad)
+    ok &= _ok("3.2 offers no 'No information' (the 2019 template has none there)",
+              "no information" not in rob2.allowed("3.2", "assignment")
+              and rob2.allowed("3.2", "assignment") >= {"yes", "probably yes", "no", "n/a"})
+    p = _write(_fill(A.skeleton(rob2, "assignment"), dict(R2_ASSIGN, **{"3.1": "N", "3.2": "NI",
+                                                                        "3.3": "N"})))
+    rc, out = _cli("--verify", str(p), "--tool", "rob2", "--scope", "assignment")
+    ok &= _ok(f"3.2 NI does not verify complete (rc {rc!r})", rc == 1 and "3.2 'NI'" in out)
+    rc, out = _cli("--rollup", str(p), "--tool", "rob2", "--scope", "assignment")
+    ok &= _ok("... and domain 3 is INCOMPLETE, not a verdict",
+              _verdict(out, "Domain 3") == INC and rc == 1)
+    ok &= _ok("the skeleton lists 3.2's own answers",
+              "3.2: Yes / Probably yes / Probably no / No / N/A" in A.skeleton(rob2, "assignment"))
+
+    print("\n[agreement: No information at a gateway, settled by the question it feeds]")
+    ri, re_ = tools["robins-i"], tools["robins-e"]
+
+    def roll(tool, base, over, scope="all"):
+        p = _write(_fill(A.skeleton(tools[tool], scope), dict(base, **over)))
+        return _cli("--rollup", str(p), "--tool", tool, "--scope", scope)
+
+    def case(label, tool, base, over, domain, want, scope="all"):
+        rc, out = roll(tool, base, over, scope)
+        got = _verdict(out, f"Domain {domain}")
+        return _ok(f"{label}: domain {domain} {want} (got {got}, rc {rc!r})", got == want and rc == 0)
+
+    ok &= case("ROBINS-E 5.1 NI, 5.2 Yes opens 5.3; 5.3 Yes — Low", "robins-e", RE_GOOD,
+               {"5.1": "NI", "5.2": "Y", "5.3": "Y"}, "5", LOW)
+    ok &= case("ROBINS-E 5.1 NI, 5.2 No — 5.3 not reached, still unclear", "robins-e", RE_GOOD,
+               {"5.1": "NI"}, "5", SOME)
+    ok &= case("ROBINS-E 5.1 NI, 5.2 Yes, 5.3 No — High", "robins-e", RE_GOOD,
+               {"5.1": "NI", "5.2": "Y", "5.3": "N"}, "5", HIGH)
+    ok &= case("ROBINS-E 1.4 NI — 1.5 not reached, unclear", "robins-e", RE_GOOD, {"1.4": "NI"},
+               "1", SOME)
+    ok &= case("ROBINS-I 5.1 NI, 5.2 Yes, 5.4 Yes — Low", "robins-i", RI_GOOD,
+               {"5.1": "NI", "5.2": "Y", "5.4": "Y", "5.5": "N"}, "5", LOW, "assignment")
+    ok &= case("ROBINS-I 5.1 No, 5.2 NI, 5.5 Yes — Low", "robins-i", RI_GOOD,
+               {"5.1": "N", "5.2": "NI", "5.4": "N", "5.5": "Y"}, "5", LOW, "assignment")
+    ok &= case("ROBINS-I 5.2 NI with nothing reached — unclear", "robins-i", RI_GOOD,
+               {"5.2": "NI"}, "5", SOME, "assignment")
+    ok &= case("ROBINS-I 2.1 NI is not settled by 2.5 (2.5 does not depend on 2.1)", "robins-i",
+               RI_GOOD, {"2.1": "NI", "2.4": "N", "2.5": "Y"}, "2", SOME, "assignment")
+    rc, out = roll("robins-e", RE_GOOD, {"5.1": "NI", "5.2": "Y", "5.3": "Y"})
+    ok &= _ok("... the settled gateway is listed as answered, not scored",
+              "routing questions answered, not scored: 5.1, 5.2" in out)
     return ok
 
 

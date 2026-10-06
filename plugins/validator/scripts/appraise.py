@@ -1187,7 +1187,9 @@ def rollup_signalling(inst: Instrument, answers: dict[str, str],
     # next. ROBINS-I's 2.1 (selection on characteristics observed after the start
     # of intervention) opens 2.2-2.3; the bias is judged there, and a Yes at 2.1
     # with a No at 2.2 can still be Low. Their answer is listed, not scored — but
-    # No information at a gateway leaves the domain unclear.
+    # No information at a gateway leaves the domain unclear, unless the routing
+    # still reached a question the gateway feeds and that question was answered
+    # (settled_by below).
     # Middle: a problem answer that rules out the low tier but cannot by itself
     # reach the top one — ROBINS-I's 1.1 ("is there potential for confounding?"),
     # which 1.x scored as Serious for every observational study ever run.
@@ -1207,6 +1209,28 @@ def rollup_signalling(inst: Instrument, answers: dict[str, str],
     for it in items:
         groups.setdefault(it["domain"], []).append(it)
     low_label = dict(_pairs(inst.meta.get("low_label", ""), "="))
+
+    def settled_by(gid: str, rows: list[dict]) -> str | None:
+        """A question this gateway feeds that the routing reached and that got a definite answer.
+
+        No information at a gateway leaves a domain unclear only while nothing
+        after it decides the domain. When another answer opens the question the
+        gateway feeds — ROBINS-E 5.1 NI with 5.2 Yes opens 5.3, ROBINS-I 5.1 NI
+        with 5.2 Yes opens 5.4/5.5 — that question answers what the gateway could
+        not: 5.3 Yes (evidence the result is not biased by missing data) is Low
+        however much data is missing, as 3.2 Yes is in RoB 2. 2.0.0 kept such a
+        domain at the middle tier while the engine (metaANAL) rated it Low.
+        """
+        for q in rows:
+            c = q.get("cond")
+            if not c or reach.get(q["id"]) is not True:
+                continue
+            if not any(gid in rids for _, rids, _ in c["clauses"]):
+                continue
+            a = valid.get(q["id"])
+            if a is not None and inst.norm(a) not in UNKNOWN | {"n/a"}:
+                return q["id"]
+        return None
 
     L = Lines()
     tier: dict[str, str] = {}            # domain -> low / some / high (complete domains)
@@ -1238,7 +1262,10 @@ def rollup_signalling(inst: Instrument, answers: dict[str, str],
             tags = inst.tags(it)
             rev = "reverse" in tags
             if "router" in tags:
-                (unk if n in UNKNOWN else routers).append(iid)
+                if n in UNKNOWN and not settled_by(iid, rows):
+                    unk.append(iid)
+                else:
+                    routers.append(iid)
                 continue
             if not rev and n in WEAK_NO | STRONG_NO:
                 strong = n in STRONG_NO and "middle" not in tags

@@ -114,7 +114,9 @@ files each item carries guidance and a polarity tag:
   wrong: selection on a characteristic observed after the start of intervention is not a
   marker of bias by itself — it opens 2.2 and 2.3, and only selection related to both the
   intervention and the outcome (2.3 Yes) rules out Low, with 2.5 deciding Moderate or
-  Serious. *No information* at a gateway leaves the domain unclear;
+  Serious. *No information* at a gateway leaves the domain unclear — unless another answer
+  still opens the question that gateway feeds and that question is answered (ROBINS-E 5.1 NI
+  with 5.2 Yes and 5.3 Yes is Low);
 - **middle** — a problem answer rules out the low tier but, on its own, goes no higher than
   the middle one (ROBINS-I's 1.1: potential for confounding is Yes for nearly every
   observational study; it rules out Low, and 1.4–1.8 decide whether it is Serious);
