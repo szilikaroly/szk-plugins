@@ -90,11 +90,15 @@ jobs:
       # got a clean sandbox, while every developer machine had the variable
       # pinned to the production store by the plugin's own installer. CI that
       # only ever sees the happy environment is CI that certifies nothing.
+      # composer's collect and lookup exit at import time without requests and
+      # biopython, so its suite never ran here. scholarly stays out: only the
+      # optional scholar script needs it, and the suite does not.
       - name: Dependencies the suites need
         run: |
           python3 -m pip install --quiet --upgrade pip
           python3 -m pip install --quiet matplotlib pandas pillow lxml \
-                                         python-docx python-pptx
+                                         python-docx python-pptx \
+                                         requests biopython
 
       - name: All plugin self tests
         run: ./bin/selftest-all.sh
