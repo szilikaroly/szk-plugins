@@ -30,5 +30,9 @@ judging development *quality*, once judging evaluation *risk of bias*. The same 
 support Low on one pass and High on the other. Run domains 1–3 once and reuse the verdict and
 the appraisal silently under-counts.
 
+`--verify` reads the Answer / Status cell only, and for PROBAST+AI only inside its own pass's
+section, so keep the two `### … (development)` / `### … (evaluation)` headings the skeleton
+prints. An answer outside both sections is not counted.
+
 Guidance is in `references/probast-ai.md` and `references/tripod-ai.md`. Report one row per
 signalling question, never one per domain.
