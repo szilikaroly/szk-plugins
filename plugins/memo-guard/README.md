@@ -446,6 +446,16 @@ keeps the self test hermetic). Everything stays local, in `data_dir()`:
 
   A card needs no GPU, so it is written even while ingestion is paused. `0` turns cards off.
 
+  **The size is memo_gen's own chunk count (0.15.14).** `card_reason` asks memo_gen's
+  `chunk_plan` how many model calls the staged text would take. Before, it counted lines / 160,
+  and memo_gen now cuts chunks to its token budget. A row of ten long floats is ~100 tokens,
+  so dense numeric tables looked 10–13 times smaller than they were. On 2026-10-08 a 10,001-row
+  Monte Carlo CSV counted 63 chunks that way and 812 in memo_gen. It went to the model and was
+  473 calls in before it was stopped. The memo it was replacing had 1 claim, and the new
+  answers included "a 12% ROI multiplier" for a value of 1.356. Six such tables on the workspace
+  (110–812 chunks each, 2,685 in all) now have cards. Without memo-index installed the old
+  count is the fallback.
+
   **Workbooks too (0.15.5).** An `.xlsx` is staged by memo-index's `doc_ingest`, one markdown
   table per sheet, and the same chunk threshold applies. Its card gives:
   - each sheet's row and column count, its columns, and its SQL table;

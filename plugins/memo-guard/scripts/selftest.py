@@ -347,6 +347,20 @@ def check_table_cards(home: Path) -> bool:
     chk(ingest._is_card(root / rel, ".csv", cfg) and not ingest._is_card(small, ".csv", cfg)
         and not ingest._is_card(root / rel, ".csv", dict(cfg, table_card_min_chunks=0)),
         "only the big table is carded, and 0 turns cards off")
+
+    # The size is memo_gen's own chunk plan, not lines / 160 (2026-10-08). Ten long floats
+    # a row is ~100 tokens: 2,401 lines are 16 chunks by lines and far more by token budget.
+    if table_card._memo_gen() is not None:
+        dense = root / "data" / "psa.csv"
+        dense.write_text("\n".join(["iter," + ",".join(f"p{j}" for j in range(9))] + [
+            ",".join([str(i)] + [f"{((i * 7919 + j * 104729) % 1000003) / 7.0:.15f}" for j in range(9)])
+            for i in range(1, 2401)]) + "\n", encoding="utf-8")
+        why = table_card.card_reason(str(dense.resolve()), 100, False)
+        chk(why.endswith(" chunks") and int(why.split()[0]) >= 100,
+            f"a dense numeric table is sized by memo_gen's chunk plan ({why or 'no card'}, "
+            f"not {-(-2401 // table_card.CHUNK_LINES)} by lines)")
+    else:
+        print("   skip dense-table size: memo-index's memo_gen is not installed")
     calls = []
     real_run = ingest.subprocess.run
 

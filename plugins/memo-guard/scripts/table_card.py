@@ -92,15 +92,52 @@ def staged(ab: str) -> tuple[str, str, list[str]]:
     return name, hashlib.sha256(data).hexdigest(), data.decode("utf-8", errors="replace").splitlines()
 
 
+_MEMO_GEN = None
+
+
+def _memo_gen():
+    """memo-index's memo_gen, for its chunk plan; None when the skill (or a memo_gen with
+    chunk_plan) is not installed."""
+    global _MEMO_GEN
+    if _MEMO_GEN is None:
+        _MEMO_GEN = False
+        ms = _memo_index_scripts()
+        if (ms / "memo_gen.py").exists():
+            try:
+                if str(ms) not in sys.path:
+                    sys.path.insert(0, str(ms))
+                import memo_gen
+                if hasattr(memo_gen, "chunk_plan"):
+                    _MEMO_GEN = memo_gen
+            except Exception:
+                pass
+    return _MEMO_GEN or None
+
+
+def staged_chunks(slines: list[str]) -> int:
+    """The model calls a memo_gen pass over this staged text would make.
+
+    Taken from memo_gen's own chunk plan when the skill is installed. Lines / 160 counted the
+    chunks before memo_gen cut them to its token budget, and a row of ten long floats is ~100
+    tokens: a 10,001-row Monte Carlo CSV measured 63 "chunks" that way and 812 in memo_gen
+    (2026-10-08), so it went to the model for hours instead of getting a card. The fallback
+    without the skill is the old count.
+    """
+    m = _memo_gen()
+    if m is None:
+        return math.ceil(len(slines) / CHUNK_LINES)
+    return len(m.chunk_plan(slines, "prose")[2])
+
+
 def chunks(ab: str) -> int:
-    return math.ceil(len(staged(ab)[2]) / CHUNK_LINES)
+    return staged_chunks(staged(ab)[2])
 
 
 def file_chunks(path) -> int:
     """memo_gen chunks in an already staged file, split as memo_gen splits it (splitlines,
     not file iteration: the two disagree on a stray \\r or \\x0c)."""
     with open(path, "rb") as fh:
-        return math.ceil(len(fh.read().decode("utf-8", errors="replace").splitlines()) / CHUNK_LINES)
+        return staged_chunks(fh.read().decode("utf-8", errors="replace").splitlines())
 
 
 # Header words that mark a column as bibliographic, matched on the column name's first token,
@@ -198,7 +235,7 @@ def card_reason(ab: str, lim: int, bib: bool, slines: list[str] | None = None) -
     if slines is None and (lim or ext == ".xlsx"):
         slines = staged(ab)[2]
     if lim:
-        n = math.ceil(len(slines) / CHUNK_LINES)
+        n = staged_chunks(slines)
         if n >= lim:
             return f"{n} chunks"
     if bib:
