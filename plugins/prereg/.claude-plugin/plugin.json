@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "prereg",
+  "version": "0.1.0",
+  "displayName": "Prereg",
+  "description": "Registers a systematic review on PROSPERO or OSF Registries through the browser pane, from criteria the user gives. Routes the registry (PROSPERO's eligibility and timing rules, OSF otherwise), enriches the draft from similar registrations, and checks it three ways before anything is submitted: a deterministic script (required fields, placeholders, ORCID check digits, dates, the stage table), an independent reviewer subagent (question, design, synthesis and timing consistency), and a read-back of the live form against the approved plan. Stops at two user gates — content approval, then an explicit approval per submission — and never types credentials or ticks declarations. Hands the registered protocol to composer, validator, metaANAL or praxist as step-by-step plans.",
+  "author": {
+    "name": "Dr. Szili Károly"
+  },
+  "license": "MIT",
+  "keywords": [
+    "prospero",
+    "osf",
+    "preregistration",
+    "systematic-review",
+    "registration",
+    "browser",
+    "meta-analysis",
+    "protocol"
+  ]
+}

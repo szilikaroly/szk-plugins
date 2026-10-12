@@ -1,0 +1,435 @@
+{
+  "_source": "OSF public API: /v2/schemas/registrations/69cbc587cd7e8b69fa11ab52/ — 'Generalized Systematic Review Registration', schema_version 6",
+  "_note": "Generated from the live schema by the one-off extraction recorded in the plugin README. Labels are the form's own. Optional file uploads (2) are listed in the README, not here. Re-generate when OSF bumps the schema version.",
+  "registry": "osf",
+  "schema_id": "69cbc587cd7e8b69fa11ab52",
+  "questions": [
+    {
+      "key": "review-methods/type-of-review",
+      "label": "Type of review",
+      "page": "Review Methods",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "review-methods/review-stages",
+      "label": "Review stages",
+      "page": "Review Methods",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "review-methods/current-review-stage",
+      "label": "Current review stage",
+      "page": "Review Methods",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "review-methods/start-date",
+      "label": "Start date",
+      "page": "Review Methods",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "review-methods/end-date",
+      "label": "End date",
+      "page": "Review Methods",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "review-methods/background",
+      "label": "Background",
+      "page": "Review Methods",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "review-methods/primary-research-question-s",
+      "label": "Primary research question(s)",
+      "page": "Review Methods",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "review-methods/secondary-research-question-s",
+      "label": "Secondary research question(s)",
+      "page": "Review Methods",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "review-methods/expectations-hypotheses",
+      "label": "Expectations / hypotheses",
+      "page": "Review Methods",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "review-methods/dependent-variable-s-outcome-s-main-variables",
+      "label": "Dependent variable(s) / outcome(s) / main variables",
+      "page": "Review Methods",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "review-methods/independent-variable-s-intervention-s-treatment-s",
+      "label": "Independent variable(s) / intervention(s) / treatment(s)",
+      "page": "Review Methods",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "review-methods/additional-variable-s-covariate-s",
+      "label": "Additional variable(s) / covariate(s)",
+      "page": "Review Methods",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "review-methods/software",
+      "label": "Software",
+      "page": "Review Methods",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "review-methods/funding",
+      "label": "Funding",
+      "page": "Review Methods",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "review-methods/conflicts-of-interest",
+      "label": "Conflicts of interest",
+      "page": "Review Methods",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "review-methods/overlapping-authorships",
+      "label": "Overlapping authorships",
+      "page": "Review Methods",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "search-strategy/databases",
+      "label": "Databases",
+      "page": "Search Strategy",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "search-strategy/interfaces",
+      "label": "Interfaces",
+      "page": "Search Strategy",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "search-strategy/grey-literature",
+      "label": "Grey literature",
+      "page": "Search Strategy",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "search-strategy/inclusion-and-exclusion-criteria",
+      "label": "Inclusion and exclusion criteria",
+      "page": "Search Strategy",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "search-strategy/query-strings",
+      "label": "Query strings",
+      "page": "Search Strategy",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "search-strategy/search-validation-procedure",
+      "label": "Search validation procedure",
+      "page": "Search Strategy",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "search-strategy/other-search-strategies",
+      "label": "Other search strategies",
+      "page": "Search Strategy",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "search-strategy/procedures-to-contact-authors",
+      "label": "Procedures to contact authors",
+      "page": "Search Strategy",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "search-strategy/results-of-contacting-authors",
+      "label": "Results of contacting authors",
+      "page": "Search Strategy",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "search-strategy/search-expiration-and-repetition",
+      "label": "Search expiration and repetition",
+      "page": "Search Strategy",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "search-strategy/search-strategy-justification",
+      "label": "Search strategy justification",
+      "page": "Search Strategy",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "search-strategy/miscellaneous-search-strategy-details",
+      "label": "Miscellaneous search strategy details",
+      "page": "Search Strategy",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "screening/screening-stages",
+      "label": "Screening stages",
+      "page": "Screening",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "screening/screened-fields-blinding",
+      "label": "Screened fields / blinding",
+      "page": "Screening",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "screening/used-exclusion-criteria",
+      "label": "Used exclusion criteria",
+      "page": "Screening",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "screening/screener-instructions",
+      "label": "Screener instructions",
+      "page": "Screening",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "screening/screening-reliability",
+      "label": "Screening reliability",
+      "page": "Screening",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "screening/screening-reconciliation-procedure",
+      "label": "Screening reconciliation procedure",
+      "page": "Screening",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "screening/sampling-and-sample-size",
+      "label": "Sampling and sample size",
+      "page": "Screening",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "screening/screening-procedure-justification",
+      "label": "Screening procedure justification",
+      "page": "Screening",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "screening/data-management-and-sharing",
+      "label": "Data management and sharing",
+      "page": "Screening",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "screening/miscellaneous-screening-details",
+      "label": "Miscellaneous screening details",
+      "page": "Screening",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "extraction/entities-to-extract",
+      "label": "Entities to extract",
+      "page": "Extraction",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "extraction/extraction-stages",
+      "label": "Extraction stages",
+      "page": "Extraction",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "extraction/extractor-instructions",
+      "label": "Extractor instructions",
+      "page": "Extraction",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "extraction/extractor-masking",
+      "label": "Extractor masking",
+      "page": "Extraction",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "extraction/extraction-reliability",
+      "label": "Extraction reliability",
+      "page": "Extraction",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "extraction/extraction-reconciliation-procedure",
+      "label": "Extraction reconciliation procedure",
+      "page": "Extraction",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "extraction/extraction-procedure-justification",
+      "label": "Extraction procedure justification",
+      "page": "Extraction",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "extraction/data-management-and-sharing",
+      "label": "Data management and sharing",
+      "page": "Extraction",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "extraction/miscellaneous-extraction-details",
+      "label": "Miscellaneous extraction details",
+      "page": "Extraction",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "synthesis-and-quality-assessment/planned-data-transformations",
+      "label": "Planned data transformations",
+      "page": "Synthesis and Quality Assessment",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "synthesis-and-quality-assessment/missing-data",
+      "label": "Missing data",
+      "page": "Synthesis and Quality Assessment",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "synthesis-and-quality-assessment/data-validation",
+      "label": "Data validation",
+      "page": "Synthesis and Quality Assessment",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "synthesis-and-quality-assessment/quality-assessment",
+      "label": "Quality assessment",
+      "page": "Synthesis and Quality Assessment",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "synthesis-and-quality-assessment/synthesis-plan",
+      "label": "Synthesis plan",
+      "page": "Synthesis and Quality Assessment",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "synthesis-and-quality-assessment/criteria-for-conclusions-inference-criteria",
+      "label": "Criteria for conclusions / inference criteria",
+      "page": "Synthesis and Quality Assessment",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "synthesis-and-quality-assessment/synthesist-blinding",
+      "label": "Synthesist blinding",
+      "page": "Synthesis and Quality Assessment",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "synthesis-and-quality-assessment/synthesis-reliability",
+      "label": "Synthesis reliability",
+      "page": "Synthesis and Quality Assessment",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "synthesis-and-quality-assessment/synthesis-reconciliation-procedure",
+      "label": "Synthesis reconciliation procedure",
+      "page": "Synthesis and Quality Assessment",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "synthesis-and-quality-assessment/publication-bias-analyses",
+      "label": "Publication bias analyses",
+      "page": "Synthesis and Quality Assessment",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "synthesis-and-quality-assessment/sensitivity-analyses-robustness-checks",
+      "label": "Sensitivity analyses / robustness checks",
+      "page": "Synthesis and Quality Assessment",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "synthesis-and-quality-assessment/synthesis-procedure-justification",
+      "label": "Synthesis procedure justification",
+      "page": "Synthesis and Quality Assessment",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "synthesis-and-quality-assessment/synthesis-data-management-and-sharing",
+      "label": "Synthesis data management and sharing",
+      "page": "Synthesis and Quality Assessment",
+      "required": true,
+      "input": "long-text-input"
+    },
+    {
+      "key": "synthesis-and-quality-assessment/miscellaneous-synthesis-details",
+      "label": "Miscellaneous synthesis details",
+      "page": "Synthesis and Quality Assessment",
+      "required": true,
+      "input": "long-text-input"
+    }
+  ]
+}

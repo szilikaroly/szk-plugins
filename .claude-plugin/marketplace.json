@@ -156,6 +156,25 @@
         "version-control",
         "cross-platform"
       ]
+    },
+    {
+      "name": "prereg",
+      "source": "./plugins/prereg",
+      "description": "Registers a systematic review on PROSPERO or OSF Registries through the browser, from criteria the user gives. Routes the registry by PROSPERO's eligibility and timing rules, enriches the draft from similar registrations, checks it three ways (script, independent reviewer, live-form read-back), stops at two user gates, and hands the registered protocol to composer, validator, metaANAL or praxist as step-by-step plans.",
+      "author": {
+        "name": "Dr. Szili Károly"
+      },
+      "license": "MIT",
+      "category": "productivity",
+      "keywords": [
+        "prospero",
+        "osf",
+        "preregistration",
+        "systematic-review",
+        "registration",
+        "browser",
+        "protocol"
+      ]
     }
   ]
 }
