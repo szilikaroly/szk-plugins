@@ -98,6 +98,13 @@ Syntax from the search help: `NEAR` / `NEAR3` for proximity (word order is respe
 | Required fields | empty required answers, unknown field names, invented fields | yes |
 | Placeholders | `TBD`, `TODO`, `XXX`, `???`, `[AUTHOR-VERIFY …]`, `{{…}}`, `<<…>>` anywhere in the content | yes |
 | Dates | not ISO, or end before start | yes |
+| End date | PROSPERO wants the end at least 28 days ahead (the live form said so on 2026-10-12) | yes |
+| Word limits | each PROSPERO free-text field below its minimum or above its maximum (live counts in `PROSPERO_WORDS`; a 4-word placeholder fails rationale, objectives, population, context, outcomes, certainty, synthesis) | yes |
+| Team | fewer than two members, no guarantor, or a member without `consent: true` (names may not be added without consent) | yes |
+| Search-strategy field | a URL where the form takes a choice (`not_available`, `upload_pdf`, `in_protocol`) | yes |
+| OSF metadata | title, description, licence and subject, which the Register dialog and the review page require | yes |
+| OSF retrospective | data extraction started, but the *Current review stage* answer does not say the registration is retrospective | yes |
+| Boolean grouping | a query with AND and OR and no parentheses: PubMed reads it in its own order (run `pubmed-count` on both forms) | warns |
 | Stage table | invalid states; data extraction started; formal searching or screening already run | extraction yes, the rest warns |
 | ORCID | check digit (ISO 7064 MOD 11-2) — a mistyped ORCID is the most common silent error | yes |
 | E-mail | malformed contact address | yes |

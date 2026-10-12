@@ -46,6 +46,7 @@ python3 "$P" check  prereg/<slug>/spec.json --registry prospero
 python3 "$P" plan   prereg/<slug>/spec.json --registry prospero --out prereg/<slug>/plan.json
 python3 "$P" similar "gestational diabetes"
 python3 "$P" fields prospero
+python3 "$P" pubmed-count "(semaglutide[tiab] OR tirzepatide[tiab]) AND pregnan[tiab]" --maxdate 2026/08/05 --datetype edat
 python3 scripts/selftest.py
 ```
 
@@ -60,7 +61,7 @@ python3 scripts/selftest.py
 | `skills/prereg/references/osf-sr-form.json` | 61 kötelező OSF-kérdés, az OSF publikus sémájából generálva |
 | `examples/spec.template.json` | üres spec — ebből indul minden futás |
 | `scripts/prereg.py` | route, check, plan, readback, similar, fields |
-| `scripts/selftest.py` | 32 offline eset (hálózat nélkül) |
+| `scripts/selftest.py` | 59 offline eset (hálózat nélkül) |
 
 ## Első éles futás előtt — ellenőrizendő
 

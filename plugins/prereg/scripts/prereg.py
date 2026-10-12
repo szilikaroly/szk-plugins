@@ -37,7 +37,7 @@ POPULATIONS = {"human", "animal", "in-vitro", "mixed"}
 STAGE_STATES = ("not_started", "started", "completed")
 STAGE_ROWS = ["pilot_work", "formal_searching", "screening", "data_extraction", "risk_of_bias", "data_synthesis"]
 SPEC_TOP_KEYS = {"slug", "registry", "review_kind", "population_scope", "outcome_health",
-                 "human_health_relevance", "cochrane_protocol", "prospero", "osf", "similar", "notes"}
+                 "human_health_relevance", "cochrane_protocol", "prospero", "osf", "similar", "notes", "osf_metadata", "stage"}
 
 #: PROSPERO text is English. Affiliations, funding and names are exempt.
 ENGLISH_ONLY_PROSPERO = {
@@ -60,6 +60,30 @@ ORCID_ANYWHERE = re.compile(r"\d{4}-\d{4}-\d{4}-\d{3}[\dX]")
 HU_ACCENT = re.compile(r"[áéíóöőúüűÁÉÍÓÖŐÚÜŰ]")
 RESERVED_DOMAIN = re.compile(r"example\.(?:org|com|net)\b|\.test\b|\.invalid\b", re.IGNORECASE)
 DESIGN_WORD = re.compile(r"systematic|meta-analy|umbrella|rapid review", re.IGNORECASE)
+PUBMED_ESEARCH = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
+#: Word limits (min, max) of the live PROSPERO form, read on 2026-10-12. Fields not listed are not counted.
+PROSPERO_WORDS = {
+    "title": (5, 30),
+    "review_affiliation": (1, 20),
+    "rationale": (5, 250),
+    "objectives": (10, 200),
+    "population_included": (5, 200),
+    "population_excluded": (0, 200),
+    "context": (5, 250),
+    "outcomes_main": (5, 250),
+    "outcomes_additional": (0, 300),
+    "synthesis": (30, 500),
+    "certainty": (5, 250),
+    "other_databases": (1, 50),
+    "other_methods": (0, 50),
+    "searching_other": (0, 250),
+    "funding": (0, 50),
+    "reporting_bias": (0, 50),
+    "revision_note": (0, 250),
+}
+#: "Link to search strategy" is a choice on the live form, not a URL field.
+PROSPERO_STRATEGY_VALUES = {"not_available", "upload_pdf", "in_protocol"}
+OSF_METADATA_KEYS = ("title", "description", "license", "subjects")
 
 
 # ---------------------------------------------------------------- helpers
@@ -257,6 +281,14 @@ def check(spec: dict, registry: str) -> list[dict]:
                 continue
             if fld["required"] and is_empty(pro.get(fld["key"])):
                 add("HIBA", fld["key"], f"kötelező mező üres: {fld['label']}")
+        for key, (lo, hi) in PROSPERO_WORDS.items():
+            if is_empty(pro.get(key)):
+                continue
+            n = len(str(pro[key]).split())
+            if n < lo:
+                add("HIBA", key, f"{n} szó, a PROSPERO-űrlap minimuma {lo} (élő űrlap, 2026-10-12)")
+            elif n > hi:
+                add("HIBA", key, f"{n} szó, a PROSPERO-űrlap maximuma {hi}")
         stage = _dict(pro.get("stage"))
         for row in STAGE_ROWS:
             if row not in stage:
@@ -289,6 +321,17 @@ def check(spec: dict, registry: str) -> list[dict]:
                                                    "'not_started' — a kettő nem egyezik")
             except ValueError:
                 pass
+        if end and not is_empty(end):
+            try:
+                if dt.date.fromisoformat(str(end)) < dt.date.today() + dt.timedelta(days=28):
+                    add("HIBA", "review_end", "az űrlap szerint a befejezés legalább 28 nappal a jövőben legyen "
+                                              "(az 'end date should be at least 28 days in the future')")
+            except ValueError:
+                pass
+        strat = pro.get("strategy_url")
+        if not is_empty(strat) and str(strat) not in PROSPERO_STRATEGY_VALUES:
+            add("HIBA", "strategy_url", "a PROSPERO nem URL-t kér: 'not_available', 'upload_pdf' vagy "
+                                        "'in_protocol' (a keresési stratégia PDF-feltöltése)")
         title = pro.get("title", "")
         if kind_is_systematic(spec) and not DESIGN_WORD.search(title or ""):
             add("FIGYELEM", "title", "a címből nem derül ki a review-típus (pl. 'systematic review')")
@@ -305,6 +348,15 @@ def check(spec: dict, registry: str) -> list[dict]:
                 continue
             if member.get("orcid") and not orcid_valid(member["orcid"]):
                 add("HIBA", f"team[{m_i}].orcid", f"érvénytelen ORCID-ellenőrző jegy: {member['orcid']}")
+        if team:
+            if len(team) < 2:
+                add("HIBA", "team", "legalább két csapattag kell (az űrlap szabálya)")
+            if not any(isinstance(m, dict) and m.get("guarantor") is True for m in team):
+                add("HIBA", "team", "egy csapattagnak guarantornak kell lennie (guarantor: true)")
+            for m_i, member in enumerate(team):
+                if isinstance(member, dict) and member.get("consent") is not True:
+                    add("HIBA", f"team[{m_i}].consent", "csapattag csak a beleegyezésével szerepelhet "
+                                                         "(consent: true); nem vehető fel név szerint hozzájárulás nélkül")
         contact = _dict(pro.get("named_contact"))
         if contact.get("orcid") and not orcid_valid(contact["orcid"]):
             add("HIBA", "named_contact.orcid", f"érvénytelen ORCID-ellenőrző jegy: {contact['orcid']}")
@@ -323,6 +375,21 @@ def check(spec: dict, registry: str) -> list[dict]:
         for k, v in osf.items():
             if k in known and HU_ACCENT.search(str(v)):
                 add("FIGYELEM", k, "magyar ékezetes karakter az OSF-válaszban — az OSF-űrlap angolt vár")
+            if "query" in k and " AND " in str(v) and " OR " in str(v) and "(" not in str(v):
+                add("FIGYELEM", k, "AND és OR zárójelek nélkül: a PubMed a sorrendtől függően más találatot adhat — "
+                                   "futtasd le a pubmed-count paranccsal, mielőtt rögzíted")
+        meta = _dict(spec.get("osf_metadata"))
+        for mk in OSF_METADATA_KEYS:
+            if is_empty(meta.get(mk)):
+                add("HIBA", f"osf_metadata.{mk}", "az OSF-regisztráció ezt kötelezőnek jelöli a Register előtt "
+                                                   "(cím, leírás, licenc, tárgykör)")
+        stage_spec = _dict(spec.get("stage")) or _dict(_dict(spec.get("prospero")).get("stage"))
+        if stage_spec.get("data_extraction") in ("started", "completed"):
+            cs = str(osf.get("review-methods/current-review-stage") or "").lower()
+            if "retrospective" not in cs and "not prospective" not in cs:
+                add("HIBA", "review-methods/current-review-stage",
+                    "az adatkinyerés már elkezdődött: a 'Current review stage' mezőben ki kell mondani, hogy a "
+                    "regisztráció utólagos (retrospective), nem prospektív")
         scope = osf
 
     for path, s in iter_strings(scope):
@@ -480,6 +547,15 @@ def similar(query: str) -> dict:
 
 # ---------------------------------------------------------------- CLI
 
+def pubmed_count(term: str, mindate: str, maxdate: str, datetype: str = "pdat") -> int:
+    """Hits for a PubMed query, passed through unchanged, so a registered string can be checked against its recorded count.
+    Dates are YYYY/MM/DD. datetype: pdat (publication) or edat (entry). A string without parentheses is read by PubMed
+    in its own operator order: compare the two forms before recording either one."""
+    qs = urllib.parse.urlencode({"db": "pubmed", "term": term, "retmode": "json", "retmax": 0,
+                                 "datetype": datetype, "mindate": mindate, "maxdate": maxdate})
+    return int(_get_json(f"{PUBMED_ESEARCH}?{qs}")["esearchresult"]["count"])
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -505,6 +581,12 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("similar")
     s.add_argument("query", help="kifejezések ';'-vel elválasztva, pl. 'gestational diabetes; dose-response'")
     s.add_argument("--out")
+
+    pc = sub.add_parser("pubmed-count", help="PubMed-találatszám egy stringre, változtatás nélkül")
+    pc.add_argument("term")
+    pc.add_argument("--mindate", default="1900/01/01")
+    pc.add_argument("--maxdate", required=True, help="YYYY/MM/DD, pl. a keresés napja")
+    pc.add_argument("--datetype", choices=["pdat", "edat"], default="pdat")
 
     fl = sub.add_parser("fields")
     fl.add_argument("registry", choices=["prospero", "osf"])
@@ -558,6 +640,10 @@ def main(argv: list[str] | None = None) -> int:
             flag = "SR" if h["is_sr_schema"] else "  "
             print(f"  {flag} {h['date_registered'][:10]} {h['id']:<8} {h['title'][:90]}")
         write_out(a.out, doc)
+        return 0
+
+    if a.cmd == "pubmed-count":
+        print(pubmed_count(a.term, a.mindate, a.maxdate, a.datetype))
         return 0
 
     if a.cmd == "fields":

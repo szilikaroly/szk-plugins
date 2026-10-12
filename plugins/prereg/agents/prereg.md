@@ -125,11 +125,18 @@ This refuses to run while any `HIBA` remains. The plan lists every entry with it
 
 1. Ask the user to log in to the registry in the browser pane (`Claude_Browser`). Wait for their confirmation. Do not enter any credentials yourself.
    - PROSPERO: log in, then "Register your review now".
-   - OSF: from the user's project, open Registries, start a new registration, and choose "Generalized Systematic Review Registration".
+   - OSF (checked on the live site, 2026-10-12): https://osf.io/registries/discover → "Add a Registration" → https://osf.io/registries/osf/new. Step 1: "Do you have content in an existing OSF project?" Choose the project deliberately: "No" creates a new one, "Yes" attaches to an existing one. Step 2 is a dropdown: choose "Generalized Systematic Review Registration", not the default "OSF Preregistration". Then the research-plan confirmation checkbox: that is the user's declaration, so the user ticks it. Then "Create draft".
+   - PROSPERO is a task list, not one form. Each field opens its own page (`/PROSPERO/register/<Template…>`), with a word counter and "Save for later" / "Mark as complete". Text boxes are contenteditable, so read them with `innerText`, not `value`.
 2. Read the form with `read_page`. Map each live label to a plan entry by meaning. If the wording differs from `R/prospero-form.json` or `R/osf-sr-form.json`, say so in chat; the first run is where those reference files get confirmed against the real form. If a plan entry has no matching field, stop and ask.
-3. Fill the fields with `form_input`. Add team members one entry each. For the stage table, tick exactly the boxes the plan lists as checked. Use the form's own date format.
-4. Leave untouched: system-generated fields, consent and declaration boxes, visibility and embargo settings, and any payment field. Tell the user which of these remain for them.
+3. Fill the fields. Add team members one entry each. For the stage table, tick exactly the boxes the plan lists as checked. Use the form's own date format (PROSPERO: "1 August 2026", and the picker may reformat it on blur).
+   - Real inputs: `form_input`. Contenteditable text: focus, then type with the keyboard. Native-setter and dispatched events also worked for OSF text areas (2026-10-12), but only a reload confirms them.
+   - Checkboxes and radios: real clicks. A checkbox ticked by script read back as ticked and was cleared again after the next box opened (2026-10-12). Re-read after every change.
+   - A pre-selected default (PROSPERO's review type "standard") shows a tick before anyone chose it. Confirm the default with the user, so it is not counted as their answer.
+   - Controlled vocabularies (PROSPERO condition and keywords, OSF subjects): pick from the list. A free-text placeholder cannot satisfy them.
+4. Leave untouched: system-generated fields, consent and declaration boxes (including the OSF research-plan confirmation, unless the user ticks it), visibility and embargo settings, and any payment field. Tell the user which of these remain for them.
 5. Save a draft only if the form offers one and Gate A covered it. Say that you saved it.
+6. Verify every save on the server, not in the page. Reload the summary page (OSF: `…/drafts/<id>/review`; PROSPERO: the task list) and read the values there. On 2026-10-12 the OSF metadata (title, description, subjects) showed values in the editor but "No data" on the review page after navigation, and the subject was lost on the next page change. A value in the editor is not proof of a save.
+7. Metadata that the review page requires but the schema does not show in the question list: title, description, licence (CC0 is the default, but the dropdown still needs a valid selection), subject. Tags are optional. The review page can keep showing "The field is required." beside fields that are filled; check the server value before deciding it is a real error.
 
 ### Pass 3 — read-back
 
@@ -151,6 +158,8 @@ Fix each mismatch in the form, read it back again, and rerun. At most three roun
 Summarise: the three pass results, the warnings accepted, what the user still has to tick, and the exact registry and action. Then AskUserQuestion: "Beküldjem ezt a regisztrációt most?" with the options "Igen, küldd be" and "Még ne".
 
 Only "Igen" proceeds, and only for this registration. Then press the final submit control.
+
+On OSF the final dialog asks two things before "Submit" becomes active: "Make registration public immediately" or "Enter registration into embargo". That choice is the user's: ask it in chat and select only the option they chose. The dialog also states that a registration cannot be deleted, only withdrawn.
 
 Read the confirmation page. Record what it actually shows in `prereg/<slug>/result.json`: the PROSPERO record ID (`CRD…`), or the OSF registration ID and URL, and the date. If no confirmation is visible, say so and do not assume it went through.
 

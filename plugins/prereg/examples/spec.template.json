@@ -28,7 +28,7 @@
     "language_restrictions": "",
     "date_restrictions": "",
     "other_methods": "",
-    "strategy_url": "",
+    "strategy_url": "not_available",
     "selection": "",
     "searching_other": "",
     "extraction": "",
@@ -53,7 +53,16 @@
         "name": "",
         "affiliation": "",
         "orcid": "",
-        "coi": ""
+        "coi": "",
+        "guarantor": true,
+        "consent": false
+      },
+      {
+        "name": "",
+        "affiliation": "",
+        "orcid": "",
+        "coi": "",
+        "consent": false
       }
     ],
     "named_contact": {
@@ -136,5 +145,19 @@
     "checked": false,
     "hits": []
   },
-  "notes": ""
+  "notes": "",
+  "osf_metadata": {
+    "title": "",
+    "description": "",
+    "license": "CC0 1.0 Universal",
+    "subjects": []
+  },
+  "stage": {
+    "pilot_work": "not_started",
+    "formal_searching": "not_started",
+    "screening": "not_started",
+    "data_extraction": "not_started",
+    "risk_of_bias": "not_started",
+    "data_synthesis": "not_started"
+  }
 }

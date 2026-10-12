@@ -4,6 +4,7 @@
 
     python3 scripts/selftest.py        # no network: the OSF call is never made
 """
+import datetime as dt
 import importlib.util
 import json
 import sys
@@ -33,18 +34,33 @@ def sev(findings, s):
     return [x for x in findings if x["sev"] == s]
 
 
+def _text_for(key):
+    """Neutral test text that meets the live word minimum of the field."""
+    lo, _hi = P.PROSPERO_WORDS.get(key, (1, 999))
+    words = f"Test value for {key}.".split()
+    while len(words) < max(lo, 1):
+        words.append("more")
+    return " ".join(words)
+
+
 def valid_prospero():
-    """A spec with every required PROSPERO field filled with neutral English text."""
+    """A spec with every required PROSPERO field filled with neutral English text that meets the live word limits."""
     form = P.form_for("prospero")
     pro = {}
     for f in form["fields"]:
         if f["kind"] == "system":
             continue
-        pro[f["key"]] = f"Test value for {f['key']}."
+        pro[f["key"]] = _text_for(f["key"])
     pro["title"] = "Dietary fibre and gestational diabetes: a systematic review with dose-response meta-analysis"
     pro["review_start"] = "2026-08-01"
-    pro["review_end"] = "2026-11-01"
-    pro["team"] = [{"name": "Test Author", "affiliation": "Test University", "orcid": "0000-0001-9803-9103", "coi": "None"}]
+    pro["review_end"] = (dt.date.today() + dt.timedelta(days=200)).isoformat()
+    pro["strategy_url"] = "not_available"
+    pro["team"] = [
+        {"name": "Test Author", "affiliation": "Test University", "orcid": "0000-0001-9803-9103", "coi": "None",
+         "guarantor": True, "consent": True},
+        {"name": "Test Second", "affiliation": "Test University", "orcid": "0000-0002-1825-0097", "coi": "None",
+         "consent": True},
+    ]
     pro["named_contact"] = {"name": "Test Author", "email": "author@university.hu",
                             "orcid": "0000-0001-9803-9103", "affiliation": "Test University"}
     pro["mesh"] = ["Pregnancy", "Diabetes, Gestational"]
@@ -60,6 +76,8 @@ def valid_osf():
     return {"slug": "test", "registry": "osf", "review_kind": "narrative",
             "population_scope": "human", "outcome_health": True,
             "osf": {q["key"]: f"Test answer for {q['key']}." for q in form["questions"]},
+            "osf_metadata": {"title": "Test registration title", "description": "Test description.",
+                             "license": "CC0 1.0 Universal", "subjects": ["Medicine and Health Sciences"]},
             "similar": {"checked": True, "hits": []}}
 
 
@@ -335,6 +353,89 @@ class _FakeResp:
         return self._b
 
 
+@case("PROSPERO end date closer than 28 days is blocked (form rule, found on the live form 2026-10-12)")
+def _():
+    s = valid_prospero()
+    s["prospero"]["review_end"] = (dt.date.today() + dt.timedelta(days=10)).isoformat()
+    f = P.check(s, "prospero")
+    assert any(x["field"] == "review_end" for x in sev(f, "HIBA")), f
+
+
+@case("a field below the live word minimum is blocked (was: 4-word placeholder passed)")
+def _():
+    s = valid_prospero()
+    s["prospero"]["rationale"] = "Test value for rationale."
+    f = P.check(s, "prospero")
+    assert any(x["field"] == "rationale" and "minimuma" in x["msg"] for x in sev(f, "HIBA")), f
+
+
+@case("a field above the live word maximum is blocked")
+def _():
+    s = valid_prospero()
+    s["prospero"]["title"] = " ".join(["word"] * 31)
+    f = P.check(s, "prospero")
+    assert any(x["field"] == "title" and "maximuma" in x["msg"] for x in sev(f, "HIBA")), f
+
+
+@case("a team of one is blocked, and a member without consent is blocked")
+def _():
+    s = valid_prospero()
+    s["prospero"]["team"] = s["prospero"]["team"][:1]
+    f = P.check(s, "prospero")
+    assert any(x["field"] == "team" for x in sev(f, "HIBA")), f
+    s = valid_prospero()
+    s["prospero"]["team"][1].pop("consent")
+    f = P.check(s, "prospero")
+    assert any(x["field"] == "team[1].consent" for x in sev(f, "HIBA")), f
+
+
+@case("a team without a guarantor is blocked")
+def _():
+    s = valid_prospero()
+    for m in s["prospero"]["team"]:
+        m.pop("guarantor", None)
+    f = P.check(s, "prospero")
+    assert any("guarantor" in x["msg"] for x in sev(f, "HIBA")), f
+
+
+@case("'Link to search strategy' is a choice, not a URL (was: a URL was accepted)")
+def _():
+    s = valid_prospero()
+    s["prospero"]["strategy_url"] = "https://osf.io/abcde/"
+    f = P.check(s, "prospero")
+    assert any(x["field"] == "strategy_url" for x in sev(f, "HIBA")), f
+
+
+@case("OSF metadata (title, description, licence, subject) is required before Register")
+def _():
+    s = valid_osf()
+    s.pop("osf_metadata")
+    f = P.check(s, "osf")
+    fields = {x["field"] for x in sev(f, "HIBA")}
+    assert {"osf_metadata.title", "osf_metadata.description", "osf_metadata.license", "osf_metadata.subjects"} <= fields, fields
+
+
+@case("when data extraction has started, the OSF current stage must say the registration is retrospective")
+def _():
+    s = valid_osf()
+    s["stage"] = {r: "not_started" for r in P.STAGE_ROWS}
+    s["stage"]["data_extraction"] = "completed"
+    s["osf"]["review-methods/current-review-stage"] = "Test answer."
+    f = P.check(s, "osf")
+    assert any(x["field"] == "review-methods/current-review-stage" for x in sev(f, "HIBA")), f
+    s["osf"]["review-methods/current-review-stage"] = "Data extraction completed; this registration is retrospective."
+    f = P.check(s, "osf")
+    assert not any(x["field"] == "review-methods/current-review-stage" for x in sev(f, "HIBA")), f
+
+
+@case("an AND/OR query without parentheses gets a warning (PubMed reads it in its own order)")
+def _():
+    s = valid_osf()
+    s["osf"]["search-strategy/query-strings"] = "gestational diabetes AND pregnancy OR fertility"
+    f = P.check(s, "osf")
+    assert any(x["field"] == "search-strategy/query-strings" for x in sev(f, "FIGYELEM")), f
+
+
 def _osf_page(items, next_url=None, total=None):
     data = []
     for rid, title, date in items:
@@ -357,6 +458,19 @@ def _with_fake_urlopen(fn, responses):
     finally:
         urllib.request.urlopen = real
         P.RETRY_SLEEP = old_sleep
+
+
+@case("pubmed-count sends the term unchanged and reads the count")
+def _():
+    seen = {}
+
+    def fake(url):
+        seen["url"] = url
+        return {"esearchresult": {"count": "658"}}
+
+    n = _with_fake_urlopen(lambda: P.pubmed_count("(a[tiab] OR b[tiab]) AND c[tiab]", "2010/01/01", "2026/08/05", "pdat"), fake)
+    assert n == 658, n
+    assert "term=%28a%5Btiab%5D+OR+b%5Btiab%5D%29+AND+c%5Btiab%5D" in seen["url"], seen["url"]
 
 
 @case("'other' review kind asks even when PROSPERO is requested explicitly (was: silently passed)")
