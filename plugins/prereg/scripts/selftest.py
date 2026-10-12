@@ -485,6 +485,34 @@ def _():
     assert any(x["field"] == "review_start" for x in sev(P.check(s, "prospero"), "FIGYELEM"))
 
 
+@case("animal review that is directly relevant to human health goes to PROSPERO (live form offers it, 2026-10-12)")
+def _():
+    r = P.route({"review_kind": "systematic", "population_scope": "animal", "outcome_health": True,
+                 "human_health_relevance": True, "prospero": {"stage": {}}})
+    assert r["decision"] == "prospero", r
+
+
+@case("animal review without a stated human-health relevance still goes to OSF")
+def _():
+    r = P.route({"review_kind": "systematic", "population_scope": "animal", "outcome_health": True,
+                 "prospero": {"stage": {}}})
+    assert r["decision"] == "osf", r
+
+
+@case("in-vitro review stays on OSF even if relevance is claimed")
+def _():
+    r = P.route({"review_kind": "systematic", "population_scope": "in-vitro", "outcome_health": True,
+                 "human_health_relevance": True, "prospero": {"stage": {}}})
+    assert r["decision"] == "osf", r
+
+
+@case("human_health_relevance must be a boolean")
+def _():
+    s = valid_prospero()
+    s["human_health_relevance"] = "yes"
+    assert any(x["field"] == "human_health_relevance" for x in sev(P.check(s, "prospero"), "HIBA"))
+
+
 if __name__ == "__main__":
     passed = sum(1 for _, ok, _ in RESULTS if ok)
     for name, ok, msg in RESULTS:

@@ -37,7 +37,7 @@ POPULATIONS = {"human", "animal", "in-vitro", "mixed"}
 STAGE_STATES = ("not_started", "started", "completed")
 STAGE_ROWS = ["pilot_work", "formal_searching", "screening", "data_extraction", "risk_of_bias", "data_synthesis"]
 SPEC_TOP_KEYS = {"slug", "registry", "review_kind", "population_scope", "outcome_health",
-                 "cochrane_protocol", "prospero", "osf", "similar", "notes"}
+                 "human_health_relevance", "cochrane_protocol", "prospero", "osf", "similar", "notes"}
 
 #: PROSPERO text is English. Affiliations, funding and names are exempt.
 ENGLISH_ONLY_PROSPERO = {
@@ -162,8 +162,12 @@ def route(spec: dict) -> dict:
     if kind == "other":
         notes.append("review_kind = other: a befogadást nem lehet automatikusan eldönteni — "
                      "egyeztess a CRD-vel vagy válassz konkrét típust")
-    if pop == "animal":
-        blockers.append("csak állatkísérletes review: a PROSPERO állat-szekciójába tartozik, nem ebbe az űrlapba")
+    if pop == "animal" and not spec.get("human_health_relevance"):
+        blockers.append("állatkísérletes review, amely nincs igazoltan közvetlenül releváns az emberi egészség "
+                        "szempontjából: a PROSPERO csak ezt veszi fel (human_health_relevance = true kell hozzá)")
+    if pop == "animal" and spec.get("human_health_relevance"):
+        notes.append("állatkísérletes review: a PROSPERO űrlapja ezt külön, állat-opcióként kínálja "
+                     "('directly relevant to human health'); az egészség-relevanciát a leírásban is igazold")
     if pop == "in-vitro":
         blockers.append("csak in vitro review: a CRD az OSF-et javasolja")
     if pop == "mixed":
@@ -212,6 +216,8 @@ def check(spec: dict, registry: str) -> list[dict]:
     for k in spec:
         if k not in SPEC_TOP_KEYS:
             add("HIBA", k, "ismeretlen kulcs a spec gyökerében")
+    if "human_health_relevance" in spec and not isinstance(spec["human_health_relevance"], bool):
+        add("HIBA", "human_health_relevance", "logikai érték kell legyen (true/false)")
     if spec.get("review_kind") not in REVIEW_KINDS:
         add("HIBA", "review_kind", f"review_kind kötelező: {', '.join(sorted(REVIEW_KINDS))}")
     if spec.get("population_scope", "human") not in POPULATIONS:

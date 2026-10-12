@@ -40,7 +40,7 @@ Create `prereg/<slug>/spec.json` from `${CLAUDE_PLUGIN_ROOT}/examples/spec.templ
 python3 "$P" route prereg/<slug>/spec.json
 ```
 
-Explain each blocker in one plain sentence. If the decision is `ask` or `blocked`, use AskUserQuestion with the real options: OSF instead; the PROSPERO animal section (outside this plugin); or no registration, with the disclosure stated in the manuscript.
+Explain each blocker in one plain sentence. If the decision is `ask` or `blocked`, use AskUserQuestion with the real options: OSF instead; for an animal review, PROSPERO's animal option only if the review is directly relevant to human health (set `human_health_relevance` and say why in the text); or no registration, with the disclosure stated in the manuscript.
 
 If data extraction has started, PROSPERO is closed. PROSPERO has no retrospective category. Say so, and offer OSF with the non-prospective disclosure, or no registration with a statement. Never offer "register it now and say it was prospective".
 

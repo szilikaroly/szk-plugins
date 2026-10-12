@@ -15,7 +15,8 @@ registry form could not be seen (PROSPERO's form is behind login), the file says
 | Systematic, rapid, umbrella review with a health-related outcome | yes | yes |
 | Scoping, narrative, literature or mapping review | **no** | yes — but the *Generalized Systematic Review* form is built for systematic reviews; a general form (*Open-Ended Registration*, id `5df83f7dd28338001ac0ab0d`) fits better, and this plugin does not map it yet |
 | Systematic review with no health-related outcome | no | yes |
-| Animal-only systematic review | no — PROSPERO has a separate animal section | yes |
+| Animal systematic review, directly relevant to human health | yes — the live form offers it as a separate option (checked 2026-10-12) | yes |
+| Animal systematic review without that relevance | no | yes |
 | In-vitro-only review | no — CRD suggests OSF | yes |
 | Cochrane protocol | not separately — PROSPERO imports it automatically | — |
 
@@ -93,7 +94,7 @@ Syntax from the search help: `NEAR` / `NEAR3` for proximity (word order is respe
 
 | Check | Catches | Blocks? |
 |---|---|---|
-| Routing | narrative/scoping review on PROSPERO; animal-only or in-vitro-only; no health outcome; Cochrane protocol; data extraction already started | yes (PROSPERO) |
+| Routing | narrative/scoping review on PROSPERO; animal review without human-health relevance; in-vitro review; no health outcome; Cochrane protocol; data extraction already started | yes (PROSPERO) |
 | Required fields | empty required answers, unknown field names, invented fields | yes |
 | Placeholders | `TBD`, `TODO`, `XXX`, `???`, `[AUTHOR-VERIFY …]`, `{{…}}`, `<<…>>` anywhere in the content | yes |
 | Dates | not ISO, or end before start | yes |
