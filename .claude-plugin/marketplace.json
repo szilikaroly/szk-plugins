@@ -157,6 +157,26 @@
         "version-control",
         "cross-platform"
       ]
+    },
+    {
+      "name": "prereg",
+      "source": "./plugins/prereg",
+      "description": "Registers a systematic review on PROSPERO or OSF Registries through the browser pane, from criteria the user gives. Routes the registry (PROSPERO's eligibility and timing rules, OSF otherwise), enriches the draft from similar registrations, and checks it three ways before anything is submitted: a deterministic script (required fields, placeholders, ORCID check digits, dates, the stage table), an independent reviewer subagent (question, design, synthesis and timing consistency), and a read-back of the live form against the approved plan. Collects the team's ORCIDs from a base registry (only after the user confirms each name and consent), asks for the aims, drafts the protocol from the spec, and uploads it only after its own approval. Stops at three user gates — content approval, protocol upload, then an explicit approval per submission — and never types credentials or ticks declarations. Runs in the built-in browser with the user already logged in. Hands the registered protocol to composer, validator, metaANAL or praxist as step-by-step plans.",
+      "author": {
+        "name": "Dr. Szili Karoly"
+      },
+      "license": "MIT",
+      "category": "research",
+      "keywords": [
+        "prospero",
+        "osf",
+        "preregistration",
+        "systematic-review",
+        "registration",
+        "browser",
+        "meta-analysis",
+        "protocol"
+      ]
     }
   ]
 }

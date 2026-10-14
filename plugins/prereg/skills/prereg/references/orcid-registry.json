@@ -1,0 +1,23 @@
+{
+  "_about": "Base ORCID registry for the user's co-authors and team. Source: the user's own co-author list (2026-08-25) plus his ORCID 'access granted' page (2026-10-13). Team membership is NOT implied by being listed here: every registration still needs the member's consent (consent: true). Names are as the user gave them; 'byline' is the form to print on a byline when it differs. Accents marked 'unconfirmed' were pasted without accents and must be confirmed before a byline is printed.",
+  "members": [
+    {"name": "Károly Szili", "orcid": "0000-0001-9803-9103", "byline": "Károly Szili", "aliases": ["Karoly Szili", "Szili Károly", "Szili Karoly", "Dr Károly Szili"], "note": "user's own iD; institutional e-mail szili.karoly@sze.hu"},
+    {"name": "Csilla Dézsi", "orcid": "0000-0001-7343-9856", "byline": "Csilla Dézsi", "aliases": ["Dézsi Csilla", "Dezsi Csilla"]},
+    {"name": "Viktor Gulyás", "orcid": "0009-0005-5334-4493", "byline": "Viktor Gulyás-Oldal", "aliases": ["Viktor Gulyás-Oldal", "Gulyás-Oldal Viktor", "Gulyas-Oldal Viktor", "Viktor Gulyas-Oldal"], "note": "registry spelling Gulyás; byline Gulyás-Oldal (settled 2026-09-09). Not the same person as Nándor Gulyás-Oldal."},
+    {"name": "Sandor Nagy", "orcid": "0000-0002-7054-8333", "byline": "Sándor Nagy", "aliases": ["Sándor Nagy", "Nagy Sándor", "Nagy Sandor"], "note": "corresponding author on the AI/AMR paper; nsandor@sze.hu"},
+    {"name": "Imre Gálóczi", "orcid": "0009-0000-2670-4549", "byline": "Imre Gálóczi", "aliases": ["Imre Galoczi", "Galóczi Imre"]},
+    {"name": "Erik Krisztián Fischer", "orcid": "0009-0001-0782-0867", "byline": "Erik Krisztián Fischer", "aliases": ["Erik Krisztian Fischer", "Fischer Erik Krisztián"]},
+    {"name": "Béla Gyarmati", "orcid": "0009-0004-3320-4445", "byline": "Béla Gyarmati", "aliases": ["Bela Gyarmati", "Gyarmati Béla"]},
+    {"name": "Csaba Busznyák", "orcid": "0009-0008-4875-9151", "byline": "Csaba Busznyák", "aliases": ["Csaba Busznyak", "Busznyák Csaba"]},
+    {"name": "Gábor Patay", "orcid": "0009-0001-6994-5219", "byline": "Gábor Patay", "aliases": ["Gabor Patay", "Patay Gábor", "Dr Gábor Patay"]},
+    {"name": "Dániel Sallai", "orcid": "0009-0008-6955-5713", "byline": "Dániel Sallai", "aliases": ["Daniel Sallai", "Sallai Dániel", "Dr Dániel Sallai"]},
+    {"name": "Dezső Péter Virok", "orcid": "0000-0002-9456-7993", "byline": "Dezső Virok", "aliases": ["Dezső Virok", "Dezso Virok", "Virok Dezső"], "note": "byline drops the middle name"},
+    {"name": "Ekaterine Paschali", "orcid": "0009-0002-9576-5243", "byline": "Ekaterine Paschali", "aliases": ["Paschali Ekaterine"], "note": "settled 2026-08-25: Ekaterine, never Ekaterina"},
+    {"name": "Szabolcs Varbiro", "orcid": "0000-0002-7109-6906", "byline": "Szabolcs Várbíró", "aliases": ["Szabolcs Várbíró", "Várbíró Szabolcs", "Varbiro Szabolcs"]},
+    {"name": "Péter Mészáros", "orcid": "0009-0001-6799-6987", "byline": "Péter Mészáros", "aliases": ["Peter Meszaros", "Mészáros Péter"]},
+    {"name": "Ibolya Laczo", "orcid": "0000-0002-6371-7661", "byline": "Ibolya Laczo", "aliases": ["Laczó Ibolya", "Laczo Ibolya"], "note": "added 2026-10-13; accents unconfirmed (Laczó?)"},
+    {"name": "Nándor Gulyás-Oldal", "orcid": "0009-0007-6605-3868", "byline": "Nándor Gulyás-Oldal", "aliases": ["Nandor Gulyas-Oldal", "Gulyás-Oldal Nándor"], "note": "different person from Viktor Gulyás-Oldal; gulyasnandi60@gmail.com"},
+    {"name": "Agnes Szeman", "orcid": "0009-0009-3235-4413", "byline": "Agnes Szeman", "aliases": ["Ágnes Szemán", "Szemán Ágnes", "Szeman Agnes"], "note": "added 2026-10-13; accents unconfirmed (Ágnes Szemán?)"},
+    {"name": "Tamás Bitó", "orcid": "0000-0002-5382-9483", "byline": "Tamás Bitó", "aliases": ["Tamas Bito", "Bitó Tamás"], "note": "added 2026-10-13"}
+  ]
+}
