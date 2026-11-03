@@ -25,6 +25,16 @@ python3 "$A" --verify appraisal.md --tool <TOOL> --scope <SCOPE>
 python3 "$A" --rollup appraisal.md --tool <TOOL> --scope <SCOPE>
 ```
 
+   `--verify` and `--rollup` exit 1 until every slot is answered with a word the item offers;
+   a domain with a blank is INCOMPLETE, never LOW. N/A only where the item offers it (a
+   conditional question whose condition is not met); for ROBINS-I and ROBINS-E the rollup
+   follows each question's routing condition, so a gateway such as ROBINS-I 2.1 only opens the
+   next question, and QUADAS-2 also needs its three applicability judgements. RoB 2's rollup runs the published 2019
+   algorithm and prints the path it took; ROBIS's overall is its phase-3 judgement. For the
+   Newcastle-Ottawa scale `--scope cohort` or `--scope case-control` is required. A file written with validator 1.x for
+   ROBINS-I or QUIPS is refused (their item numbering changed in 2.0.0) — convert it first with
+   `python3 "$A" --migrate old.md --tool <TOOL> --scope <SCOPE> > appraisal.md`.
+
 6. **Report one row per signalling question**, then the domain verdicts with a sentence each,
    then the overall with a paragraph. If you override what the rollup computed, say so and say
    why — silently smoothing over a flag is the failure this whole tool exists to prevent.

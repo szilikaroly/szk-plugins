@@ -4,6 +4,8 @@
 tool: jbi
 name: JBI critical appraisal checklists (Joanna Briggs Institute)
 answers: Yes|No|Unclear|Not applicable
+aliases: Y=Yes; N=No; U=Unclear
+unknown_answer: Unclear
 verdicts: Include|Exclude|Seek further info
 unit: STUDY
 use_for: designs the risk-of-bias tools do not cover — cross-sectional, case series, case reports, prevalence and qualitative studies

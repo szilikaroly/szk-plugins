@@ -27,7 +27,20 @@ Report the certainty with GRADE's own informative statement, not your own wordin
 - Low → "X may reduce Y"
 - Very low → "the evidence is very uncertain about the effect of X on Y"
 
-Two answers that are easy to get wrong: with fewer than about ten studies, publication bias
-"could not be assessed" — which is not the same as "undetected", so say which you mean. And
-upgrade factors apply only to a body of evidence that has not been downgraded; the rollup
-refuses to apply both and will tell you.
+Answers that are easy to get wrong:
+
+- **Publication bias** takes *Undetected* (0), *Strongly suspected* (−1), *Suspected* or *Could
+  not be assessed*. The last two are not decisions: with fewer than about ten studies the
+  funnel plot cannot be read, which is not the same as "undetected". The rollup then prints
+  UNRESOLVED and no certainty; decide from what you can see (small studies, funding), re-answer
+  *Undetected* or *Strongly suspected*, and put the reason in the evidence column. A −2 for a
+  very strong suspicion is a manual call — state it and why.
+- **Large effect** is *Yes* (+1) or *Very large* (+2, RR > 5 or < 0.2). Upgrade factors apply
+  only to a body of evidence that has not been downgraded; the rollup refuses to apply both and
+  will tell you. For a body of randomised trials the three upgrade domains may be N/A.
+- Every domain accepts only its own answers — `--verify` rejects, say, *Serious* on
+  publication bias — and the rollup gives `CERTAINTY: INCOMPLETE` until all nine are answered.
+
+```
+python3 "$A" --verify grade-<outcome>.md --tool grade
+```

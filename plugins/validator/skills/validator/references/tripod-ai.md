@@ -103,6 +103,8 @@ Source: Collins et al., "TRIPOD+AI statement," *BMJ* 2024;385:e078378, and its E
 
 Use this when the check is specifically on an abstract (a submission, a conference abstract, or a manuscript's abstract section in isolation).
 
+Its items are numbered 1–13 like main items 1–13, so keep them under a heading that names this checklist (e.g. "## TRIPOD+AI for Abstracts"). `checklist.py --verify` reads nothing under such a heading as a main-checklist answer; in validator 2.0.0 an abstracts table filled the blank main items 1–13 and a full appraisal with seven of them unanswered verified 52/52.
+
 1. Identify as development/evaluation, name the target population and outcome.
 2. Brief healthcare context and rationale.
 3. State objectives (development, evaluation, or both).

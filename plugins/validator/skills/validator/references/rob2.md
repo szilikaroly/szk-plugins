@@ -4,12 +4,18 @@
 tool: rob2
 name: RoB 2 (Cochrane risk-of-bias tool for randomised trials, version 2, 22 August 2019)
 answers: Yes|Probably yes|Probably no|No|No information
+aliases: Y=Yes; PY=Probably yes; PN=Probably no; N=No; NI=No information
+unknown_answer: No information
 verdicts: Low|Some concerns|High
+tiers: Low|Some concerns|High
 published_items: 22
+published_by_scope: assignment=22; adherence=21
 unit: RESULT (one specific outcome, from one specific trial)
 use_for: individually randomised parallel-group trials; cluster-randomised and crossover trials add domain 1b / 1c questions from the variant tools
 scopes: assignment, adherence, all
-applicability: not part of RoB 2 — RoB 2 rates risk of bias only
+default_scope: assignment
+item_answers: 3.2=Yes|Probably yes|Probably no|No|N/A
+not_applicable: assignment/2.3, assignment/2.4, assignment/2.5, assignment/2.7, adherence/2.3, adherence/2.4, adherence/2.5, adherence/2.6, 3.2, 3.3, 3.4, 4.3, 4.4, 4.5
 -->
 
 ## What this tool actually rates
@@ -21,14 +27,23 @@ interpretable — Cochrane's own guidance is explicit about this. Fill the table
 result you intend to use.
 
 **A specified effect of interest.** The default here is the *effect of assignment to
-intervention* (intention-to-treat). The *effect of adhering to intervention* uses a
-different domain 2 (per-protocol, adherence-focused), and mixing the two inside one
-assessment is the second most common way this tool is misapplied. State which one you are
-rating before answering 2.1.
+intervention* (intention-to-treat, `--scope assignment`, which is also what `all` means for
+this tool). The *effect of adhering to intervention* (per-protocol, `--scope adherence`) uses a
+different domain 2 with its own six questions numbered 2.1–2.6, and mixing the two inside one
+assessment is the second most common way this tool is misapplied. The two variants are
+alternatives, never additions: an assessment uses one of them. State which one you are rating
+before answering 2.1.
+
+RoB 2 rates risk of bias only; it has no applicability judgement.
 
 Answer vocabulary: **Yes / Probably yes / Probably no / No / No information**. "Probably"
 is not hedging — it marks a judgement made from indirect evidence rather than an explicit
 statement, and it is a normal, expected answer.
+
+**N/A only where the template offers it** — a conditional question ("If … to 3.1: …") whose
+condition is not met: 2.3–2.5 and 2.7 (assignment), 2.3–2.6 (adhering), 3.2–3.4 and 4.3–4.5.
+Every other question is always asked, and `--verify` rejects N/A there. In 2.0.0 a record
+with all 22 answers N/A verified complete and rolled up LOW.
 
 ## Domain 1 — Randomisation process
 
@@ -53,20 +68,20 @@ reassurance.
 
 ## Domain 2 — Deviations from intended interventions
 
-**2.1 (assignment, router) — Were participants aware of their assigned intervention during the trial?**
+**2.1 (assignment) — Were participants aware of their assigned intervention during the trial?**
 This is about awareness, not about the word "blinded". A trial comparing surgery with
 physiotherapy cannot blind participants; answer Yes and let the later questions decide
 whether it mattered.
 
-**2.2 (assignment, router) — Were carers and people delivering the interventions aware of participants' assigned intervention during the trial?**
+**2.2 (assignment) — Were carers and people delivering the interventions aware of participants' assigned intervention during the trial?**
 
-**2.3 (assignment, router) — If Y/PY/NI to 2.1 or 2.2: were there deviations from the intended intervention that arose because of the trial context?**
+**2.3 (assignment, reverse) — If Y/PY/NI to 2.1 or 2.2: were there deviations from the intended intervention that arose because of the trial context?**
 Only deviations *caused by the trial context* count — not the routine non-adherence that
 would also happen outside a trial, which is part of the effect of assignment.
 
-**2.4 (assignment, router) — If Y/PY to 2.3: were these deviations likely to have affected the outcome?**
+**2.4 (assignment, reverse) — If Y/PY to 2.3: were these deviations likely to have affected the outcome?**
 
-**2.5 (assignment) — If Y/PY to 2.4: were these deviations from intended intervention balanced between groups?**
+**2.5 (assignment) — If Y/PY/NI to 2.4: were these deviations from intended intervention balanced between groups?**
 
 **2.6 (assignment) — Was an appropriate analysis used to estimate the effect of assignment to intervention?**
 Intention-to-treat, or a "modified ITT" that excludes only participants with no outcome
@@ -76,6 +91,26 @@ data. Excluding participants for non-adherence, or analysing as-treated, answers
 Judge the *size* of the excluded group and how differently it plausibly fared. A handful of
 exclusions in a large trial with a common outcome usually cannot move the result.
 
+**Effect of adhering to intervention** — the domain 2 questions for `--scope adherence`. The
+ids repeat 2.1–2.6 because the published template numbers them that way; the scope decides
+which set is printed and read.
+
+**2.1 (adherence) — Were participants aware of their assigned intervention during the trial?**
+
+**2.2 (adherence) — Were carers and people delivering the interventions aware of participants' assigned intervention during the trial?**
+
+**2.3 (adherence) — If applicable, and if Y/PY/NI to 2.1 or 2.2: were important non-protocol interventions balanced across intervention groups?**
+N/A when nobody was aware of the assignment, or when non-protocol interventions are not part
+of the question.
+
+**2.4 (adherence, reverse) — If applicable: were there failures in implementing the intervention that could have affected the outcome?**
+
+**2.5 (adherence, reverse) — If applicable: was there non-adherence to the assigned intervention regimen that could have affected participants' outcomes?**
+
+**2.6 (adherence) — If N/PN/NI to 2.3, or Y/PY/NI to 2.4 or 2.5: was an appropriate analysis used to estimate the effect of adhering to the intervention?**
+Methods that allow for the non-adherence — instrumental variables, inverse probability
+weighting. A naive per-protocol or as-treated analysis is No.
+
 ## Domain 3 — Missing outcome data
 
 **3.1 (all) — Were data for this outcome available for all, or nearly all, participants randomised?**
@@ -84,9 +119,11 @@ event rate can reverse a result, while 10% missing with a 50% event rate may not
 
 **3.2 (all) — If N/PN/NI to 3.1: is there evidence that the result was not biased by missing outcome data?**
 A sensitivity analysis under plausible alternative assumptions is evidence. Similar
-proportions missing in both arms is *not*, because the reasons can still differ.
+proportions missing in both arms is *not*, because the reasons can still differ. The 2019
+template offers no *No information* here: evidence is either shown or it is not, so a report
+that says nothing about it answers No (or Probably no).
 
-**3.3 (all, router) — If N/PN to 3.2: could missingness in the outcome depend on its true value?**
+**3.3 (all, reverse) — If N/PN to 3.2: could missingness in the outcome depend on its true value?**
 Reverse-polarity. For mortality, missingness usually cannot depend on the true value in the
 same way it can for a symptom score a suffering participant stops returning.
 
@@ -104,10 +141,10 @@ capture the outcome at all, not that a better instrument exists.
 Reverse-polarity. Different follow-up intensity, different diagnostic workup, or a
 detection-biased outcome (more tests in the treated arm finds more disease).
 
-**4.3 (all, router) — If N/PN/NI to 4.1 and 4.2: were outcome assessors aware of the intervention received?**
+**4.3 (all, reverse) — If N/PN/NI to 4.1 and 4.2: were outcome assessors aware of the intervention received?**
 Reverse-polarity. The participant *is* the outcome assessor for a patient-reported outcome.
 
-**4.4 (all, router) — If Y/PY/NI to 4.3: could assessment of the outcome have been influenced by knowledge of intervention received?**
+**4.4 (all, reverse) — If Y/PY/NI to 4.3: could assessment of the outcome have been influenced by knowledge of intervention received?**
 Reverse-polarity. All-cause mortality: almost never. A subjective rating scale: readily.
 
 **4.5 (all, reverse) — If Y/PY/NI to 4.4: is it likely that assessment of the outcome was influenced by knowledge of intervention received?**
@@ -129,38 +166,71 @@ Reverse-polarity. Multiple scales, multiple definitions of "response", multiple 
 Reverse-polarity. Adjusted versus unadjusted, different subsets, different cut-points for a
 continuous variable.
 
-## Question roles — what the tags in this file mean
+## How `--rollup` decides each domain
 
-Each item carries a tag that tells `appraise.py --rollup` how to read its answer:
+`appraise.py --rollup` runs the RoB 2 algorithm of the 22 August 2019 guidance, domain by
+domain, and prints the path it took ("3.1 'No' → 3.2 'Yes'"). It follows the questions the
+way the template routes them, so a question's answer means what the algorithm says it
+means at that point — a No at 3.1 is not a problem by itself, it opens 3.2. In short:
 
-- **normal** — `No` / `Probably no` is the problem (1.1, 1.2, 2.5, 2.6, 3.1, 3.2, 5.1).
-- **reverse** — `Yes` / `Probably yes` is the problem (1.3, 2.7, 3.4, 4.1, 4.2, 4.5, 5.2, 5.3).
-- **router** — the answer decides which question is asked next and means nothing on its own
-  (2.1, 2.2, 2.3, 2.4, 3.3, 4.3, 4.4). Every open-label trial answers Yes to 2.1; scoring
-  that as a problem would rate every unblinded trial high risk, which is not what the tool
-  says. Routers are listed in the rollup and excluded from the verdict.
+- **Domain 1.** 1.2 No / Probably no → High. 1.2 No information → High if 1.3 is Yes /
+  Probably yes, otherwise Some concerns. 1.2 Yes / Probably yes → Low unless 1.1 is No /
+  Probably no or 1.3 is Yes / Probably yes, which give Some concerns. No information at 1.1
+  or 1.3 is compatible with Low.
+- **Domain 2, effect of assignment.** Part 1: nobody aware (2.1 and 2.2 No / Probably no),
+  or 2.3 No / Probably no → Low; 2.3 No information → Some concerns; 2.3 Yes and 2.4 No /
+  Probably no → Some concerns; 2.4 Yes / Probably yes / No information → 2.5 Yes / Probably
+  yes gives Some concerns, otherwise High. Part 2: 2.6 Yes / Probably yes → Low; otherwise
+  2.7 No / Probably no gives Some concerns, Yes / Probably yes / No information gives High.
+  The domain is the worse of the two parts.
+- **Domain 2, effect of adhering.** A problem is 2.3 No / Probably no / No information (asked
+  only if someone was aware), or 2.4 or 2.5 Yes / Probably yes / No information. No problem →
+  Low. A problem → 2.6 Yes / Probably yes gives Some concerns; No / Probably no / No
+  information gives High.
+- **Domain 3.** 3.1, 3.2 and 3.3 are gates: 3.1 Yes, 3.2 Yes or 3.3 No (each with its
+  Probably) gives Low. Past them, 3.4 No / Probably no gives Some concerns and Yes / Probably
+  yes / No information gives High.
+- **Domain 4.** 4.1 or 4.2 Yes / Probably yes → High (No information at 4.1 follows the No
+  branch). Then 4.3 No / Probably no, or 4.4 No / Probably no, ends the walk at Low — or at
+  Some concerns when 4.2 was No information. Past 4.4, 4.5 No / Probably no gives Some
+  concerns and Yes / Probably yes / No information gives High.
+- **Domain 5.** 5.2 or 5.3 Yes / Probably yes → High. Both No / Probably no → Low if 5.1 is
+  Yes / Probably yes, otherwise Some concerns. No information at 5.2 or 5.3 (and neither Yes)
+  → Some concerns.
 
-## The algorithm, and why this file does not pretend to run it
+A blank or invalid answer anywhere in a domain makes it INCOMPLETE, and so does N/A at a
+question the walk reaches (3.1 No with 3.2 N/A): the algorithm needs that answer. An answer
+at a question the walk does not reach is listed, not used.
 
-RoB 2's published algorithm branches on specific answers — domain 2 turns on 2.6 and 2.7,
-domain 3 on the 3.3/3.4 pair, domain 4 on the 4.3–4.5 chain — and produces Low / Some
-concerns / High per domain. `appraise.py --rollup` reports what the recorded answers *force*
-and names the questions that forced it; it does not reproduce the flowcharts, because a
-generic engine that claimed to would give official-looking wrong verdicts. For a borderline
-domain, run the answers through the official Excel tool or the algorithm in the RoB 2
-guidance and say which one you used.
+In 2.0.0 the rollup scored RoB 2 with generic tags instead, which cannot express a gate: a
+result with 3.1 No and 3.2 Yes — any trial with a robustness sensitivity analysis — was rated
+High at exit 0, NI at 2.5, 2.7 and 4.5 stayed at Some concerns, and 2.3 NI or 4.4 Yes with 4.5
+No came out Low.
+
+The tags left on the items are a reading aid only: **reverse** marks a question where Yes /
+Probably yes is the answer that moves toward higher risk (1.3, 2.3, 2.4, 2.7, 3.3, 3.4,
+4.1–4.5, 5.2, 5.3; in the adhering variant 2.4 and 2.5). 2.1 and 2.2 only decide which
+questions follow — every open-label trial answers Yes to 2.1, and that alone is not a problem.
 
 **Overall:** Low risk of bias only if *every* domain is Low. Some concerns if at least one
 domain is Some concerns and none is High. High if any domain is High, **or** if multiple
 domains at Some concerns substantially lower confidence in the result — that second clause
-is a judgement, and it must be stated when used.
+is a judgement, and it must be stated when used. The rollup computes the first three and
+reminds you of the fourth.
 
 ## Provenance
 
-Domain structure, the 22 signalling questions and the answer vocabulary follow Sterne JAC,
+Domain structure, the 22 signalling questions, the answer vocabulary and the per-domain
+algorithms follow Sterne JAC,
 Savović J, Page MJ, et al. *RoB 2: a revised tool for assessing risk of bias in randomised
 trials.* BMJ 2019;366:l4898, and the RoB 2 guidance document (version 22 August 2019) at
-riskofbias.info. The question texts here are working paraphrases in the tool's own
+riskofbias.info; the domain criteria are also reproduced in published protocols (e.g.
+PMC8191126, whose table gives the 2019 Low / Some concerns / High criteria for every domain),
+and the No information groupings follow the template's own conditions ("If Y/PY/NI to 2.4").
+The six domain-2 questions for the effect of adhering (21 questions in that
+variant) follow the official template as reproduced in published assessments (e.g. PMC8920395,
+PMC11432466); validator 1.x advertised `--scope adherence` without them and verified a
+15-slot appraisal that never assessed domain 2. The question texts here are working paraphrases in the tool's own
 vocabulary, not a verbatim reproduction; check the canonical wording at riskofbias.info
 before quoting an item in a manuscript, and use the official Excel template when the
 assessment will be published.
