@@ -8,6 +8,10 @@ import re
 from difflib import SequenceMatcher
 
 from pc_lib import F, ERROR, WARN, INFO, word_count
+from pc_reviewer import check_reviewer
+from pc_reviewer_open import check_open
+from pc_reviewer_sim import check_sim
+from pc_reviewer_synth import check_synth
 
 try:  # vendored from ~/.szk-blacklist; offline — reads a local JSON only
     import journal_blacklist as _jbl
@@ -35,6 +39,24 @@ def check_structure(doc, profile):
                          f"Expected section not found: '{sec}'.",
                          fix=f"Add a clearly-titled '{sec.title()}' section, or "
                              "rename the existing heading to match."))
+    pages = profile.get("max_body_pages")
+    if pages:
+        cpp = profile.get("chars_per_page", 1800)
+        body = doc.text
+        ref = doc.sections.get("references", "")
+        if ref and ref in body:
+            body = body.split(ref)[0]
+        for k in ("_preamble", "abstract", "keywords", "abbreviations"):
+            body = body.replace(doc.sections.get(k, ""), "", 1)
+        kind = "review" if re.search(r"\breview\b|áttekint", doc.text[:800], re.I) else (
+            "case_report" if "case presentation" in present else "original")
+        limit = pages.get(kind, pages.get("other", 10)) * cpp
+        if len(body) > limit * 1.1:
+            out.append(F("structure", WARN, "body-over-length",
+                         f"The body is about {len(body) // cpp} standard pages "
+                         f"({cpp} characters each); {profile['name']} allows "
+                         f"{pages.get(kind, pages.get('other', 10))} for a {kind.replace('_', ' ')}.",
+                         fix="Cut, or move detail to a supplement."))
     if not present:
         out.append(F("structure", INFO, "no-headings",
                      "No section headings were detected — the checker could not "
@@ -54,7 +76,8 @@ def check_authors(doc, profile):
                      fix="Add the corresponding author's email address."))
     aff_markers = ("department", "university", "hospital", "institute",
                    "faculty", "clinic", "college", "school of", "centre",
-                   "center")
+                   "center", "egyetem", "tanszék", "klinika", "kórház",
+                   "intézet", "kar,", "kar ", "rendelő", "központ")
     if not any(m in head.lower() for m in aff_markers):
         out.append(F("authors", WARN, "no-affiliation",
                      "No institutional affiliation detected in the author block.",
@@ -81,8 +104,21 @@ def check_abstract(doc, profile):
                          fix="Add a titled 'Abstract' section."))
     else:
         wc = word_count(abs_txt)
+        hu = re.split(r"(?im)^\s*(?:summary|abstract|introduction|background)\s*[:：]?\s*$|"
+                      r"^\s*(?:introduction|objectives?|background)\s*[:：]", abs_txt, maxsplit=1)
+        if len(hu) == 2 and re.search(r"(?im)^\s*(bevezetés|célkitűzés|módszer)", hu[0]):
+            # two abstracts, one per language: judge the longer against the limit
+            wc = max(word_count(hu[0]), word_count(abs_txt[len(hu[0]):]))
         amax = profile.get("abstract_max_words")
         amin = profile.get("abstract_min_words")
+        if profile.get("abstract_no_abbreviations"):
+            abbr = sorted({t for t in re.findall(r"\b[A-Z][A-Z0-9]{1,6}\b", abs_txt)
+                           if t not in ("I", "II", "III", "IV", "MeSH")})
+            if abbr:
+                out.append(F("abstract", WARN, "abstract-has-abbreviations",
+                             f"The abstract contains abbreviations ({', '.join(abbr[:6])}); "
+                             f"{profile['name']} does not allow any.",
+                             where="abstract", fix="Spell them out in the abstract."))
         if amax and wc > amax:
             out.append(F("abstract", WARN, "abstract-too-long",
                          f"Abstract is {wc} words; {profile['name']} limit is "
@@ -93,8 +129,11 @@ def check_abstract(doc, profile):
                          f"Abstract is only {wc} words.", where="abstract",
                          fix="Make sure background, methods, results and "
                              "conclusion are all represented."))
-    # keywords
+    # keywords — a section, or an inline 'Keywords:' / 'Kulcsszavak:' line
     kw = doc.sections.get("keywords", "")
+    if not kw:
+        m = re.search(r"(?im)^\s*(?:keywords?|key words|kulcsszavak)\s*[:：]\s*(.+)$", doc.text)
+        kw = m.group(1) if m else ""
     if not kw:
         if profile.get("keywords_required", True):
             out.append(F("keywords", WARN, "no-keywords",
@@ -149,17 +188,24 @@ def _cited_numbers(doc):
     if ref:
         body = body.split(ref)[0] if ref in body else body
     nums = set()
-    for m in re.finditer(r"\[(\d{1,3}(?:\s*[-,]\s*\d{1,3})*)\]", body):
+    # ranges may be written with a hyphen or an en/em dash; MDPI style uses an
+    # en-dash, and missing it reports most of a correct reference list as uncited
+    DASH = "-\u2010\u2011\u2012\u2013\u2014"   # hyphen first: inside [] it must not start a range
+    for m in re.finditer(rf"\[(\d{{1,3}}(?:\s*[{DASH},]\s*\d{{1,3}})*)\]", body):
         for part in re.split(r",", m.group(1)):
             part = part.strip()
-            if "-" in part:
-                a, b = part.split("-")[:2]
+            if re.search(rf"[{DASH}]", part):
+                a, b = re.split(rf"[{DASH}]", part)[:2]
                 try:
                     nums.update(range(int(a), int(b) + 1))
                 except ValueError:
                     pass
             elif part.isdigit():
                 nums.add(int(part))
+    # a field-managed manuscript carries its citations as superscript runs, not
+    # as [n]; fall back to those so the cross-check still runs
+    if not nums:
+        nums |= {c for c in getattr(doc, "sup_citations", ()) if c > 0}
     return nums
 
 
@@ -175,6 +221,12 @@ def check_references(doc, profile):
     n = len(entries)
     out.append(F("references", INFO, "ref-count",
                  f"{n} references detected.", where="references"))
+    rmax = profile.get("max_references")
+    if rmax and n > rmax:
+        out.append(F("references", WARN, "ref-count-over-limit",
+                     f"{n} references; {profile['name']} allows at most {rmax} "
+                     f"except in justified cases.", where="references",
+                     fix="Cut to the ceiling, or justify the excess in the cover letter."))
 
     # per-entry completeness
     for i, e in enumerate(entries, 1):
@@ -283,19 +335,24 @@ def _snip(e, n=60):
 # ============================================================ ETHICS ==========
 DISCLOSURE_PATTERNS = {
     "conflict of interest": r"conflict[s]? of interest|competing interest|"
-                            r"declaration of interest|no .{0,20}conflict",
+                            r"declaration of interest|no .{0,20}conflict|"
+                            r"érdekeltség|összeférhetetlenség",
     "funding": r"funding|financial support|grant|no .{0,10}funding|"
-               r"received no .{0,20}support",
+               r"received no .{0,20}support|anyagi támogatás|támogatásban",
     "human subjects": r"human subjects|irb|institutional review board|"
-                      r"ethics committee|ethical approval|ethics approval",
+                      r"ethics committee|ethical approval|ethics approval|"
+                      r"etikai (bizottság|engedély|jóváhagyás)|kutatásetikai",
     "animal subjects": r"animal subjects|iacuc|animal care|animal ethics",
     "informed consent": r"informed consent|consent (?:was|to|for|obtained)|"
-                        r"consent for publication",
+                        r"consent for publication|tájékoztatott beleegyez|beleegyező nyilatkozat",
     "data availability": r"data availability|data are available|"
-                         r"available (?:on|upon) request|supplementary data",
-    "acknowledgements": r"acknowledg",
+                         r"available (?:on|upon) request|supplementary data|"
+                         r"adatok (?:elérhet|hozzáférhet)",
+    "acknowledgements": r"acknowledg|köszönetnyilvánítás",
     "author contributions": r"author contribution|contributorship|"
-                            r"conceptualization|CRediT",
+                            r"conceptualization|CRediT|szerzői munkamegosztás",
+    "ethics approval": r"ethics approval|ethical approval|ethics committee|"
+                       r"etikai (bizottság|engedély|jóváhagyás)|kutatásetikai",
 }
 
 
@@ -364,7 +421,7 @@ def check_format(doc, profile):
 # ============================================================ SUBMISSION =====
 # Things that must not survive into a submitted file, and the arithmetic a
 # journal will do the moment it opens the manuscript. Learned from a real
-# Annals of Internal Medicine editorial round.
+# editorial round.
 
 PLACEHOLDER_PATTERNS = [
     (r"\bTBD\b", "TBD"),
@@ -396,7 +453,7 @@ NOT_A_TRIAL = {
 }
 
 # Words that mark a token as a gene, a variant or an administrative identifier
-# rather than a study: "the GLP1R variant", "Decision SZE/ETT-82/2026".
+# rather than a study: "the GLP1R variant", "Decision ABC/DE-12/2026".
 _NOT_STUDY_CONTEXT = re.compile(
     r"\b(?:variant|variants|allele|alleles|gene|genes|receptor|polymorphism|"
     r"genotype|locus|decision|dossier|approval|registration|identifier|"
@@ -784,4 +841,8 @@ ALL_CHECKS = {
     "format": check_format,
     "submission": check_submission,
     "claims": check_claims,
+    "reviewer": lambda doc, profile: (check_reviewer(doc, profile)
+                                      + check_open(doc, profile)
+                                      + check_sim(doc, profile)
+                                      + check_synth(doc, profile)),
 }
