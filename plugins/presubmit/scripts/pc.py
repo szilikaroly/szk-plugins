@@ -6,6 +6,7 @@ does. Deterministic, offline, no language model.
     pc.py refs MANUSCRIPT           # references only
     pc.py ethics MANUSCRIPT         # disclosures only
     pc.py format MANUSCRIPT         # language/typography only
+    pc.py reviewer MANUSCRIPT       # what a referee will write back about
     pc.py authors MANUSCRIPT
     pc.py abstract MANUSCRIPT
     pc.py journals                  # list built-in journal profiles
@@ -24,7 +25,7 @@ import pc_lib
 import pc_checks as C
 
 CATS = ["structure", "authors", "abstract", "references", "ethics", "format",
-        "submission", "claims"]
+        "submission", "claims", "reviewer"]
 SEV_ICON = {pc_lib.ERROR: "✗", pc_lib.WARN: "!", pc_lib.INFO: "·"}
 SEV_LABEL = {pc_lib.ERROR: "ERROR", pc_lib.WARN: "WARN", pc_lib.INFO: "INFO"}
 
@@ -170,7 +171,7 @@ def build_parser():
     c = sub.add_parser("check", help="run every check")
     add_ms(c); c.set_defaults(func=cmd_check)
     for cat in ("refs", "ethics", "format", "authors", "abstract",
-                "submission", "claims"):
+                "submission", "claims", "reviewer"):
         key = "references" if cat == "refs" else cat
         sp = sub.add_parser(cat, help=f"{key} check only")
         add_ms(sp); sp.set_defaults(func=cmd_one(key))
