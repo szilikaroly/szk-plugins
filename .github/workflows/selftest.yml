@@ -24,13 +24,16 @@ jobs:
           # A command is invoked as /<plugin-dir>:<file>, so a short alias like
           # "/sm:context" is a command that does not exist. Emitting one costs a
           # silent no-op at the user's keyboard, which is why this is a hard fail.
+          # Any plugin of this marketplace is a valid namespace: a cross-plugin
+          # reference such as /validator:route is a real command.
+          known="$(for d in plugins/*/; do basename "$d"; done | paste -sd'|' -)"
           for d in plugins/*/; do
             name="$(basename "$d")"
             if grep -rn --include='*.md' --include='*.py' --include='*.json' \
                  -oE '/[a-z][a-z0-9-]*:[a-z][a-z0-9-]*' "$d" \
-               | grep -vE "/(${name}):" \
+               | grep -vE "/(${known}):" \
                | grep -vE 'https?:|/(api|Users|usr|tmp|etc|bin|svg|xml|xlink|w|a|r):' > /tmp/bad.txt; then
-              echo "Unknown slash-command namespace in $name (expected /${name}:):"
+              echo "Unknown slash-command namespace in $name (expected one of /${known}:):"
               cat /tmp/bad.txt
               exit 1
             fi
