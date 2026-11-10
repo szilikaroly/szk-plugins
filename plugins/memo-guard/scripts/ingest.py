@@ -76,6 +76,9 @@ def roots(cfg: dict) -> list[Path]:
 
 
 def root_of(path: Path, cfg: dict):
+    # roots() resolves symlinks; the path has to be resolved the same way, or on macOS a
+    # file under the /var/folders temp dir (really /private/var) is never "inside" its root.
+    path = Path(path).resolve()
     for r in roots(cfg):
         try:
             rel = path.relative_to(r)
