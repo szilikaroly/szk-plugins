@@ -6,6 +6,10 @@ does. Deterministic, offline, no language model.
     pc.py refs MANUSCRIPT           # references only
     pc.py ethics MANUSCRIPT         # disclosures only
     pc.py format MANUSCRIPT         # language/typography only
+    pc.py reviewer MANUSCRIPT       # what a referee will write back about
+    pc.py style MANUSCRIPT          # AI-draft tells (advisory; not in `check`)
+    pc.py invariants ORIG REWRITE   # did a rewrite keep every number and citation?
+    pc.py text MANUSCRIPT [--prose | --section NAME ...]   # plain text to rewrite
     pc.py authors MANUSCRIPT
     pc.py abstract MANUSCRIPT
     pc.py journals                  # list built-in journal profiles
@@ -24,7 +28,7 @@ import pc_lib
 import pc_checks as C
 
 CATS = ["structure", "authors", "abstract", "references", "ethics", "format",
-        "submission", "claims"]
+        "submission", "claims", "reviewer"]
 SEV_ICON = {pc_lib.ERROR: "✗", pc_lib.WARN: "!", pc_lib.INFO: "·"}
 SEV_LABEL = {pc_lib.ERROR: "ERROR", pc_lib.WARN: "WARN", pc_lib.INFO: "INFO"}
 
@@ -38,7 +42,8 @@ def _run(cats, args):
         findings.extend(C.ALL_CHECKS[cat](doc, profile))
     if getattr(args, "online", False) and "references" in cats:
         findings.extend(_online_findings(doc))
-    report = _report(doc, profile, findings, args.manuscript)
+    report = _report(doc, profile, findings, args.manuscript,
+                     advisory=(cats == ["style"]))
     _print(report)
     if getattr(args, "json", None):
         Path(args.json).write_text(json.dumps(report, indent=2, ensure_ascii=False))
@@ -74,11 +79,16 @@ def _online_findings(doc):
     return out
 
 
-def _report(doc, profile, findings, path):
+def _report(doc, profile, findings, path, advisory=False):
     counts = {pc_lib.ERROR: 0, pc_lib.WARN: 0, pc_lib.INFO: 0}
     for f in findings:
         counts[f.severity] += 1
-    if counts[pc_lib.ERROR]:
+    if advisory:
+        n = counts[pc_lib.WARN] + counts[pc_lib.INFO]
+        verdict = (f"STYLE — {n} kind(s) of AI-draft tell flagged; advisory only, "
+                   "readiness is judged by `check`" if n else
+                   "STYLE — no AI-draft tells found by the automated rules")
+    elif counts[pc_lib.ERROR]:
         verdict = "NOT READY — fix the errors below before submitting"
     elif counts[pc_lib.WARN]:
         verdict = "NEARLY READY — clear the warnings to be safe"
@@ -148,6 +158,78 @@ def cmd_journals(args):
     return 0
 
 
+def cmd_invariants(args):
+    """A rewrite must change no number, equation, citation or cross-reference."""
+    import pc_extract
+    import pc_style
+    a = pc_extract.load(args.original).text
+    b = pc_extract.load(args.rewrite).text
+    diffs = pc_style.invariants(a, b)
+    wa, wb = pc_style.prose_words(a), pc_style.prose_words(b)
+    over = args.max_words is not None and wb > args.max_words
+    print("=" * 68)
+    print(f"  REWRITE INVARIANTS — {Path(args.original).name} → {Path(args.rewrite).name}")
+    print("=" * 68)
+    if not diffs:
+        print("  PRESERVED — every number, citation, cite key, DOI, equation and\n"
+              "  table/figure cross-reference in the original is in the rewrite.")
+    budget = f" (budget {args.max_words})" if args.max_words is not None else ""
+    print(f"  {'✗' if over else '·'} words: {wa} → {wb} ({wb - wa:+d}){budget}; "
+          f"author queries excluded")
+    for kind, missing, added in diffs:
+        print(f"  ✗ {kind}:")
+        if missing:
+            print(f"      lost:  {', '.join(map(str, missing[:20]))}"
+                  + (" …" if len(missing) > 20 else ""))
+        if added:
+            print(f"      added: {', '.join(map(str, added[:20]))}"
+                  + (" …" if len(added) > 20 else ""))
+    print()
+    if args.json:
+        Path(args.json).write_text(json.dumps(
+            {"original": args.original, "rewrite": args.rewrite, "preserved": not diffs,
+             "words": {"original": wa, "rewrite": wb, "max": args.max_words,
+                       "over_budget": over},
+             "diffs": [{"kind": k, "lost": m, "added": a_} for k, m, a_ in diffs]},
+            indent=2, ensure_ascii=False))
+        print(f"  audit written: {args.json}")
+    return 1 if (diffs or over) else 0
+
+
+def cmd_text(args):
+    """Plain text of the body (before the references) or of named sections,
+    for a rewrite pass and for `invariants` to compare against."""
+    import pc_extract
+    doc = pc_extract.load(args.manuscript)
+    if args.prose:
+        import re as _re
+        import pc_style
+        prose = pc_style.prose_text(doc)
+        sys.stdout.write(prose.rstrip() + "\n")
+        # the word budget a rewrite has to respect, on stderr so the text stays clean
+        m = C.DECLARED_WC.search(doc.text)
+        declared = int(_re.sub(r"[^\d]", "", m.group(1))) if m else None
+        limit = pc_lib.load_profile(args.journal).get("body_max_words")
+        print(f"prose words: {pc_style.prose_words(prose)}; declared word count: "
+              f"{declared if declared is not None else 'none'}; "
+              f"{args.journal} limit: {limit if limit else 'none'}", file=sys.stderr)
+        return 0
+    if not args.section:
+        ref = doc.sections.get("references", "")
+        body = doc.text.split(ref)[0] if ref and ref in doc.text else doc.text
+        sys.stdout.write(body.rstrip() + "\n")
+        return 0
+    missing = [s for s in args.section if s.lower() not in doc.sections]
+    if missing:
+        have = ", ".join(doc.sections.get("_order", [])) or "(none detected)"
+        print(f"section(s) not found: {', '.join(missing)}. Detected: {have}",
+              file=sys.stderr)
+        return 2
+    for s in args.section:
+        sys.stdout.write(f"{s.title()}\n{doc.sections[s.lower()].strip()}\n\n")
+    return 0
+
+
 def cmd_selftest(args):
     from selftest import run
     return 0 if run() else 1
@@ -170,10 +252,29 @@ def build_parser():
     c = sub.add_parser("check", help="run every check")
     add_ms(c); c.set_defaults(func=cmd_check)
     for cat in ("refs", "ethics", "format", "authors", "abstract",
-                "submission", "claims"):
+                "submission", "claims", "reviewer", "style"):
         key = "references" if cat == "refs" else cat
         sp = sub.add_parser(cat, help=f"{key} check only")
         add_ms(sp); sp.set_defaults(func=cmd_one(key))
+    iv = sub.add_parser("invariants", help="check that a rewrite kept every number, "
+                        "citation, equation and cross-reference")
+    iv.add_argument("original")
+    iv.add_argument("rewrite")
+    iv.add_argument("--json", default=None, help="write JSON audit here")
+    iv.add_argument("--max-words", type=int, default=None,
+                    help="fail if the rewrite has more words than this "
+                         "(author queries are not counted)")
+    iv.set_defaults(func=cmd_invariants)
+    tx = sub.add_parser("text", help="print the body, or named sections, as plain text")
+    tx.add_argument("manuscript")
+    tx.add_argument("--section", action="append", default=[],
+                    help="section name as `check` reports it (repeatable)")
+    tx.add_argument("--journal", default="generic",
+                    help="profile whose word limit --prose reports")
+    tx.add_argument("--prose", action="store_true",
+                    help="only the prose a rewrite may touch: no title page, "
+                         "declarations, back matter, legends or references")
+    tx.set_defaults(func=cmd_text)
     j = sub.add_parser("journals", help="list journal profiles")
     j.set_defaults(func=cmd_journals)
     st = sub.add_parser("selftest", help="run the built-in self test")
