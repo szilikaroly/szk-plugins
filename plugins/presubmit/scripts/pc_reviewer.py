@@ -846,8 +846,19 @@ def _evidence_table(doc):
 
 def _limitations(doc):
     """M-R2.3, M-R2.8, A-R2.2, D-R1.7, T-B-m6 — no limitations at all, or
-    limitations that do not say what they change."""
-    if word_count(doc.text) < 1000:
+    limitations that do not say what they change.
+
+    Two guards, both learnt from a false ERROR on a 980-word opinion piece.
+    The length is measured on the body: doc.text carries the title page and
+    the reference list too, which pushed a short essay over the threshold. And
+    the rule asks for a paragraph in the Discussion, so it applies where there
+    is one, or where the authors studied someone themselves.
+    """
+    from pc_checks import _body_text
+    from pc_reviewer_open import is_empirical
+    if word_count(_body_text(doc)) < 1000:
+        return []
+    if not (is_empirical(doc) or sec(doc, "discussion")):
         return []
     if re.search(r"\blimitation|\bcaveat|\bkorl[aá]t|\blimit[aá]ci|"
                  r"\bcannot (show|establish|exclude|distinguish|rule out)\b|"
@@ -1398,9 +1409,14 @@ def _abbreviations(doc):
         counts[tok] = counts.get(tok, 0) + 1
     title = title_of(doc)
     listed = abbreviation_list(doc)
+    # A trial is identified by its acronym: "(SELECT)" after SELECT would say
+    # nothing, and the reader was told what it is ("In SELECT, a randomized
+    # trial in adults with ...") in the sentence that names it.
+    from pc_checks import study_name_tokens
+    studies = study_name_tokens(doc, body)
     undefined = []
     for tok, n in sorted(counts.items(), key=lambda kv: -kv[1]):
-        if n < 2 or tok in listed:
+        if n < 2 or tok in listed or tok in studies:
             continue
         # an extension named in parentheses defines its stem too: a paper that
         # writes "(PROBAST+AI)" has not left PROBAST undefined

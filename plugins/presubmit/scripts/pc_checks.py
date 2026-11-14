@@ -484,6 +484,60 @@ TRIAL_DESCRIPTORS = re.compile(
     r"|\b(?:assigned|allocated|randomi[sz]ed)\s+to\s+(?:continue|receive|switch|a|an|the|\d)",
     re.I)
 
+# An all-caps token in the shape a trial name takes, not an abbreviation of a
+# term: "the SELECT trial", or "In SELECT, a randomized trial in adults ...".
+# Tighter on purpose than the `described` set inside check_claims, which only
+# asks whether a descriptor stands anywhere nearby: "in COPD patients with
+# severe disease" satisfies that, and COPD is an abbreviation that still owes
+# the reader an expansion. Here the study word has to be adjacent, or the
+# description has to begin immediately after the comma.
+_STUDY_NAME_AFTER = re.compile(
+    r"^\s*(?:trial|study|programme|program|registry|cohort|consortium)\b", re.I)
+# The appositive that introduces a trial: a comma, then an article and a study
+# noun. Deliberately stricter than TRIAL_DESCRIPTORS, whose bare-population
+# branch ("patients with") also matches "In COPD, patients with frequent
+# exacerbations ...", which would hide COPD — a term abbreviation that does owe
+# the reader an expansion. Under-suppressing leaves a cosmetic INFO on a trial
+# name; over-suppressing loses a real finding.
+_STUDY_NAME_APPOSITIVE = re.compile(
+    r"^\s*,\s*(?:a|an|the)\s+(?:\w+[\s-]+){0,4}"
+    r"(?:randomi[sz]ed|trial|study|cohort|analysis|review|survey|registry|"
+    r"phase\s*\d|post\s*hoc|meta-analysis|RCT)\b", re.I)
+
+
+def study_name_tokens(doc, body=None):
+    """All-caps tokens the manuscript uses as the NAME of a study.
+
+    Such a token is not an undefined abbreviation: a trial is identified by
+    its acronym, and "(SELECT)" after it would be meaningless. Reported as a
+    set of the tokens as written. Only sentences that carry a numeric citation
+    count, which is where a named study is normally credited.
+    """
+    text = doc.text
+    body = _body_text(doc) if body is None else body
+    defined = _defined_abbreviations(text) | NOT_A_TRIAL
+    out = set()
+    for sent in _sentences(body):
+        if not re.search(r"[(\[]\d{1,3}[)\]]", sent):
+            continue
+        for m in re.finditer(r"\b([A-Z][A-Z0-9]{2,}(?:[-‑][A-Z0-9]+)*)\b", sent):
+            tok = m.group(1)
+            if tok.upper() in defined or re.search(r"(?:19|20)\d\d", tok):
+                continue
+            before = sent[max(0, m.start() - 60):m.start()]
+            after = sent[m.end():m.end() + 160]
+            if _NOT_STUDY_CONTEXT.search(before) or _NOT_STUDY_CONTEXT.search(after[:30]):
+                continue
+            # "the SELECT trial", "SELECT study"
+            if _STUDY_NAME_AFTER.match(after):
+                out.add(tok)
+                continue
+            # "In SELECT, a randomized trial in adults with ..."
+            if _STUDY_INTRO.search(before) and _STUDY_NAME_APPOSITIVE.match(after):
+                out.add(tok)
+    return out
+
+
 EFFECT_MEASURES = re.compile(
     r"\b(?:hazard ratio|risk ratio|relative risk|odds ratio|rate ratio|"
     r"incidence rate ratio|mean difference|standardi[sz]ed mean difference)\b"

@@ -250,7 +250,7 @@ strategies.
 In two small trials no adverse events were reported, so the intervention is safe.
 
 Discussion
-""" + ("The findings are discussed at length in this paragraph. " * 60) + """
+""" + ("The findings are discussed at length in this paragraph. " * 85) + """
 
 Conclusions
 We conclude that the next step is a trial.
@@ -665,6 +665,147 @@ References
 """
 
 
+# What a false ERROR on an opinion piece taught. An essay recounts other
+# people's trials and gives clinical advice, so it names patients, participants
+# and a randomised comparison on every page — and studied nobody. It must not
+# be asked for limitations, a sample size or a primary outcome. Deliberately
+# over 1000 body words, so the length guard is not what keeps the rules quiet,
+# and the word "review" is kept out of the opening so `is_review` is not
+# either. Synthetic throughout: topic, trial names and numbers are invented.
+OPINION_ESSAY = """Ideas and Opinions
+Nobody Knows How Long Maintenance Therapy Should Continue
+Alex Roe, MD, PhD1; Kim Lee, PharmD1
+1 Department of Medicine, Example University. Corresponding: ar@example.edu
+
+Word Count: 1050
+References: 3
+Running head: Maintenance therapy duration
+Conflict of Interest Disclosures: None reported.
+Funding/Support: None.
+Author Contributions: A.R.: manuscript writing, revision, and patient care
+protocol. K.L.: manuscript writing and pharmacological input.
+
+Consider a person who has been well for two years on maintenance therapy and
+asks how much longer it must continue. The question is put at almost every
+visit, and on present evidence nobody can answer it.
+
+In NORTHWIND, adults who had stayed in remission for a year on full-dose
+therapy were randomly assigned to continue it, to halve it, or to stop; the
+proportion relapsing by month 18 differed between the groups (1). A later
+report described a genome-wide association study of research participants who
+self-reported long-term use, and linked one variant to earlier relapse (2).
+Neither asked how little therapy is enough, and the registration schedules
+were written before the question was posed.
+
+The absence of evidence is not neutral. Guidance tells clinicians to continue
+indefinitely, which turns a question about duration into a default, and the
+patients who carry the cost of that default are the ones who feel best.
+Pending better evidence, matching duration to the person and to the goal seems
+reasonable: follow the labeling where it speaks, slow the taper where symptoms
+demand it, and leave patients who have reached their own agreed target on the
+smallest amount that holds them there (3).
+
+""" + ("The question returns at every visit and the published evidence does "
+       "not settle it, so the clinician decides alone. " * 55) + """
+
+Three questions would change practice. Can remission be held on a reduced
+schedule once a target is reached, without the rebound seen on withdrawal? Who
+can stop, and at what point? And how should a person's own preferences about
+side effects, cost and duration enter the decision?
+
+References
+1. Author A, Author B. A trial of duration. Journal of Trials. 2024;1:1-9. doi:10.1000/aaa111
+2. Author C. A genetic analysis of long-term use. Genetics Journal. 2023;2:10-20. doi:10.1000/bbb222
+3. Author D. A review of maintenance strategies. Practice Journal. 2025;3:30-40. doi:10.1000/ccc333
+"""
+
+
+# The other side of the same coin: a study whose authors did enrol people, and
+# which omits all three guards. Every rule the essay must not draw has to fire
+# here, or the fix traded a false positive for a blind spot. Synthetic.
+EMPIRICAL_BARE = """Remission After Two Maintenance Schedules in Adults
+Alex Roe, Kim Lee
+Department of Medicine, Example University. Corresponding: ar@example.edu
+
+Abstract
+""" + ("We enrolled adults in remission and compared two maintenance "
+       "schedules over one year. " * 12) + """
+
+Keywords
+maintenance, remission, adults, randomized
+
+Introduction
+Maintenance therapy is continued indefinitely in most services, and the right
+duration has never been settled [1]. We asked whether a reduced schedule holds
+remission as well as a full one.
+
+Methods
+We enrolled 140 adults who had been in remission for at least one year between
+March 2023 and February 2024. Informed consent was obtained from every
+participant before any procedure. Participants were randomly assigned to
+continue the full schedule or to move to a reduced one. Adults were eligible if
+they had been in remission for a year, and were excluded if they had changed
+therapy within three months. We measured relapse at each visit and analysed the
+groups as assigned.
+
+Results
+Relapse occurred in 14 of 70 adults on the full schedule and in 19 of 70 on the
+reduced one. Our cohort was younger than the service average, with a mean age
+of 41 years, and 82 of the 140 were women.
+""" + ("The two groups were similar at entry and the difference between them "
+       "stayed small throughout the year of follow-up. " * 55) + """
+
+Discussion
+The reduced schedule held remission about as well as the full one, which bears
+on how services write their protocols.
+
+Conclusions
+A reduced maintenance schedule deserves a larger comparison.
+
+Conflict of Interest
+The authors declare no conflicts of interest.
+
+Funding
+This research received no specific funding.
+
+References
+1. Author A. A trial of duration. Journal of Trials. 2024;1:1-9. doi:10.1000/aaa111
+"""
+
+# The three rules the opinion piece drew as one ERROR and two WARNs before the
+# body extractor, the ownership test and the Discussion gate were fixed.
+_OWNERSHIP_CODES = [
+    ("limitations-absent", "limitations"),
+    ("sample-size-unjustified", "sample size"),
+    ("primary-outcome-unnamed", "primary outcome"),
+]
+
+
+# A trial is named by its acronym and is not an abbreviation waiting for its
+# expansion: "(SUMMIT)" after SUMMIT would tell the reader nothing. A term
+# abbreviation in the same manuscript still has to be caught, or the
+# suppression is too wide. Both acronyms are invented.
+TRIAL_NAME_VS_ABBR = """An Opinion on Two Maintenance Strategies
+Alex Roe
+Department of Medicine, Example University. Corresponding: ar@example.edu
+
+Word Count: 160
+References: 2
+
+In SUMMIT, a randomized trial in adults with chronic cough, the drug halved
+exacerbations over one year (1). Peak flow was the measure of interest, and
+PEFR was recorded at every visit. In SUMMIT, the benefit was still present at
+two years (1), although PEFR had drifted back toward baseline in both arms.
+
+In COPD, patients with frequent exacerbations are a different population (2),
+and COPD was not represented in either arm.
+
+References
+1. Author A. A trial of something. Journal One. 2024;1:1-9. doi:10.1000/aaa111
+2. Author B. Another trial entirely. Journal Two. 2024;2:10-19. doi:10.1000/bbb222
+"""
+
+
 def _codes(text, profile_name="generic"):
     tmp = Path(tempfile.mktemp(suffix=".txt"))
     tmp.write_text(text, encoding="utf-8")
@@ -974,6 +1115,54 @@ def run():
                   "acronym-study-undescribed" not in dcodes)
     passed &= _ok("an undescribed acronym is still caught",
                   "acronym-study-undescribed" in ocodes)
+
+    # ---- an essay that studied nobody owes no study guards -----------------
+    import pc_reviewer_open as O
+    ed = pc_extract.load(_write(OPINION_ESSAY))
+    ebody = pc_lib.word_count(C._body_text(ed))
+    # both guards have to be live, or the assertions below pass for free
+    passed &= _ok(f"the essay fixture is long enough to be asked for "
+                  f"limitations ({ebody} body words)", ebody >= 1000)
+    passed &= _ok("the essay is not excused as a review", not O.is_review(ed))
+    passed &= _ok("the body extractor drops the title page "
+                  "('patient care protocol' is an Author Contributions line)",
+                  "patient care protocol" not in C._body_text(ed))
+    passed &= _ok("an essay that names other people's participants is not "
+                  "read as empirical", not O.is_empirical(ed))
+    ecodes = {f.code for f in _codes(OPINION_ESSAY, "annals")}
+    for code, label in _OWNERSHIP_CODES:
+        passed &= _ok(f"essay not asked for: {label}", code not in ecodes)
+
+    # ---- and a study that did enrol people is still asked for all three ----
+    md = pc_extract.load(_write(EMPIRICAL_BARE))
+    passed &= _ok("a study that enrolled its own participants is empirical",
+                  O.is_empirical(md))
+    mcodes2 = {f.code for f in _codes(EMPIRICAL_BARE)}
+    for code, label in _OWNERSHIP_CODES:
+        passed &= _ok(f"empirical study still asked for: {label}", code in mcodes2)
+
+    # ---- somebody else's self-reported data needs no caveat here -----------
+    passed &= _ok("an essay citing another study's self-reported exposure is "
+                  "not asked for a recall-bias sentence",
+                  "self-report-bias-unmentioned" not in ecodes)
+    for name, fixture in (("survey", SURVEY_BAD), ("primary study", OPEN_BAD)):
+        passed &= _ok(f"a {name} with its own self-reported data still is",
+                      "self-report-bias-unmentioned" in
+                      {f.code for f in _codes(fixture)})
+
+    # ---- a trial name is not an undefined abbreviation ---------------------
+    td = pc_extract.load(_write(TRIAL_NAME_VS_ABBR))
+    passed &= _ok(f"the trial name is recognised as a study name "
+                  f"({sorted(C.study_name_tokens(td))})",
+                  "SUMMIT" in C.study_name_tokens(td))
+    abbr = " ".join(f.message for f in _codes(TRIAL_NAME_VS_ABBR)
+                    if f.code == "abbreviation-undefined")
+    passed &= _ok(f"trial acronym not reported as undefined ({abbr!r})",
+                  "SUMMIT" not in abbr)
+    passed &= _ok("a term abbreviation used twice is still reported",
+                  "PEFR" in abbr)
+    passed &= _ok("'In COPD, patients with ...' does not pass as a study name",
+                  "COPD" in abbr and "COPD" not in C.study_name_tokens(td))
 
     print(f"\n{'ALL PASSED' if passed else 'FAILURES PRESENT'}")
     return passed

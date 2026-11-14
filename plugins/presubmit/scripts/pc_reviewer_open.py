@@ -39,10 +39,16 @@ def sec(doc, *keys):
 
 
 def body_of(doc):
-    ref = doc.sections.get("references", "")
-    if ref and ref in doc.text:
-        return doc.text.split(ref)[0]
-    return doc.text
+    """The body: no title page, no reference list, no figure legend.
+
+    Delegates to the one body extractor in the codebase. The local version
+    this replaces dropped the reference list only, so the title page rode
+    along and an Author Contributions line ("K.S.: manuscript writing,
+    revision, and patient care protocol") read as evidence that patients had
+    been studied. Imported inside the call: pc_checks imports this module.
+    """
+    from pc_checks import _body_text
+    return _body_text(doc)
 
 
 def title_of(doc):
@@ -61,14 +67,62 @@ def is_hungarian(doc):
     return len(re.findall(r"\b(és|hogy|nem|vagy|mint|amely|ezért)\b", doc.text)) >= 40
 
 
+# An ownership signal: the authors say that they themselves studied someone.
+# Naming a population is not one. An opinion piece describes other people's
+# trials ("adults ... were randomly assigned to continue it") and gives
+# clinical advice ("leave patients who achieve their goal at the lowest dose"),
+# and neither says that these authors enrolled anybody.
+_OWNERSHIP = (
+    # first person: we enrolled, we have now analysed, we did not measure
+    r"\bwe\s+(?:\w+\s+){0,3}?(?:enroll|recruit|stud(?:y|ied|ies)|analy[sz]|examin|"
+    r"measur|assess|survey|interview|randomi[sz]|administer|collect|sampl|screen|"
+    r"genotyp|sequenc|biops|follow(?:ed)?\s*-?\s*up)\w*"
+    # passive, but anchored to this study: were enrolled in the present cohort
+    r"|\b(?:were|was)\s+(?:\w+\s+){0,2}?(?:enrolled|recruited|studied|included|"
+    r"randomi[sz]ed|interviewed|surveyed|consented|approached|invited)\b"
+    r"[^.]{0,70}?\b(?:this|the present|our)\s+(?:stud|trial|survey|analys|cohort|"
+    r"investigation|project|work|series)"
+    r"|\bin\s+(?:this|the present)\s+(?:stud|trial|survey|analys|cohort|investigation)"
+    r"\w*[^.]{0,90}?\b(?:we|participants?|patients?|subjects?|respondents?|volunteers?)\b"
+    # the cohort is the authors' own
+    # "our patients" is left out on purpose: it is ordinary clinical prose in
+    # an essay, not a statement that a cohort was assembled.
+    r"|\bour\s+(?:cohort|sample|series|participants?|respondents?|subjects?|"
+    r"volunteers?|stud(?:y|ies)\s+(?:population|sample|cohort|group)|data\s?set)\b"
+    # consent and recruitment, which only a study of one's own has to report
+    r"|\b(?:informed|written|oral|verbal)\s+consent\s+was\s+obtained\b"
+    r"|\bconsent\s+to\s+participate\b"
+    r"|\b(?:participants?|patients?|subjects?|respondents?|volunteers?)\s+"
+    r"(?:gave|provided)\s+(?:their\s+)?(?:written\s+)?(?:informed\s+)?consent\b"
+    # No unanchored passive here: "1,200 adults were enrolled" is how an essay
+    # recounts somebody else's trial. Enrolment counts only with the anchor
+    # above ("were enrolled in this study") or a first-person verb.
+    # first person plural and own-sample forms in Hungarian
+    r"|\b(?:v[eé]gezt[uü]nk|vizsg[aá]lt(?:uk|unk)|elemezt[uü]k|bevontuk|m[eé]rt[uü]k|"
+    r"k[eé]rdezt[uü]k|gy[uű]jt[oö]tt[uü]k|r[oö]gz[ií]tett[uü]k|jellemezt[uü]k|"
+    r"k[oö]vett[uü]k|sz[aá]m[ií]tott(?:uk|unk)|sorolt(?:uk|unk))\b"
+    r"|\b(?:mint[aá]nk|vizsg[aá]latunk|betegeink|r[eé]sztvev[oő]ink|k[eé]rd[oő][ií]v[uü]nk)"
+    r"|\bvizsg[aá]latban[^.]{0,60}?\bv(?:ett|ettek)\s+r[eé]szt\b"
+    r"|\bbeleegyez[oő]\s+nyilatkozat"
+    # bench and animal work is always the authors' own
+    r"|\b(?:mice|rats|rabbits|zebrafish|animals)\b[^.]{0,70}?\bwere\s+(?:housed|injected|"
+    r"sacrificed|an(?:a)?esthetized|anaesthetised|randomi[sz]ed|assigned|fed|divided)\b"
+    r"|\b(?:samples?|specimens?|biopsies|swabs?|aliquots?)\s+were\s+"
+    r"(?:collected|obtained|drawn|taken|processed)\b"
+)
+
+
 def is_empirical(doc):
-    """Participants, patients, samples or animals were studied here."""
+    """The authors studied participants, patients, samples or animals here.
+
+    Naming a population is not enough — an opinion piece names patients on
+    every page. Something in the body has to say that the authors did the
+    studying: a first-person verb, a passive anchored to this study, an own
+    cohort, a consent statement, or bench or animal work.
+    """
     if is_review(doc):
         return False
-    body = body_of(doc)
-    return bool(re.search(r"\b(participants?|patients?|respondents?|subjects?|"
-                          r"samples? were (collected|obtained)|mice|rats|volunteers?|"
-                          r"r[eé]sztvev[oő]|betegek|v[aá]laszad[oó])\b", body, re.I))
+    return bool(re.search(_OWNERSHIP, body_of(doc), re.I))
 
 
 def has(text, *pats):
@@ -396,7 +450,13 @@ def _age_sex(doc):
 
 
 def _primary_outcome(doc):
-    """O-peerj.19506:R1 — a trial with no named primary outcome."""
+    """O-peerj.19506:R1 — a trial with no named primary outcome.
+
+    The trial has to be the authors' own: an essay that recounts somebody
+    else's randomised comparison owes no primary outcome of its own.
+    """
+    if not is_empirical(doc):
+        return []
     body = body_of(doc)
     methods = sec(doc, "methods") or body
     if not has(methods, r"were randomi[sz]ed|randomly (assigned|allocated)|randomi[sz]ation (was|were|sequence|list)|"
@@ -448,11 +508,22 @@ def _confounding(doc):
 
 def _self_report_bias(doc):
     """O-peerj.17409:R1, O-f1000research.134328.2:R1, O-f1000research.146998.2:R1 —
-    self-reported data with no recall or social-desirability caveat."""
+    self-reported data with no recall or social-desirability caveat.
+
+    Only the authors' own self-reported data. An essay that says somebody
+    else's trial measured "exposure and outcome ... self-reported" owes no
+    caveat of its own. The tail is stripped before it is tested: joined with
+    spaces, three absent sections made a truthy "  " and the guard never
+    fired, so a manuscript with no Discussion at all was asked to add a
+    sentence to it.
+    """
+    if not is_empirical(doc):
+        return []
     body = body_of(doc)
     if not has(body, r"self-?report|questionnaire|interview|k[eé]rd[oő][ií]v|[oö]nbevall"):
         return []
-    tail = sec(doc, "discussion") + " " + sec(doc, "limitations") + " " + sec(doc, "conclusions")
+    tail = (sec(doc, "discussion") + " " + sec(doc, "limitations") + " "
+            + sec(doc, "conclusions")).strip()
     if not tail:
         return []
     if has(tail, r"recall bias|social desirability|self-?report(ing)? bias|reporting bias|"
