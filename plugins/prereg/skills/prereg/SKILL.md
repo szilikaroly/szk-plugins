@@ -120,7 +120,7 @@ The reviewer pass (Pass 2) covers what a script cannot: whether the question, po
 | Target | Takes from the registration | Plan contains |
 |---|---|---|
 | `composer` | the registered search string, verbatim; the registered sources; the stage claims | protocol init, the harvest command with the registered query, the user's Scholar and supplementary-source decisions, PRISMA after screening |
-| `validator` | the risk-of-bias instruments the registration names | `/validator:route` per design; slot list for each instrument |
+| `validator` | the risk-of-bias instruments the registration names | the validator plugin's `route` command per design; slot list for each instrument |
 | `metaANAL` | the registered synthesis: models, effect measures, heterogeneity, sensitivity analyses | an R analysis plan that names which steps `metaanal_modul.R` covers (`fit`, `zy`, `evalue`, `bayes`) and which it does not (for example dose-response two-stage) |
 | `praxist` | only if the review contains an executable model needing an evaluation harness | a praxist task via `praxist-interactive-task-init`; otherwise none |
 
