@@ -641,6 +641,30 @@ def _docx_bold():
     return p
 
 
+# A study has to be described once, not at every mention, and a description can
+# run straight on from the acronym instead of naming a design. Both shapes were
+# demanding a description that the text already gave. Synthetic.
+DESCRIBED_ONCE = """A Short Opinion Piece
+Alex Roe
+Department of Medicine, Example University. Corresponding: ar@example.edu
+
+Word Count: 120
+References: 2
+
+In BRIGHTSTAR, a randomized trial in adults with chronic cough, the drug halved
+exacerbations over one year (1). The effect was larger in the older stratum. In
+BRIGHTSTAR, the benefit was still present at two years (1).
+
+In LONGMARK, adults with chronic kidney disease who had completed a run-in period
+were randomly assigned to continue therapy or to stop it, and the difference
+between the groups was small (2).
+
+References
+1. Author A. A trial of something. Journal One. 2024;1:1-9. doi:10.1000/aaa111
+2. Author B. Another trial entirely. Journal Two. 2024;2:10-19. doi:10.1000/bbb222
+"""
+
+
 def _codes(text, profile_name="generic"):
     tmp = Path(tempfile.mktemp(suffix=".txt"))
     tmp.write_text(text, encoding="utf-8")
@@ -685,7 +709,7 @@ def run():
         passed &= _ok(f"caught: {label}", code in codes)
 
     # sections detected correctly (title/authors NOT treated as sections)
-    tmp = Path(tempfile.mktemp(suffix=".txt")); tmp.write_text(BAD)
+    tmp = Path(tempfile.mktemp(suffix=".txt")); tmp.write_text(BAD, encoding="utf-8")
     doc = pc_extract.load(tmp)
     order = doc.sections.get("_order", [])
     passed &= _ok(f"sections parsed = {order}",
@@ -696,7 +720,8 @@ def run():
 
     # an en-dash range is a citation, not a gap: MDPI style writes [26–85]
     _t = Path(tempfile.mktemp(suffix=".txt"))
-    _t.write_text("Introduction\nA claim [26\u201330] and another [4].\n\nReferences\n1. x\n")
+    _t.write_text("Introduction\nA claim [26\u201330] and another [4].\n\nReferences\n1. x\n",
+                  encoding="utf-8")
     passed &= _ok("en-dash citation range expands",
                   C._cited_numbers(pc_extract.load(_t)) == {4, 26, 27, 28, 29, 30})
 
@@ -942,6 +967,13 @@ def run():
     passed &= _ok(f"invariants: a rounded number, a lost citation and a lost cite key are "
                   f"caught ({sorted(kinds)})",
                   {"number", "citation number", "cite key"} <= kinds)
+
+    # ---- a study is described once, and a description may run straight on ----
+    dcodes = {f.code for f in _codes(DESCRIBED_ONCE, "annals")}
+    passed &= _ok("described at first mention, repeated later -> not flagged",
+                  "acronym-study-undescribed" not in dcodes)
+    passed &= _ok("an undescribed acronym is still caught",
+                  "acronym-study-undescribed" in ocodes)
 
     print(f"\n{'ALL PASSED' if passed else 'FAILURES PRESENT'}")
     return passed

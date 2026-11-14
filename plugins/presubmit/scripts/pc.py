@@ -46,7 +46,8 @@ def _run(cats, args):
                      advisory=(cats == ["style"]))
     _print(report)
     if getattr(args, "json", None):
-        Path(args.json).write_text(json.dumps(report, indent=2, ensure_ascii=False))
+        Path(args.json).write_text(json.dumps(report, indent=2, ensure_ascii=False),
+                                   encoding="utf-8")
         print(f"\n  audit written: {args.json}")
     # exit non-zero if any ERROR, so it can gate a pipeline
     return 1 if report["counts"]["error"] else 0
@@ -191,7 +192,7 @@ def cmd_invariants(args):
              "words": {"original": wa, "rewrite": wb, "max": args.max_words,
                        "over_budget": over},
              "diffs": [{"kind": k, "lost": m, "added": a_} for k, m, a_ in diffs]},
-            indent=2, ensure_ascii=False))
+            indent=2, ensure_ascii=False), encoding="utf-8")
         print(f"  audit written: {args.json}")
     return 1 if (diffs or over) else 0
 
@@ -282,7 +283,24 @@ def build_parser():
     return p
 
 
+def _utf8_stdio():
+    """Make the report printable on a legacy console.
+
+    The report uses arrows, bullets, check marks and dashes. A Windows console
+    still defaults to the ANSI codepage (cp1250 on a Hungarian machine), where
+    the first fix hint raises UnicodeEncodeError and the whole command dies with
+    a traceback. The slash commands call this script directly, so the caller
+    cannot be relied on to export PYTHONIOENCODING; set it here instead.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass
+
+
 def main(argv=None):
+    _utf8_stdio()
     args = build_parser().parse_args(argv)
     sys.exit(args.func(args))
 

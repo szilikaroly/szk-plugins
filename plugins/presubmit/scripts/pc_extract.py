@@ -183,7 +183,7 @@ def _from_tex(path):
             return _plain_to_paras(out)
     except Exception:
         pass
-    return _plain_to_paras(Path(path).read_text(errors="ignore"))
+    return _plain_to_paras(pc_lib.read_text_any(path))
 
 
 def _plain_to_paras(text):
@@ -208,7 +208,7 @@ def load(path) -> Document:
     if suf in (".tex", ".latex"):
         return Document(_from_tex(p), "tex", p)
     if suf in (".txt", ".md", ".text"):
-        return Document(_plain_to_paras(p.read_text(errors="ignore")), suf[1:], p)
+        return Document(_plain_to_paras(pc_lib.read_text_any(p)), suf[1:], p)
     # try doctotext as a last resort (handles .doc, .odt, .rtf ...)
     try:
         out = subprocess.run(["doctotext", str(p)],

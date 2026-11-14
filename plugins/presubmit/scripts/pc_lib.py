@@ -171,6 +171,24 @@ def word_count(text: str) -> int:
     return len(re.findall(r"\b[\w'-]+\b", text or ""))
 
 
+def read_text_any(path) -> str:
+    """Read a text file without guessing wrong on the platform's behalf.
+
+    Python picks the locale encoding when none is given, which on a Hungarian
+    Windows is cp1250. A manuscript written on a Mac then loses or mangles every
+    accented character, silently when errors="ignore" is also in play. UTF-8 is
+    the sane default; the legacy codepages are tried only as a fallback so a
+    genuinely old file still opens.
+    """
+    raw = Path(path).read_bytes()
+    for enc in ("utf-8-sig", "utf-8", "cp1250", "cp1252", "latin-1"):
+        try:
+            return raw.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", errors="replace")
+
+
 def load_profile(name: str):
     here = Path(__file__).resolve().parent.parent / "profiles"
     p = here / f"{name.lower()}.json"

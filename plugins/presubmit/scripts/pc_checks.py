@@ -466,12 +466,22 @@ _NOT_STUDY_CONTEXT = re.compile(
 # Positive evidence that an all-caps token is being introduced as a study.
 _STUDY_INTRO = re.compile(r"\b(?:in|of|from|the|and|with|versus|vs\.?)\s+$", re.I)
 
+# What counts as "the author told the reader what this study was". Two shapes:
+# a named design ("a randomized trial", "a post hoc analysis"), and a described
+# population or allocation running straight on from the acronym ("LONGMARK,
+# adults with chronic kidney disease who had completed a run-in were randomly
+# assigned to continue therapy"). The second shape is a normal way to introduce
+# a trial, and missing it made the checker demand a description already given.
+_POPULATION = r"(?:adults|patients|participants|people|men|women|children|individuals)"
 TRIAL_DESCRIPTORS = re.compile(
     r"\b(?:a|an|the)\s+(?:\w+[\s-]+){0,4}"
     r"(?:randomi[sz]ed|randomi[sz]ation|trial|study|cohort|analysis|review|"
     r"survey|registry|phase\s*\d|post\s*hoc|meta-analysis|RCT)\b"
     r"|\bin which\b|\bwhich (?:enrolled|randomly|compared|assigned|included)\b"
-    r"|\b(?:enrolled|randomly assigned|recruited)\s+[\d,\s]+\s*(?:adults|patients|participants)\b",
+    r"|\b(?:enrolled|randomly assigned|recruited)\s+[\d,\s]+\s*" + _POPULATION + r"\b"
+    r"|\b" + _POPULATION + r"\s+(?:aged\s+\d|with\b|without\b|who\b)"
+    r"|\bwere\s+random(?:ly\s+assigned|i[sz]ed)\b"
+    r"|\b(?:assigned|allocated|randomi[sz]ed)\s+to\s+(?:continue|receive|switch|a|an|the|\d)",
     re.I)
 
 EFFECT_MEASURES = re.compile(
@@ -718,28 +728,36 @@ def check_claims(doc, profile):
     # and it is not being used as a gene, a variant or an approval number.
     # Absence of a description is worth reporting only once we are sure the
     # token IS a study — otherwise every gene symbol becomes a false positive.
+    # A study has to be described ONCE, where it first appears — repeating the
+    # description at every later mention is the repetition editors object to.
+    # So this runs in two passes: the first records every acronym that carries a
+    # description anywhere in the text, the second collects the ones that never
+    # do. Only the second set is reported.
     defined = _defined_abbreviations(text) | NOT_A_TRIAL
-    seen = {}
-    for sent in _sentences(body):
-        if not re.search(r"[(\[]\d{1,3}[)\]]", sent):
-            continue
-        for m in re.finditer(r"\b([A-Z][A-Z0-9]{2,}(?:[-‑][A-Z0-9]+)*)\b", sent):
-            tok = m.group(1)
-            if tok.upper() in defined or tok in seen:
+    described, candidates = set(), {}
+    for cited_only in (False, True):
+        for sent in _sentences(body):
+            if cited_only and not re.search(r"[(\[]\d{1,3}[)\]]", sent):
                 continue
-            if re.search(r"(?:19|20)\d\d", tok) or tok.count("-") >= 2:
-                continue
-            before = sent[max(0, m.start() - 60):m.start()]
-            after = sent[m.end():m.end() + 60]
-            if _NOT_STUDY_CONTEXT.search(before) or _NOT_STUDY_CONTEXT.search(after[:30]):
-                continue
-            if not (_STUDY_INTRO.search(before)
-                    or re.match(r"\s*(?:trial|study)\b", after, re.I)):
-                continue
-            if TRIAL_DESCRIPTORS.search(after) or TRIAL_DESCRIPTORS.search(before):
-                continue
-            seen[tok] = _short(sent)
-    for tok, ctx in list(seen.items())[:6]:
+            for m in re.finditer(r"\b([A-Z][A-Z0-9]{2,}(?:[-‑][A-Z0-9]+)*)\b", sent):
+                tok = m.group(1)
+                if tok.upper() in defined:
+                    continue
+                if re.search(r"(?:19|20)\d\d", tok) or tok.count("-") >= 2:
+                    continue
+                before = sent[max(0, m.start() - 60):m.start()]
+                after = sent[m.end():m.end() + 160]
+                if not cited_only:
+                    if TRIAL_DESCRIPTORS.search(after) or TRIAL_DESCRIPTORS.search(before):
+                        described.add(tok)
+                    continue
+                if _NOT_STUDY_CONTEXT.search(before) or _NOT_STUDY_CONTEXT.search(after[:30]):
+                    continue
+                if not (_STUDY_INTRO.search(before)
+                        or re.match(r"\s*(?:trial|study)\b", after, re.I)):
+                    continue
+                candidates.setdefault(tok, _short(sent))
+    for tok, ctx in [(t, c) for t, c in candidates.items() if t not in described][:6]:
         out.append(F("claims", WARN, "acronym-study-undescribed",
                      f"'{tok}' is referred to by acronym with no description nearby.",
                      where=ctx,
