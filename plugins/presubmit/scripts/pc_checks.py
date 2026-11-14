@@ -12,6 +12,7 @@ from pc_reviewer import check_reviewer
 from pc_reviewer_open import check_open
 from pc_reviewer_sim import check_sim
 from pc_reviewer_synth import check_synth
+from pc_style import check_style
 
 try:  # vendored from ~/.szk-blacklist; offline — reads a local JSON only
     import journal_blacklist as _jbl
@@ -433,6 +434,9 @@ PLACEHOLDER_PATTERNS = [
     (r"\[(?:insert|add|cite|ref)[^\]]{0,40}\]", "[insert …]"),
     (r"<[^>]{0,30}(?:insert|todo|name|date)[^>]{0,30}>", "<insert …>"),
     (r"\?{3,}", "???"),
+    # an author query left by /presubmit:humanize: the rewrite needed evidence
+    # the manuscript does not carry, and only the author can supply it
+    (r"⟦[^⟧]{0,300}⟧", "⟦AUTHOR query⟧"),
     # an ellipsis sitting inside a sentence, not at its end: "an RCT of…, we"
     (r"(?<=[a-z])\s?(?:\.\.\.|…)\s?,", "…, (unfinished phrase)"),
 ]
@@ -845,4 +849,7 @@ ALL_CHECKS = {
                                       + check_open(doc, profile)
                                       + check_sim(doc, profile)
                                       + check_synth(doc, profile)),
+    # not in pc.CATS: run by `pc.py style` and /presubmit:humanize only, so the
+    # readiness verdict of `pc.py check` is unchanged
+    "style": check_style,
 }
