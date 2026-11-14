@@ -46,6 +46,77 @@ def _body(doc):
     return doc.text
 
 
+# Title-page, declaration and back-matter labels. A paragraph that opens on one
+# of these is form text, not prose: it is neither audited nor rewritten.
+LABEL = re.compile(
+    r"^\s*\*?\s*(?:word count|references?|figures?|tables?|running (?:head|title)|"
+    r"corresponding author|correspondence|conflicts? of interest|competing interests?|"
+    r"funding(?:/support)?|financial support|ethics(?: and registration)?|registration|"
+    r"language and ai(?: use)?|ai use|author contributions?|acknowledge?ments?|"
+    r"data availability(?: statement)?|key ?words?|orcid|disclosures?|abbreviations|"
+    r"supplementary materials?|institutional review board statement|"
+    r"informed consent statement|trial registration|declaration of [\w ]{3,40}|"
+    r"author information|received|accepted|published)\b[^:.\n]{0,40}[:.—]", re.I)
+LEGEND = re.compile(r"^\s*(?:(?:figure|fig\.?|table)\s*S?\d+[A-Za-z]?\s*[.:|]"
+                    r"|(?:figure|table) legends?\s*$)", re.I)
+REF_HEAD = re.compile(r"^\s*(?:\d+\.?\s*)?(?:references?|reference list|bibliography|"
+                      r"irodalomjegyz[eé]k|irodalom)\s*$", re.I)
+# A back-matter heading on a line of its own ends the prose: what follows it is
+# declarations, abbreviations and supplementary lists, up to the references.
+BACK_HEAD = re.compile(r"^\s*(?:\d+\.?\s*)?(?:declarations?|abbreviations|"
+                       r"acknowledge?ments?|author contributions?|funding|"
+                       r"conflicts? of interest|competing interests?|"
+                       r"data availability(?: statement)?|supplementary (?:materials?|information)|"
+                       r"ethics (?:approval|statement)[\w ,]*|appendix [A-Z\d]*|"
+                       r"(?:figures?|tables?)(?: (?:legends?|captions?))?)\s*$", re.I)
+_TITLE_PAGE = re.compile(r"ORCID|@|\b(?:Department|Faculty|University|Institute|Hospital|"
+                         r"School|Clinic)\b")
+
+
+def _is_prose(t):
+    t = t.strip()
+    return (len(t.split()) >= 25 and t[-1:] in ".!?)\u201d\"" and not LABEL.match(t)
+            and not _TITLE_PAGE.search(t[:200]))
+
+
+def prose_paragraphs(doc):
+    """The paragraphs a style audit or a rewrite should touch: from the first
+    real prose paragraph (the abstract or the opening of the text) to the
+    reference list, without title-page lines, declarations, back matter or
+    figure and table legends. Headings are kept so a rewrite keeps its shape."""
+    paras = [t for t, _ in getattr(doc, "paragraphs", []) or []]
+    if not paras:
+        return [l for l in _body(doc).splitlines() if l.strip()]
+    start = next((i for i, x in enumerate(paras) if _is_prose(x)), 0)
+    out = []
+    for x in paras[start:]:
+        if REF_HEAD.match(x) or BACK_HEAD.match(x):
+            break
+        if not x.strip() or LABEL.match(x) or LEGEND.match(x):
+            continue
+        out.append(x)
+    return out
+
+
+def prose_text(doc):
+    return "\n".join(prose_paragraphs(doc))
+
+
+def strip_queries(text):
+    """Author queries left by a rewrite (\u27e6AUTHOR: \u2026\u27e7) are not prose."""
+    return re.sub(r"\s*\u27e6[^\u27e7]*\u27e7", "", text or "")
+
+
+def prose_words(text):
+    return len(strip_queries(text).split())
+
+
+def is_synthesis(doc):
+    head = doc.text[:2500]
+    return bool(re.search(r"systematic review|meta-?analys|umbrella review|scoping review|"
+                          r"network meta|pooled analysis", head, re.I))
+
+
 def is_hungarian(doc):
     return len(re.findall(r"\b(és|hogy|nem|vagy|mint|amely|ezért)\b", doc.text)) >= 40
 
@@ -211,8 +282,10 @@ def _connective_runs(sents):
 _CITE_GROUP = re.compile(r"[\[(](\d{1,3}(?:\s*[,;–—-]\s*\d{1,3})+)[\])]")
 
 
-def _citation_dumps(body):
-    """L2.8 — six or more references behind one claim."""
+def _citation_dumps(body, synthesis=False):
+    """L2.8 — six or more references behind one claim. In a systematic review
+    or meta-analysis the caller passes only the narrative sections, because a
+    list of included studies in Methods/Results is not citation dumping."""
     dumps = []
     for m in _CITE_GROUP.finditer(body):
         inner = m.group(1).strip().rstrip(",;")
@@ -237,8 +310,9 @@ def _citation_dumps(body):
     if not dumps:
         return []
     n_max, m_max = max(dumps, key=lambda t: t[0])
+    scope = " in the narrative sections" if synthesis else ""
     return [F(CAT, WARN if len(dumps) >= 3 else INFO, "citation-dump",
-              f"{len(dumps)} citation group(s) of six or more references "
+              f"{len(dumps)} citation group(s) of six or more references{scope} "
               f"(largest: {n_max}) [L2.8].",
               where=_ctx(body, m_max),
               fix="Cite the one or two works that carry the claim and say what "
@@ -274,7 +348,10 @@ def _long_sentences(sents, limit=40):
 
 def _em_dashes(body):
     """L1 — em-dashes, English only. En-dash ranges (2–6%) are never counted."""
-    hits = list(re.finditer(r"—|(?<=\w)\s?--\s?(?=\w)", body))
+    credit = re.compile(r"writing\s*—\s*(?:original draft|review)", re.I)
+    hits = [m for m in re.finditer(r"—|(?<=\w)\s?--\s?(?=\w)", body)
+            if not credit.match(body, max(0, m.start() - 9))
+            and not credit.search(body[max(0, m.start() - 9):m.end() + 16])]
     if not hits:
         return []
     return [F(CAT, INFO, "em-dash",
@@ -325,12 +402,18 @@ def check_style(doc, profile):
                   "as Hungarian, so none were applied.",
                   fix="For Hungarian register, use the hu-academic-style or "
                       "academic-editor skill.")]
-    body = _body(doc)
+    body = strip_queries(prose_text(doc))
     sents = _sentences(body)
     out = []
     out += _phrase_findings(body)
     out += _connective_runs(sents)
-    out += _citation_dumps(body)
+    if is_synthesis(doc):
+        narrative = "\n".join(doc.sections.get(k, "") for k in
+                               ("introduction", "background", "discussion", "conclusions",
+                                "conclusion"))
+        out += _citation_dumps(narrative, synthesis=True) if narrative.strip() else []
+    else:
+        out += _citation_dumps(body)
     out += _long_sentences(sents)
     out += _em_dashes(body)
     out += _significant_without_test(sents)

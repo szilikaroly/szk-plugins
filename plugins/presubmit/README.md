@@ -98,8 +98,8 @@ detection; disclose AI assistance as the journal requires.
 
 ```bash
 python3 scripts/pc.py style manuscript.docx
-python3 scripts/pc.py text manuscript.docx --section introduction > original.txt
-python3 scripts/pc.py invariants original.txt rewrite.md
+python3 scripts/pc.py text manuscript.docx --prose --journal annals > original.txt   # + word budget on stderr
+python3 scripts/pc.py invariants original.txt rewrite.md --max-words 1000
 ```
 
 ## Fits with the rest of the toolkit

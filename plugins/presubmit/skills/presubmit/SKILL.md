@@ -39,10 +39,14 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pc.py" check MANUSCRIPT [--journal NAME] 
   (AI vocabulary, significance hype, novelty padding, formulaic openers,
   connective runs, citation dumps, overlong sentences, em-dashes in English),
   adapted from academic-humanizer (MIT). English only; never an ERROR.
-- `text MANUSCRIPT [--section NAME ...]` and `invariants ORIGINAL REWRITE` —
-  the guard for any rewrite: lists every number, citation marker, cite key,
-  DOI, equation and Table/Figure reference the rewrite lost or added; exits
-  non-zero if anything differs.
+- `text MANUSCRIPT --prose [--journal NAME]` (or `--section NAME ...`) and
+  `invariants ORIGINAL REWRITE [--max-words N]` — the guard for any rewrite.
+  `--prose` extracts only the prose (no title page, declarations, back matter,
+  legends or references) and reports the word budget (measured, declared,
+  journal limit). `invariants` lists every number, citation marker, cite key,
+  DOI, equation and Table/Figure reference the rewrite lost or added, prints
+  the word count before → after (author queries excluded), and exits non-zero
+  if anything differs or the budget is exceeded.
 - `/presubmit:humanize` — the rewrite pass itself: scope questions, `style`
   audit, the six layers in `references/academic-humanizer.md`, then
   `invariants` until PRESERVED. Unbacked claims get an `⟦AUTHOR: …⟧` query,

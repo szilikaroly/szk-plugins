@@ -14,7 +14,11 @@ Adapted from **academic-humanizer v0.3.3** by AIScientists-Dev
 - em-dash removal applies to English text only; a Hungarian gondolatjel and
   every numeric en-dash range are left alone;
 - presubmit's evidence rule is added: never write an evidence pointer that is
-  not already in the manuscript (see Layer 4).
+  not already in the manuscript (see Layer 4);
+- the audit and the rewrite see only the prose: title page, declarations,
+  back matter (abbreviations, supplementary lists, CRediT roles), legends and
+  references are form text and are excluded, and a journal's word limit is
+  treated as a budget the rewrite must stay within.
 
 This is an editing aid for clarity and voice. It does not generate findings,
 does not change data or citations, and is **not** a tool for evading AI-use
@@ -31,7 +35,7 @@ exactly where it was: follow the target journal's policy.
 | `copula-avoidance` | L1 | "serves as a", "stands as", "boasts" ("serves as a control/comparator/proxy" exempt) |
 | `ing-tail` | L1 | ", highlighting the …", ", underscoring …" commentary tails |
 | `filler-phrase` | L1 | in order to, due to the fact that, it is clear that, plays a crucial role |
-| `em-dash` | L1 | em-dashes in English text (INFO only) |
+| `em-dash` | L1 | em-dashes in English prose (INFO only; CRediT role names such as "writing—original draft" are exempt) |
 | `overclaim-verb` | L2.1 | prove/proof that, clearly demonstrate, guarantee |
 | `significant-without-test` | L2.1 / L4 | "significant(ly)" with no statistic, table or citation in the sentence |
 | `significance-hype` | L2.2 | paves the way, sheds light on, paramount, bridges the gap, groundbreaking |
@@ -39,7 +43,7 @@ exactly where it was: follow the target journal's policy.
 | `novelty-padding`, `novel-repeated` | L2.4 | to the best of our knowledge, for the first time, "novel" twice in a section |
 | `formulaic-opener` | L2.5 | In recent years…, has attracted increasing attention |
 | `connective-run`, `connective-density` | L2.6 | Moreover. Furthermore. Additionally. in a row |
-| `citation-dump` | L2.8 | six or more references behind one claim |
+| `citation-dump` | L2.8 | six or more references behind one claim (in a systematic review or meta-analysis only the narrative sections are checked: an included-studies list is not dumping) |
 | `vague-hedge` | L2.9 | somewhat, fairly, quite, to some extent |
 | `boilerplate-emphasis` | L2.10 | It is worth noting that, Notably, Importantly, |
 | `overlong-sentence` | L2.11 | sentences over 40 words (the source uses ~30; clinical prose runs longer) |

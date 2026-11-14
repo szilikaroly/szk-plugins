@@ -9,7 +9,7 @@ does. Deterministic, offline, no language model.
     pc.py reviewer MANUSCRIPT       # what a referee will write back about
     pc.py style MANUSCRIPT          # AI-draft tells (advisory; not in `check`)
     pc.py invariants ORIG REWRITE   # did a rewrite keep every number and citation?
-    pc.py text MANUSCRIPT [--section NAME ...]   # plain text of the body or sections
+    pc.py text MANUSCRIPT [--prose | --section NAME ...]   # plain text to rewrite
     pc.py authors MANUSCRIPT
     pc.py abstract MANUSCRIPT
     pc.py journals                  # list built-in journal profiles
@@ -165,12 +165,17 @@ def cmd_invariants(args):
     a = pc_extract.load(args.original).text
     b = pc_extract.load(args.rewrite).text
     diffs = pc_style.invariants(a, b)
+    wa, wb = pc_style.prose_words(a), pc_style.prose_words(b)
+    over = args.max_words is not None and wb > args.max_words
     print("=" * 68)
     print(f"  REWRITE INVARIANTS — {Path(args.original).name} → {Path(args.rewrite).name}")
     print("=" * 68)
     if not diffs:
         print("  PRESERVED — every number, citation, cite key, DOI, equation and\n"
               "  table/figure cross-reference in the original is in the rewrite.")
+    budget = f" (budget {args.max_words})" if args.max_words is not None else ""
+    print(f"  {'✗' if over else '·'} words: {wa} → {wb} ({wb - wa:+d}){budget}; "
+          f"author queries excluded")
     for kind, missing, added in diffs:
         print(f"  ✗ {kind}:")
         if missing:
@@ -183,10 +188,12 @@ def cmd_invariants(args):
     if args.json:
         Path(args.json).write_text(json.dumps(
             {"original": args.original, "rewrite": args.rewrite, "preserved": not diffs,
+             "words": {"original": wa, "rewrite": wb, "max": args.max_words,
+                       "over_budget": over},
              "diffs": [{"kind": k, "lost": m, "added": a_} for k, m, a_ in diffs]},
             indent=2, ensure_ascii=False))
         print(f"  audit written: {args.json}")
-    return 1 if diffs else 0
+    return 1 if (diffs or over) else 0
 
 
 def cmd_text(args):
@@ -194,6 +201,19 @@ def cmd_text(args):
     for a rewrite pass and for `invariants` to compare against."""
     import pc_extract
     doc = pc_extract.load(args.manuscript)
+    if args.prose:
+        import re as _re
+        import pc_style
+        prose = pc_style.prose_text(doc)
+        sys.stdout.write(prose.rstrip() + "\n")
+        # the word budget a rewrite has to respect, on stderr so the text stays clean
+        m = C.DECLARED_WC.search(doc.text)
+        declared = int(_re.sub(r"[^\d]", "", m.group(1))) if m else None
+        limit = pc_lib.load_profile(args.journal).get("body_max_words")
+        print(f"prose words: {pc_style.prose_words(prose)}; declared word count: "
+              f"{declared if declared is not None else 'none'}; "
+              f"{args.journal} limit: {limit if limit else 'none'}", file=sys.stderr)
+        return 0
     if not args.section:
         ref = doc.sections.get("references", "")
         body = doc.text.split(ref)[0] if ref and ref in doc.text else doc.text
@@ -241,11 +261,19 @@ def build_parser():
     iv.add_argument("original")
     iv.add_argument("rewrite")
     iv.add_argument("--json", default=None, help="write JSON audit here")
+    iv.add_argument("--max-words", type=int, default=None,
+                    help="fail if the rewrite has more words than this "
+                         "(author queries are not counted)")
     iv.set_defaults(func=cmd_invariants)
     tx = sub.add_parser("text", help="print the body, or named sections, as plain text")
     tx.add_argument("manuscript")
     tx.add_argument("--section", action="append", default=[],
                     help="section name as `check` reports it (repeatable)")
+    tx.add_argument("--journal", default="generic",
+                    help="profile whose word limit --prose reports")
+    tx.add_argument("--prose", action="store_true",
+                    help="only the prose a rewrite may touch: no title page, "
+                         "declarations, back matter, legends or references")
     tx.set_defaults(func=cmd_text)
     j = sub.add_parser("journals", help="list journal profiles")
     j.set_defaults(func=cmd_journals)
