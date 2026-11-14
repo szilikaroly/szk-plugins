@@ -1,9 +1,9 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "presubmit",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "displayName": "Presubmit",
-  "description": "Catches the common manuscript submission mistakes before a journal does. Checks sections, author/affiliation/email completeness, abstract length and keyword counts, reference problems (duplicates by DOI or text, missing years, malformed DOIs, citations with no matching reference, references never cited), missing ethics/disclosure statements, and deterministic language/typography errors. Also catches what an editorial round actually flags: placeholders and unresolved tracked changes or comments left in the submitted .docx, a declared word count over the format's limit, more references than the format allows, effect estimates reported without a confidence interval, trials named only by acronym, the same study described twice, and the authors' own ongoing study promoted in the conclusion. Reads .docx/.pdf/.tex/.txt, applies a journal profile (Cureus and Annals Ideas and Opinions built in), and prints a severity-ranked readiness report with fix hints. Offline and deterministic by default — no language model, no spell dictionary, so no false positives on medical terms; an opt-in --online flag additionally asks PubMed whether any cited paper has been corrected or retracted.",
+  "description": "Catches the common manuscript submission mistakes before a journal does. Checks sections, author/affiliation/email completeness, abstract length and keyword counts, reference problems (duplicates by DOI or text, missing years, malformed DOIs, citations with no matching reference, references never cited), missing ethics/disclosure statements, and deterministic language/typography errors. Also catches what an editorial round actually flags: placeholders and unresolved tracked changes or comments left in the submitted .docx, a declared word count over the format's limit, more references than the format allows, effect estimates reported without a confidence interval, trials named only by acronym, the same study described twice, and the authors' own ongoing study promoted in the conclusion. A reviewer-anticipation category adds 147 rules distilled from thirteen referee cohorts, the author's own plus 38 open-peer-review manuscripts from PeerJ and F1000Research (608 referee objections): a review with no reproducible search, 'systematic' with no machinery, effect sizes with no table, no limitations, causal verbs on observational data, an unsourced numeric target, a recommendation the text itself calls unvalidated, an own trial with no registration, undefined abbreviations, doubled reference entries, AI use with unverified references, survey and primary-study methods guards, simulation-only performance figures, odds and risk ratios in one pool, a two-trial estimate with no qualifier, a sensitivity result left out of the abstract, machine screening with no measured check, a Hungarian manuscript citing no Hungarian literature. Reads .docx/.pdf/.tex/.txt including field-managed EndNote files (English and Hungarian headings), applies a journal profile (Cureus, Annals Ideas and Opinions and Orvosi Hetilap built in), and prints a severity-ranked readiness report with fix hints. Offline and deterministic by default — no language model, no spell dictionary, so no false positives on medical terms; an opt-in --online flag additionally asks PubMed whether any cited paper has been corrected or retracted.",
   "author": {
     "name": "Dr. Szili Károly"
   },
@@ -14,11 +14,14 @@
     "confidence-interval",
     "cureus",
     "ethics",
+    "hungarian",
     "manuscript",
     "peer-review",
     "presubmission",
+    "referee",
     "references",
     "retraction",
+    "reviewer",
     "submission",
     "tracked-changes",
     "word-limit"

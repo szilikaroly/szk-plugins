@@ -15,7 +15,7 @@ retraction or an expression of concern — resolving AMA-style references that
 print no DOI through PubMed's citation matcher.
 
 The `submission` and `claims` categories were reverse-engineered from a real
-editorial round at a high-impact general medical journal: every rule in them
+editorial round: every rule in them
 corresponds to something an editor asked for by hand.
 
 ## What it checks
@@ -30,6 +30,7 @@ corresponds to something an editor asked for by hand.
 | **format** | repeated words, double spaces, space before punctuation, missing space after a sentence, mixed quote/dash styles |
 | **submission** | placeholders (`TBD`, `[insert …]`, a stranded `…,`), unresolved tracked changes and comments still in the .docx, a declared word count over the format limit, more references or figures than allowed, disclosures that belong on the form rather than in an opinion piece |
 | **claims** | effect estimates without a confidence interval (checked per parenthetical, not per sentence), trials named only by acronym with no describing clause, the same reference described twice, the authors' own ongoing study promoted in the closing |
+| **reviewer** | what a referee writes back about rather than what an office bounces. 147 rules, every one from a real report across thirteen cohorts — twelve of the author's own (462 referee points, kept anonymous) and 38 open-peer-review manuscripts from PeerJ and F1000Research (138 reports, 608 objections): a narrative review running systematic machinery, a review with no reproducible search, 'systematic' in the title with none of the machinery, editorial placeholders left in the file, effect sizes in prose with no table, no limitations anywhere, causal verbs on observational data, prevention levels with no assignment rule, screening with no harms, a numeric target with no source, a recommendation the text itself calls unvalidated, the authors' own trial with no registration, an absolute novelty claim, undefined abbreviations, reference entries doubled in a second format, AI use disclosed with no reference verification, a Hungarian manuscript citing no Hungarian literature, stale or conference-abstract references, an over-long title, too many tables; for primary studies a questionnaire with no validation or recruitment account, a 100% response rate, no sample-size statement, no eligibility criteria, no data-collection period, ten p-values with no correction, a p of 0.07 called a trend, an interval spanning 1 called an association, causal verbs in a cross-sectional study, software with no version, sequencing data with no accession, an abbreviation used in the abstract without expansion; and for a model evaluated only in simulation, an AUC quoted in the abstract with no word saying it was simulated, maturity vocabulary in the title of a model that has never met a patient, a parameter borrowed from another population, and one prospective cohort doing duty as both the fitting set and the 'external' validation, and for a review that pools its own numbers, odds and risk ratios in one pool, a high I² with no exploration, a two-trial estimate with no qualifier, a sensitivity result the abstract leaves out, post hoc analyses the abstract does not separate, machine screening with no measured check. Each rule carries the report it came from — see `skills/presubmit/references/reviewer-patterns.md` |
 
 ## Commands
 
@@ -41,6 +42,7 @@ corresponds to something an editor asked for by hand.
 | `/presubmit:format` | language & typography |
 | `/presubmit:submission` | placeholders, tracked changes, word and reference limits |
 | `/presubmit:claims` | how the evidence is presented |
+| `/presubmit:reviewer` | what a referee will ask for |
 | `/presubmit:journals` | list built-in journal profiles |
 
 The bundled **presubmit skill** auto-triggers on "check my paper before
@@ -55,7 +57,9 @@ python3 scripts/pc.py check manuscript.docx --journal cureus --json report.json
 
 Reads `.docx`, `.pdf`, `.tex`, `.txt`, `.md` (and `.doc/.odt/.rtf` via
 doctotext). `.docx` gives the best structure detection (heading styles are
-preserved). Exits non-zero if any ERROR is found, so it can gate a pipeline.
+preserved). Section headings are recognised in English and Hungarian
+(Összefoglalás, Bevezetés, Módszerek, Eredmények, Megbeszélés,
+Irodalomjegyzék …), so a Hungarian manuscript is checked section by section too. Exits non-zero if any ERROR is found, so it can gate a pipeline.
 
 ### Severity
 
@@ -69,7 +73,7 @@ of acceptance.
 ## Journal profiles
 
 Profiles are small JSON files in `profiles/` (abstract/keyword limits, required
-sections, required disclosures). **Cureus** and a **generic IMRaD** profile ship
+sections, required disclosures). **Cureus**, **Annals**, **Orvosi Hetilap** and a **generic IMRaD** profile ship
 built in. Adding a journal is a data change, not a code change.
 
 ## Fits with the rest of the toolkit
@@ -85,8 +89,11 @@ built in. Adding a journal is a data change, not a code change.
 python3 scripts/pc.py selftest
 ```
 
-Plants ten known mistakes and asserts every one is caught, and that a clean
-manuscript passes.
+Plants known mistakes in every category and asserts each is caught, plants the
+referee-cohort omissions (seventeen from the author's own cohorts, twenty from
+the open-peer-review corpus, the simulation and synthesis cohorts) and asserts the
+reviewer rule behind each fires,
+and checks that a clean manuscript passes.
 
 ---
 

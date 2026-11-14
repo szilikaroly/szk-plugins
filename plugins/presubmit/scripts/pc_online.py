@@ -70,13 +70,25 @@ CITATION_RE = re.compile(
 AUTHOR_RE = re.compile(r"^\s*(?P<sur>[A-Z][A-Za-z'’\-]{1,30})\s+[A-Z]{1,3}\b")
 
 
+def _last_journal(s):
+    """CITATION_RE's journal group allows full stops for "Proc. Natl. Acad. Sci",
+    so it also swallows the authors and title before the journal, and a matcher
+    query built from that finds nothing. Keep the last segment, plus any one-word
+    abbreviations directly before it."""
+    parts = re.split(r"\.\s+", s)
+    keep = [parts.pop()]
+    while parts and " " not in parts[-1] and len(parts[-1]) <= 8:
+        keep.insert(0, parts.pop())
+    return ". ".join(keep)
+
+
 def parse_citation(entry):
     """(journal, year, volume, first_page, first_author) or None."""
     m = CITATION_RE.search(entry or "")
     if not m:
         return None
     a = AUTHOR_RE.match(entry or "")
-    journal = re.sub(r"\s+", " ", m.group("journal")).strip(" .,")
+    journal = _last_journal(re.sub(r"\s+", " ", m.group("journal")).strip(" .,"))
     if len(journal) < 3:
         return None
     return (journal, m.group("year"), m.group("vol"), m.group("page"),

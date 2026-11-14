@@ -63,6 +63,32 @@ SECTION_ALIASES = {
     "data availability": "data availability",
     "author contributions": "author contributions",
     "informed consent": "informed consent",
+    "limitations": "limitations", "study limitations": "limitations",
+    "abbreviations": "abbreviations", "list of abbreviations": "abbreviations",
+    # Hungarian headings, accent-folded (see _norm). A Hungarian cohort
+    # produced zero findings before these existed: no heading was recognised,
+    # so every section-scoped rule stayed silent.
+    "osszefoglalas": "abstract", "osszefoglalo": "abstract", "summary": "abstract",
+    "kulcsszavak": "keywords",
+    "bevezetes": "introduction", "bevezeto": "introduction", "hatter": "introduction",
+    "modszerek": "methods", "modszer": "methods", "modszertan": "methods",
+    "anyag es modszer": "methods", "anyagok es modszerek": "methods",
+    "betegek es modszerek": "methods", "anyag es modszerek": "methods",
+    "eredmenyek": "results",
+    "megbeszeles": "discussion", "diszkusszio": "discussion",
+    "kovetkeztetes": "conclusions", "kovetkeztetesek": "conclusions",
+    "osszegzes": "conclusions",
+    "irodalom": "references", "irodalomjegyzek": "references",
+    "hivatkozasok": "references", "felhasznalt irodalom": "references",
+    "koszonetnyilvanitas": "acknowledgements",
+    "anyagi tamogatas": "funding",
+    "erdekeltsegek": "conflict of interest",
+    "osszeferhetetlenseg": "conflict of interest",
+    "roviditesek jegyzeke": "abbreviations", "roviditesek": "abbreviations",
+    # one word in a Hungarian journal template; before it the list and the
+    # unheaded Introduction after it were read as part of the English summary
+    "roviditesjegyzek": "abbreviations",
+    "korlatok": "limitations", "limitaciok": "limitations",
 }
 
 _HEADING_MAX_WORDS = 8
@@ -79,6 +105,11 @@ _LABEL_VALUE = re.compile(r"^([A-Za-z][A-Za-z ]{0,24})\s*:\s*(\S.*)$")
 
 
 def _norm(s: str) -> str:
+    """Lower-case, accent-folded, letters and spaces only. Folding is what lets
+    a Hungarian heading ('Összefoglalás', 'Irodalomjegyzék') match its alias;
+    before it, the fold-less strip turned them into unrecognisable stubs."""
+    import unicodedata
+    s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode()
     return re.sub(r"[^a-z ]", "", s.strip().lower()).strip()
 
 

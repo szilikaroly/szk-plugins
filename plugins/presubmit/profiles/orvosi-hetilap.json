@@ -1,0 +1,20 @@
+{
+  "name": "Orvosi Hetilap",
+  "language": "hu",
+  "abstract_max_words": 300,
+  "abstract_min_words": 150,
+  "abstract_no_abbreviations": true,
+  "title_no_abbreviations": true,
+  "keywords_min": 3,
+  "keywords_max": 5,
+  "keywords_source": "MeSH",
+  "reference_style": "numbered [n] in order of appearance; Vancouver-like: Surname AB, Surname CD, Surname EF, et al. Title. J Abbrev. 2014; 34: 46–52. Hungarian titles translated, original in brackets, [Hungarian] at the end",
+  "max_references": 60,
+  "max_body_pages": {"original": 10, "review": 15, "case_report": 6, "other": 10},
+  "chars_per_page": 1800,
+  "required_sections": ["methods", "results", "discussion", "conclusions"],
+  "case_report_sections": ["case presentation", "discussion", "conclusions"],
+  "required_disclosures": ["funding", "author contributions", "conflict of interest"],
+  "recommended_disclosures": ["ethics approval", "acknowledgements"],
+  "notes": "Szerzői útmutató, 2025-11-01. Title page: Hungarian and English title (no abbreviations); dr./oh. before names; corresponding author's postal address, e-mail and mobile; statement of no prior/parallel submission; statement that the guide was read. Mandatory printed statements: Anyagi támogatás (even if none), Szerzői munkamegosztás (monograms; all authors read and approved), Érdekeltségek ('A szerző(k)nek nincsenek érdekeltségei(k).' if none). Abstract in Hungarian and English on separate pages, 150–300 words, no abbreviations; original articles structured Bevezetés/Célkitűzés/Módszer/Eredmények/Megbeszélés/Következtetés. Keywords 3–5 from MeSH. Abbreviation list only for non-standard abbreviations, alphabetical, expansion in brackets then Hungarian equivalent. Body: introduction and aims carry no heading; then Módszer, Eredmények, Megbeszélés, Következtetés (reviews unstructured; case reports: Esetismertetés, Megbeszélés, Következtetés). Length: original 10 standard pages (1800 chars), review 15, case report/short 6, other 10. References at most 60 except in justified cases, numbered in order, [n] in text; no italics/bold; >3 authors → first three + et al. (Hungarian authors too); journal ISO abbreviation with a single full stop; year; volume: pages (issue only for supplements). Tables as Word documents, one per page, titled, abbreviations explained on the same page. Figures: titles and abbreviations on one common page; 8.5 or 17.5 cm wide; 300 dpi jpg/tif in separate files; the same data must not appear in both a table and a figure; previously published figures need permission. Drugs by INN; brand names only in Methods with composition and manufacturer. Spelling per Orvosi helyesírási szótár (latinos)."
+}
