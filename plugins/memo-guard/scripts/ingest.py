@@ -76,6 +76,9 @@ def roots(cfg: dict) -> list[Path]:
 
 
 def root_of(path: Path, cfg: dict):
+    # roots() are resolved, so the path must be too: on macOS the temp dir and
+    # any symlinked corpus root resolve to a different prefix (/private/var/…)
+    path = Path(path).resolve()
     for r in roots(cfg):
         try:
             rel = path.relative_to(r)

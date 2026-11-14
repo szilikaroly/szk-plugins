@@ -1809,7 +1809,13 @@ def check_busy_vs_wedged() -> bool:
                                                 "cpu_ms": 0, "why": "idle"}
         r = broker.recover(3)
         checks["level 3 kills the server"] = bool(killed)
-        checks["level 3 also starts one again"] = spawned == [True]
+        # Windows and macOS kill and spawn; Linux asks systemd to restart the
+        # unit, which is a restart without a spawn of our own.
+        if os.name == "nt" or sys.platform == "darwin":
+            checks["level 3 also starts one again"] = spawned == [True]
+        else:
+            checks["level 3 also starts one again"] = (
+                not spawned and any("restart" in c for c in killed))
         checks["an idle level 3 does not cry wolf"] = not any(
             "WARNING" in a for a in r["actions"])
 

@@ -4,6 +4,7 @@ caught (and that a clean manuscript passes). Exit 0 = pass.
 """
 from __future__ import annotations
 
+import sys
 import tempfile
 from pathlib import Path
 
@@ -82,6 +83,50 @@ References
 2. Brown B. Vessels and flow. Vascular Reports. 2020;5:22-30. doi:10.1000/xyz789
 """
 
+
+
+# An AI-assisted draft carrying the tells academic-humanizer removes. Synthetic.
+STYLE_BAD = """Gut Signals and Heart Failure Outcomes in Adults
+Alex Roe, Example University. Corresponding: ar@example.edu
+
+Abstract
+In recent years, the gut microbiome has attracted increasing attention. To the best of our knowledge, this is the first study to delve into the intricate relationship between gut signals and heart failure, paving the way for a paradigm shift.
+
+Introduction
+Heart failure plays a crucial role in mortality. Moreover, readmission is common. Furthermore, costs are high. Additionally, outcomes vary. Many methods exist [3, 7, 9, 12, 15, 18]. It is worth noting that prior work is somewhat limited. Our novel approach, which builds on a novel encoder, serves as a testament to the value of extensive experiments on a wide range of cohorts, highlighting the need for change.
+
+Methods
+We enrolled 412 patients (mean age 67.2 years) between 2019 and 2022 — the full cohort.
+
+Results
+The intervention significantly reduced readmission. We prove that the effect is robust across a long sentence that keeps going with clauses which stack and stack while adding nothing new to the reader, with more words that follow, which the reader must hold, while the point recedes further still into the distance of the paragraph.
+
+Discussion
+These findings shed light on a problem of paramount importance.
+
+References
+1. Roe A. A study. J Ex. 2020;1:1-2.
+"""
+
+STYLE_EXPECT = [
+    ("AI vocabulary", "ai-vocabulary"),
+    ("significance hype", "significance-hype"),
+    ("empty intensifier", "empty-intensifier"),
+    ("novelty padding", "novelty-padding"),
+    ("formulaic opener", "formulaic-opener"),
+    ("boilerplate emphasis", "boilerplate-emphasis"),
+    ("vague hedge", "vague-hedge"),
+    ("copula avoidance", "copula-avoidance"),
+    ("participle tail", "ing-tail"),
+    ("filler phrase", "filler-phrase"),
+    ("over-claiming verb", "overclaim-verb"),
+    ("connective run", "connective-run"),
+    ("citation dump", "citation-dump"),
+    ("overlong sentence", "overlong-sentence"),
+    ("em-dash", "em-dash"),
+    ("'significantly' with no test", "significant-without-test"),
+    ("'novel' repeated in a section", "novel-repeated"),
+]
 
 # An opinion-format manuscript carrying the mistakes a real editorial round
 # actually produced: a declared word count over the limit, more references than
@@ -814,6 +859,89 @@ def run():
     passed &= _ok("online: a retraction is reported", "reference-retraction" in rcodes2)
     passed &= _ok("online: a failed lookup says so rather than reporting clean",
                   "online-check-skipped" in scodes2)
+
+    # ---- style: the AI-draft tells adapted from academic-humanizer ----------
+    import pc_style
+    import pc as pc_cli
+    sf = pc_style.check_style(pc_extract.load(_write(STYLE_BAD)), {})
+    stc = {f.code for f in sf}
+    for label, code in STYLE_EXPECT:
+        passed &= _ok(f"style caught: {label}", code in stc)
+    passed &= _ok("style is never an ERROR", all(f.severity != pc_lib.ERROR for f in sf))
+    passed &= _ok("style is not part of `check` (verdict unchanged)", "style" not in pc_cli.CATS)
+    gq = [f.code for f in pc_style.check_style(pc_extract.load(_write(GOOD)), {})
+          if f.severity == pc_lib.WARN]
+    passed &= _ok(f"style raises no WARN on the clean manuscript ({gq})", not gq)
+    hu = pc_style.check_style(pc_extract.load(_write(SURVEY_BAD)), {})
+    passed &= _ok("style stands down on a Hungarian manuscript",
+                  [f.code for f in hu] == ["style-english-only"])
+    passed &= _ok("style: an en-dash range is not an em-dash",
+                  "em-dash" not in {f.code for f in pc_style.check_style(
+                      pc_extract.load(_write("Title of the Test Manuscript Here\n\nIntroduction\n"
+                                             "Doses of 2–6 mg were used.\n")), {})})
+
+    # rewrite invariants: the humanizer's promise, checked
+    orig = ("Readmission fell from 21.4% to 14.0% (HR 0.71, 95% CI 0.58–0.87) [3, 7–9] "
+            "\\cite{roe2020} (Table 2).")
+    good_rw = ("Readmission fell from 21.4% to 14.0% (HR 0.71, 95% CI 0.58–0.87; Table 2) "
+               "[3, 7–9] \\cite{roe2020}.")
+    passed &= _ok("invariants: a reworded sentence with every number kept passes",
+                  pc_style.invariants(orig, good_rw) == [])
+    bad_rw = "Readmission fell from 21% to 14.0% (HR 0.71, 95% CI 0.58–0.87) [3, 7] (Table 2)."
+    kinds = {k for k, _, _ in pc_style.invariants(orig, bad_rw)}
+    passed &= _ok("an author query left by a rewrite blocks readiness",
+                  "placeholder-left" in {f.code for f in C.check_submission(
+                      pc_extract.load(_write("Title of the Test Manuscript Here\n\nIntroduction\n"
+                                             "Costs are high \u27e6AUTHOR: which reference?\u27e7.\n")),
+                      pc_lib.load_profile("generic"))})
+    # what a test on a submitted manuscript taught: only the prose is audited
+    # or rewritten, and a word limit is a budget
+    TP = ("Ideas and Opinions\nA Title About Dosing That Runs to Several Words\n"
+          "Alex Roe, MD (ORCID 0000-0000-0000-0000); Department of Medicine, Example University\n"
+          "Word Count: 61\n"
+          "Ethics and Registration: The program holds approval and is observational, with planned "
+          "enrollment of about 720 people and follow-up to 36 months, and the records are being prepared "
+          "for registration, which will be stated in the record when it is issued to the editors.\n"
+          "Author Contributions: A.R.: writing—original draft; writing—review and editing.\n"
+          "Consider a patient who has escalated a drug to its maximum dose and now has persistent "
+          "nausea, and who asks whether a smaller dose would have worked as well, which nobody can say.\n"
+          "The trials set titration schedules within their programs and never asked for the smallest "
+          "dose that achieves a given effect, so the question remains open for now (1).\n"
+          "Abbreviations\nAB: a very long abbreviation list that should never be audited as prose at all.\n"
+          "Figure Legend\nFigure 1. A legend that is form text and not prose to be rewritten here.\n"
+          "References\n1. Roe A. A study. J Ex. 2020;1:1-2.\n")
+    tpd = pc_extract.load(_write(TP))
+    pp = pc_style.prose_paragraphs(tpd)
+    passed &= _ok(f"prose starts at the text, not the title page ({pp[0][:20]!r})",
+                  pp and pp[0].startswith("Consider a patient"))
+    passed &= _ok("prose drops declarations, back matter, legends and references",
+                  len(pp) == 2 and not any(("Ethics" in x or "Abbreviation" in x or "legend" in x
+                                            or "Roe A." in x) for x in pp))
+    passed &= _ok("a CRediT role's em-dash is not an AI tell",
+                  "em-dash" not in {f.code for f in pc_style.check_style(tpd, {})})
+    passed &= _ok("a title-page declaration is not counted as a long sentence",
+                  "overlong-sentence" not in {f.code for f in pc_style.check_style(tpd, {})})
+    sr = ("A Systematic Review and Meta-Analysis of Example Outcomes in Adults\n\nIntroduction\n"
+          "Exercise lowers risk in pregnancy, as reported before [1, 2].\n\nResults\n"
+          "Forty-two trials [3–44] gave a pooled RR of 0.75 (95% CI 0.65 to 0.88).\n\n"
+          "Discussion\nThe pooled estimate agrees with earlier work [1].\n\nReferences\n1. A\n")
+    passed &= _ok("an included-trials list in a meta-analysis is not a citation dump",
+                  "citation-dump" not in {f.code for f in pc_style.check_style(
+                      pc_extract.load(_write(sr)), {})})
+    passed &= _ok("the same list in the Discussion of a meta-analysis still is",
+                  "citation-dump" in {f.code for f in pc_style.check_style(pc_extract.load(_write(
+                      sr.replace("agrees with earlier work [1].", "agrees with earlier work [3–20]."))), {})})
+    passed &= _ok("an author query is not counted as words",
+                  pc_style.prose_words("Muscle is most of it ⟦AUTHOR: which reference?⟧, but") == 6)
+    import subprocess as _sp
+    _a, _b = _write("One two three four five (Table 1)."), _write("One two three four five six (Table 1).")
+    _r = _sp.run([sys.executable, str(Path(pc_cli.__file__)), "invariants", str(_a), str(_b),
+                  "--max-words", "6"], capture_output=True, text=True)
+    passed &= _ok("invariants: a rewrite over its word budget fails", _r.returncode == 1
+                  and "budget 6" in _r.stdout)
+    passed &= _ok(f"invariants: a rounded number, a lost citation and a lost cite key are "
+                  f"caught ({sorted(kinds)})",
+                  {"number", "citation number", "cite key"} <= kinds)
 
     print(f"\n{'ALL PASSED' if passed else 'FAILURES PRESENT'}")
     return passed
