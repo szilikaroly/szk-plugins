@@ -87,6 +87,46 @@ def run():
                   len(residual) == 0)
     plt.close(fig)
 
+    # 5b) xmax clips a runaway interval, but never a point estimate -----------
+    cdf = pd.DataFrame({
+        "study": ["Narrow", "Wide", "Point beyond the cap"],
+        "or": [1.0, 2.0, 9.0],
+        "lo": [0.8, 1.1, 4.0],
+        "hi": [1.3, 20.0, 30.0],
+    })
+    fig, v = R.forest_plot(cdf.iloc[:2], label="study", effect="or", low="lo", high="hi", xmax=3.0)
+    passed &= _ok(f"xmax clips the axis (right limit={fig.axes[0].get_xlim()[1]:.2f})",
+                  fig.axes[0].get_xlim()[1] <= 3.2)
+    arrows = [c for c in fig.axes[0].collections if len(c.get_offsets())]
+    passed &= _ok("the clipped interval ends in an arrowhead",
+                  any(abs(o[0] - 3.0) < 1e-6 for c in arrows for o in c.get_offsets()))
+    plt.close(fig)
+    # a point estimate outside the cap widens the axis instead of vanishing behind an arrow
+    fig, v = R.forest_plot(cdf, label="study", effect="or", low="lo", high="hi", xmax=3.0)
+    passed &= _ok(f"a point estimate is never clipped (right limit="
+                  f"{fig.axes[0].get_xlim()[1]:.2f})", fig.axes[0].get_xlim()[1] >= 9.0)
+    plt.close(fig)
+
+    # 5c) assemble keeps each panel's own proportions --------------------------
+    import ff_export as _E
+    from PIL import Image as _Img
+    # a forest panel is WIDE: labels down the left, a few rows deep
+    _tall, _short = tmp / "tall.png", tmp / "short.png"
+    _Img.new("RGB", (1600, 800), "white").save(_tall)
+    _Img.new("RGB", (1600, 100), "white").save(_short)
+    fig, v = R.assemble([str(_tall), str(_short)], layout=(2, 1))
+    _h = [ax.get_position().height for ax in fig.axes]
+    passed &= _ok(f"assemble gives the taller panel the taller row ({_h[0]/_h[1]:.1f}x)",
+                  _h[0] > 3 * _h[1])
+    plt.close(fig)
+    # wide panels (forest plots) must not be dealt into narrow columns
+    fig, v = R.assemble([str(_tall)] * 6)
+    passed &= _ok("six wide panels stay in one column",
+                  all(abs(ax.get_position().width - fig.axes[0].get_position().width) < 1e-9
+                      for ax in fig.axes) and len({round(ax.get_position().x0, 6)
+                                                   for ax in fig.axes}) == 1)
+    plt.close(fig)
+
     # 6) advisor returns a recommendation -------------------------------------
     import ff_advise as A
     rec = A.advise("forest plot of pooled odds ratios across studies")
