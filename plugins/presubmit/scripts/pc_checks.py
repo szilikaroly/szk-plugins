@@ -100,9 +100,14 @@ def check_abstract(doc, profile):
         # Not every article type carries an abstract: opinion, commentary and
         # editorial formats usually do not. The profile decides.
         if profile.get("abstract_required", True):
+            # a heading with nothing under it (the Keywords line follows at
+            # once) is a different mistake from a missing heading
+            empty = "abstract" in doc.sections.get("_order", [])
             out.append(F("abstract", ERROR, "no-abstract",
-                         "No Abstract section detected.",
-                         fix="Add a titled 'Abstract' section."))
+                         "The Abstract heading has no text under it." if empty
+                         else "No Abstract section detected.",
+                         fix="Write the abstract under its heading." if empty
+                         else "Add a titled 'Abstract' section."))
     else:
         wc = word_count(abs_txt)
         hu = re.split(r"(?im)^\s*(?:summary|abstract|introduction|background)\s*[:：]?\s*$|"

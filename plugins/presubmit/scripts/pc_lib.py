@@ -141,6 +141,34 @@ def looks_like_heading(line: str, styled=False) -> str | None:
     return None
 
 
+# A run-in label that opens the abstract or the keywords on the same line as
+# their content: MDPI writes "Abstract: Background/Objectives: ..." and
+# "Keywords: a; b; c" as single paragraphs, never as headings. Only these two
+# labels, and only in the front matter: "Methods:" or "Results:" inside a
+# structured abstract must stay in the abstract, and a "Keywords:" line in a
+# search strategy must stay in the Methods.
+_INLINE_FRONT_LABEL = re.compile(
+    r"^\s*(abstract|summary|keywords?|key words|"
+    r"Összefoglalás|Összefoglaló|kulcsszavak)\s*[:：]\s*(\S.*)$",
+    re.I | re.S)
+_FRONT_MATTER = {"_preamble", "abstract", "keywords"}
+
+
+def _inline_front_label(text, current):
+    """(section_key, remainder) for a run-in Abstract/Keywords paragraph in the
+    front matter, else None."""
+    if current not in _FRONT_MATTER:
+        return None
+    m = _INLINE_FRONT_LABEL.match(text)
+    if not m:
+        return None
+    label = _norm(m.group(1))
+    key = "keywords" if label.startswith("key") else SECTION_ALIASES.get(label)
+    if key not in ("abstract", "keywords"):
+        return None
+    return key, m.group(2).strip()
+
+
 def split_sections(paragraphs):
     """paragraphs: list of (text, is_heading_style). Returns dict
     section_key -> body text, plus '_preamble' for anything before the first
@@ -150,6 +178,16 @@ def split_sections(paragraphs):
     current = "_preamble"
     buf = []
     for text, styled in paragraphs:
+        inline = _inline_front_label(text, current)
+        if inline:
+            key, rest = inline
+            sections.setdefault(current, [])
+            sections[current].append("\n".join(buf))
+            buf = [rest]
+            current = key
+            if key not in order:
+                order.append(key)
+            continue
         key = looks_like_heading(text, styled)
         if key:
             sections.setdefault(current, [])
