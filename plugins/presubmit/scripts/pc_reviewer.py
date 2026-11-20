@@ -607,10 +607,12 @@ def _abstract_order(doc):
     if not ab or word_count(ab) < 80:
         return []
     # a structured abstract carries its moves as labels; the cue words below
-    # are for one unstructured paragraph and misread a labelled one
-    if len(re.findall(r"(?m)^(Background|Introduction|Objectives?|Methods?|Results|"
+    # are for one unstructured paragraph and misread a labelled one. MDPI runs
+    # the labels on inside one paragraph ("Background/Objectives: ... .
+    # Methods: ..."), so a label may also follow a sentence end.
+    if len(re.findall(r"(?m)(?:^|[.;!?]\s+)(?:Background|Introduction|Objectives?|Methods?|Results|"
                       r"Conclusions?|Bevezet[eé]s|C[eé]lkit[uű]z[eé]s|M[oó]dszers?|"
-                      r"Eredm[eé]nyek|K[oö]vetkeztet[eé]sek?)\s*:", ab)) >= 3:
+                      r"Eredm[eé]nyek|K[oö]vetkeztet[eé]sek?)(?:\s*/\s*[A-Za-z]+)?\s*:", ab)) >= 3:
         return []
     cues = [("background", r"\b(is|are) (widely )?(proposed|recognised|recognized|"
                           r"unclear|a (growing|major) )|remains? unclear"),

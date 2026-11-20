@@ -806,6 +806,61 @@ References
 """
 
 
+# MDPI front matter: the abstract and the keywords are run-in paragraphs
+# ("Abstract: Background/Objectives: ..."), never headings, and citations are
+# en-dash ranges inside comma lists. Before 0.5.3 this layout read as "No
+# Abstract section detected". Synthetic.
+MDPI_INLINE = """Article
+Evening Coffee and Sleep Quality in Adults: A Pooled Analysis
+Alex Roe 1,* and Sam Doe 2
+1 Department of Medicine, Example University, 1000 Example City, Country
+2 Institute of Health, Example University, 1000 Example City, Country
+* Correspondence: ar@example.edu
+Abstract: Background/Objectives: Studies of evening coffee and sleep use different sleep scales, follow-up periods and definitions of an evening dose, so their results are hard to compare. Methods: We pooled the individual studies once each, harmonised the sleep scales to one standardised score, used random-effects models with prediction intervals and rated certainty with GRADE for every outcome. Results: Coffee after six in the evening lowered sleep quality (standardised difference 0.30, 95% CI 0.20\u20130.41) across twelve studies, with little heterogeneity. Conclusions: The evidence supports avoiding late coffee, with moderate certainty, and says nothing about tea.
+Keywords: coffee; caffeine; sleep quality; meta-analysis
+1. Introduction
+Poor sleep is common [1], and several studies address coffee [2\u20134,6].
+2. Materials and Methods
+Keywords: coffee AND sleep were searched in two databases [5,7\u20139].
+Two reviewers screened every record independently [10-11].
+3. Results
+Twelve studies were included [1,3].
+4. Discussion
+The result agrees with earlier pooled estimates [12].
+5. Conclusions
+Avoiding late coffee is supported.
+Funding: This research received no external funding.
+Conflicts of Interest: The authors declare no conflicts of interest.
+References
+""" + "".join(f"{i}. Author{i} A. Study number {i} of coffee. J Ex. 202{i % 10};{i}:{i}-{i + 9}. doi:10.1000/x{i:03d}\n"
+              for i in range(1, 13))
+
+
+def _docx_mdpi():
+    """The MDPI_INLINE front matter as a real .docx: a bold run-in 'Abstract:'
+    label in the MDPI abstract paragraph style, then the plain body."""
+    import docx
+    d = docx.Document()
+    for name in ("MDPI_1.7_abstract", "MDPI_1.8_keywords", "MDPI_2.1_heading1"):
+        d.styles.add_style(name, 1)
+    for line in MDPI_INLINE.splitlines():
+        if not line.strip():
+            continue
+        label = next((lab for lab in ("Abstract: ", "Keywords: ") if line.startswith(lab)), None)
+        if label and line in MDPI_INLINE.split("1. Introduction")[0]:
+            p = d.add_paragraph(style="MDPI_1.7_abstract" if label.startswith("Abs")
+                                else "MDPI_1.8_keywords")
+            p.add_run(label).bold = True
+            p.add_run(line[len(label):])
+        elif line[:2] in ("1.", "2.", "3.", "4.", "5.") and len(line.split()) <= 4:
+            d.add_paragraph(line, style="MDPI_2.1_heading1")
+        else:
+            d.add_paragraph(line)
+    p = Path(tempfile.mktemp(suffix=".docx"))
+    d.save(str(p))
+    return p
+
+
 def _codes(text, profile_name="generic"):
     tmp = Path(tempfile.mktemp(suffix=".txt"))
     tmp.write_text(text, encoding="utf-8")
@@ -865,6 +920,48 @@ def run():
                   encoding="utf-8")
     passed &= _ok("en-dash citation range expands",
                   C._cited_numbers(pc_extract.load(_t)) == {4, 26, 27, 28, 29, 30})
+
+    # ---- MDPI run-in Abstract:/Keywords: and [2–4,6] citation lists ---------
+    prof = pc_lib.load_profile("generic")
+    for kind, path in (("txt", _write(MDPI_INLINE)), ("docx", _docx_mdpi())):
+        md = pc_extract.load(path)
+        mcodes = {f.code for fn in C.ALL_CHECKS.values() for f in fn(md, prof)}
+        morder = md.sections.get("_order", [])
+        passed &= _ok(f"[{kind}] run-in 'Abstract:' opens the abstract ({morder[:3]})",
+                      morder[:3] == ["abstract", "keywords", "introduction"]
+                      and "no-abstract" not in mcodes)
+        ab = md.sections.get("abstract", "")
+        passed &= _ok(f"[{kind}] abstract holds its own text only "
+                      f"({pc_lib.word_count(ab)} words)",
+                      ab.startswith("Background/Objectives:")
+                      and "Keywords" not in ab and "Correspondence" not in ab)
+        passed &= _ok(f"[{kind}] structured-abstract labels stay inside the abstract",
+                      "Methods: We pooled" in ab
+                      and "We pooled" not in md.sections.get("methods", ""))
+        passed &= _ok(f"[{kind}] run-in 'Keywords:' is the keywords section",
+                      md.sections.get("keywords", "").count(";") == 3
+                      and "no-keywords" not in mcodes
+                      and "too-few-keywords" not in mcodes)
+        passed &= _ok(f"[{kind}] a 'Keywords:' line in the Methods stays in the Methods",
+                      "coffee AND sleep" in md.sections.get("methods", ""))
+        passed &= _ok(f"[{kind}] author block stays in the preamble",
+                      "ar@example.edu" in md.sections.get("_preamble", "")
+                      and "no-corresponding-email" not in mcodes)
+        passed &= _ok(f"[{kind}] [2–4,6], [7–9] and [10-11] expand: all 12 cited",
+                      C._cited_numbers(md) == set(range(1, 13))
+                      and not mcodes & {"ref-uncited", "cite-out-of-range"})
+        passed &= _ok(f"[{kind}] a labelled run-in abstract is read as structured",
+                      "abstract-missing-move" not in mcodes)
+    # an Abstract heading followed at once by the Keywords line is empty: the
+    # keywords used to be read as a 21-word abstract
+    empty = MDPI_INLINE.replace(MDPI_INLINE.split("\n")[6], "Abstract")
+    ef = [f for f in _codes(empty) if f.code == "no-abstract"]
+    passed &= _ok("an Abstract heading with only Keywords under it is reported empty",
+                  len(ef) == 1 and "no text under it" in ef[0].message)
+    # the label opens a section only in the front matter
+    late = pc_lib.split_sections([("Introduction", True), ("Abstract: not here.", False)])
+    passed &= _ok("a run-in 'Abstract:' after the Introduction is body text",
+                  "abstract" not in late["_order"])
 
     # the reviewer rules must fire on a manuscript that omits their guards, or
     # the category is decorative
